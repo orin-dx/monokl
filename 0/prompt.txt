@@ -1,0 +1,254 @@
+<task-notification>
+<task-id>aee8854b5c5515df9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/aee8854b5c5515df9.output</output-file>
+<status>completed</status>
+<summary>Agent "Map michi's crate capabilities" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># michi Ecosystem Report (for monokl reuse decisions)
+
+Read directly: all `src/*.rs` in the 5 crates, `README.md`, `ARCHITECTURE.md`, `CLAUDE.md`, `PRINCIPLES.md`, `CONTRIBUTING.md`, `docs/spec/02-toon-format.md`, `docs/spec/03-rust-api.md`, `docs/spec/06-decisions.md`, all 5 `Cargo.toml` files, `examples/*.rs`, and representative tests (`tests/snapshot_tests.rs`, `tests/kv_integration.rs`, `tests/toon_integration.rs`). Repo state: git tag `v0.1.0` exists; **not yet confirmed published to crates.io** (network check to the crates.io API was blocked by their bot policy, not by a "not found"). `docs/spec/06-decisions.md` explicitly states crates.io publish is "gated behind at least one real consumer integration test," and recommends git-tag dependency (`michi = { git = "...", tag = "v0.x.y" }`) during development — monokl would plausibly be that integration test.
+
+---
+
+## 1. `michi-toon` (`/Users/gabe/Projects/michi/crates/michi-toon/src/`)
+
+**Purpose:** Renders a flat, tabular list of rows into the TOON text format — a header line (`type_name[count]{field,field,...}:`) stating field names once, followed by comma-separated rows. Also does the reverse for `serde`-serializable structs when the `serde` feature is on.
+
+**Public API:**
+- `pub struct Value` (enum): `Str(CompactString)`, `Int(i64)`, `Float(f64)`, `Bool(bool)`, `Null`. `From&lt;&amp;str|String|CompactString|Cow&lt;str&gt;|i32|u32|i64|u64|usize|f32|f64|bool|Option&lt;String&gt;&gt;` impls. `Display`.
+- `pub struct ToonOptions { type_name, fields: Vec&lt;String&gt;, rows: Vec&lt;Vec&lt;Value&gt;&gt;, total_count: Option&lt;usize&gt;, hints: Vec&lt;String&gt;, max_cell_len: usize }` (`#[non_exhaustive]`), builder methods `new()`, `.total_count()`, `.hints()`, `.max_cell_len()` (default 200), and `.validate() -&gt; Result&lt;(), ToonError&gt;` — **opt-in**, not called automatically by `render_toon()`.
+- `pub fn render_toon(opts: &amp;ToonOptions) -&gt; String` — never errors; sanitizes bad input in place (structural chars in headers/hints are replaced with `_`) rather than rejecting it.
+- `pub enum ToonError { InvalidTypeName, InvalidFieldName, RowLengthMismatch, InvalidItem }`.
+- `pub fn escape_value(v: &amp;str) -&gt; Cow&lt;str&gt;` / `escape_value_quoted(v: &amp;str) -&gt; String`.
+- `#[cfg(feature = "serde")] pub fn list&lt;T: Serialize&gt;(type_name, items: &amp;[T]) -&gt; Result&lt;String, ToonError&gt;` — serializes each item via `serde_json::to_value`, requires the result be a JSON object (struct/map); scalars/arrays error with `InvalidItem`.
+
+**Cargo features:** `default = []` (zero deps beyond `compact_str`, which is a mandatory dep, not feature-gated). `serde = ["dep:serde", "dep:serde_json"]` — required for `toon::list()`. `schemars` — derives `JsonSchema` on `ToonOptions`/`Value`.
+
+**Usage patterns (from examples/tests):**
+- Manual construction: build `ToonOptions` by hand with typed `Value` rows (the `examples/basic_toon.rs` / README pattern) — this is the primary intended path for a CLI tool with already-structured data.
+- `toon::list()` for "I have a `Vec&lt;MySerdeStruct&gt;`, just render it" (needs `serde` feature). Field order comes from the first non-empty item's serialized key order (`serde_json::to_value` with the workspace's `preserve_order` feature enabled, so struct field order is preserved, not alphabetized).
+- Long cell strings are auto-truncated per-cell via `michi_truncate::truncate_inline` when they exceed `max_cell_len`, embedding the `(N chars truncated — use full=true)` marker inline in the cell.
+
+**Important gaps for a downstream consumer (verified, not guessed):**
+- **No nested/table structures.** TOON itself (per `docs/spec/02-toon-format.md`'s grammar) is strictly one header + flat rows — no nested TOON blocks. In `toon::list()`, a struct field that's an array/object gets JSON-stringified and dropped into a single quoted cell (confirmed by test `list_stringifies_nested_values_losslessly`: `tags: Vec&lt;String&gt;` becomes cell value `"[\"a\",\"b\"]"`). There is no recursive/multi-table TOON renderer.
+- **No parser in the public API**, despite the crate's own `Cargo.toml` description saying "renderer and parser." The only TOON parser in the repo is `tests/support/toon_parser.rs`, explicitly documented as "Test-only ... NOT part of the public API ... not a general-purpose TOON parser for untrusted input." `ARCHITECTURE.md`'s mention of a "`ToonSerializer`" type is also aspirational/inaccurate — no such type exists in `src/`.
+- Row length is not validated by `render_toon()` itself — mismatches are silently rendered (missing cells → empty; the `#[cfg(debug_assertions)] debug_assert!` in `render.rs` would panic in debug builds, but that's dev-only). Call `.validate()` explicitly if you need hard errors.
+
+**Dependencies on siblings:** depends on `michi-truncate` (for per-cell truncation). Depends on nothing else in the workspace.
+
+---
+
+## 2. `michi-truncate` (`/Users/gabe/Projects/michi/crates/michi-truncate/src/lib.rs`)
+
+**Purpose:** Truncate a string to at most N Unicode **scalar values (chars)** — not bytes, not model tokens — at a UTF-8 char boundary, appending a human/agent-readable marker describing what was cut and how to get the rest.
+
+**Public API (the entire crate is ~90 lines of non-test code):**
+```rust
+pub struct Truncated {
+    pub content: String,
+    pub original_len: usize,      // original BYTE length (not char count)
+    pub was_truncated: bool,
+    pub signal: Option&lt;String&gt;,   // the marker text actually embedded in `content`
+}
+
+pub fn truncate(content: &amp;str, max_chars: usize, hint: &amp;str) -&gt; Truncated;
+pub fn truncate_inline(content: &amp;str, max_chars: usize, hint: &amp;str) -&gt; String; // == truncate(...).content
+```
+
+**Algorithm (exact, confirmed by reading the code):**
+- Fast-path: if `content.len() &lt;= max_chars` (byte length), return unchanged (byte length ≥ char count, so this implies char count also fits) — `was_truncated: false`, `signal: None`.
+- Otherwise compute real `char_count`; if that's also `&lt;= max_chars`, still unchanged.
+- Otherwise: build suffix `" ({char_count} chars truncated — use {hint})"`, compute how many content chars can be kept (`max_chars - suffix_chars`, saturating), slice at that char boundary via `char_indices().nth(...)`, append the suffix, then hard-cap the whole result to `max_chars` chars again in case the suffix alone is longer than `max_chars` (tiny `max_chars` or long `hint` string) — trims via char boundary, never mid-codepoint.
+- `signal` is recomputed from what's *actually* left in `content` after the hard-cap (trimmed of leading space) — `None` if there was no room for any signal text, otherwise guaranteed to literally appear in `content`.
+
+**Answering the task's specific questions:**
+- Unit is **chars (Unicode scalars)**, not bytes and not LLM tokens — there is no tokenizer dependency anywhere in this crate or workspace (`Cargo.toml` has zero `[dependencies]`).
+- Truncation marker: yes, `" ({n} chars truncated — use {hint})"`, caller-supplied `hint` string (e.g. `"full=true"`) is meant to tell the agent how to get the untruncated content (e.g., a param name to pass on the next call).
+- Return value: `Truncated` struct with the content **and** metadata (`original_len`, `was_truncated`, `signal`) — not just a bare string. `truncate_inline()` is a convenience that discards the metadata and returns only the string (this is what `michi-toon`'s per-cell truncation calls).
+
+**Cargo features:** none; `default = []`, zero dependencies.
+
+**Note:** `PRINCIPLES.md` sketches a hypothetical future `TruncationOutcome&lt;T&gt;` / `truncate_by_count` / `truncate_by_bytes` API as a *worked example of design philosophy* ("split the decision from the signal") — **this is not implemented**. Don't mistake it for shipped API; the only truncation primitive that exists today is the char-based `truncate()`/`truncate_inline()` above.
+
+**Dependencies on siblings:** none — this is the most upstream crate; everything else depends on it (directly or transitively).
+
+---
+
+## 3. `michi-resilience` (`/Users/gabe/Projects/michi/crates/michi-resilience/src/lib.rs`)
+
+**Purpose:** Pure math/parsing for retry decisions — **not** an actual retry executor, HTTP client wrapper, or circuit breaker. It computes "how long should I wait before retry N" and parses `Retry-After`; the caller still owns the actual retry loop.
+
+**Public API:**
+```rust
+pub struct RetryConfig { pub max_retries: u32, pub base_delay: Duration, pub max_delay: Duration, pub jitter_factor: f64 } // #[non_exhaustive]
+impl RetryConfig {
+    pub fn new(max_retries, base_delay, max_delay, jitter_factor) -&gt; Self;        // clamps invalid inputs silently
+    pub fn try_new(...) -&gt; Result&lt;Self, RetryConfigError&gt;;                        // strict, errors on invalid inputs
+}
+impl Default for RetryConfig; // max_retries=3, base_delay=500ms, max_delay=30s, jitter_factor=0.2
+
+pub enum RetryConfigError { MaxDelayIsZero, BaseDelayExceedsMaxDelay{base,max}, JitterFactorOutOfRange{factor} }
+
+pub fn next_retry_delay(config: &amp;RetryConfig, attempt: u32, jitter_seed: f64, retry_after: Option&lt;Duration&gt;) -&gt; Option&lt;Duration&gt;;
+// None once attempt &gt;= max_retries. jitter_seed is caller-supplied random [0,1] — crate has no RNG dependency.
+// Delay = max(exponential-backoff-with-jitter, retry_after), capped at max_delay.
+
+pub fn parse_retry_after(header_value: &amp;str) -&gt; Option&lt;Duration&gt;;                  // RFC 7231 Retry-After: seconds or HTTP-date
+pub fn parse_retry_after_at(header_value: &amp;str, now: SystemTime) -&gt; Option&lt;Duration&gt;; // testable variant, explicit "now"
+pub fn is_retryable_status(status: u16) -&gt; bool;  // true only for 429, 502, 503, 504 (NOT 500 — deliberate, tested)
+
+pub struct IdempotencyKey(pub String);
+impl IdempotencyKey {
+    pub fn new(s: impl Into&lt;String&gt;) -&gt; Self;
+    pub fn as_str(&amp;self) -&gt; &amp;str;
+    pub fn from_hash(operation: &amp;str, data: &amp;[u8]) -&gt; Self;  // FNV-1a 64-bit hash, formatted "{operation}:{hash:016x}"
+}
+// From&lt;String&gt;, From&lt;&amp;str&gt; also implemented.
+
+pub enum AlreadyDone { Yes { result: String }, No } // #[non_exhaustive]
+pub fn already_done(stored: Option&lt;String&gt;) -&gt; AlreadyDone;
+pub fn render_already_done(operation: &amp;str, summary: &amp;str, hints: &amp;[String]) -&gt; String;
+```
+
+**Cargo features:** none; `default = []`, zero dependencies at all (`[dependencies]` section is empty).
+
+**Usage pattern:** caller supplies its own RNG for `jitter_seed`, its own HTTP client, and its own storage for idempotency lookups; this crate just does the arithmetic/parsing/formatting around those. `is_retryable_status` deliberately excludes 500 (documented reasoning in a test: "500 is a server bug — retrying reproduces it and risks duplicate side effects on writes").
+
+**No circuit breaker, no async, no actual retry loop.** `docs/spec/06-decisions.md` confirms this is intentional: an async `CircuitBreaker` and retry-wrapper are explicitly deferred to a future, not-yet-built `pipeline` crate (which would depend on tokio) — they are called out as *not* belonging in `michi-resilience` because that crate must stay dependency-free and sync.
+
+**Dependencies on siblings:** none.
+
+---
+
+## 4. `michi-core` (`/Users/gabe/Projects/michi/crates/michi-core/src/`)
+
+**Purpose:** The high-level composition layer — turns hints/errors/lists/kv-pairs/status into ready-to-print agent text or an MCP `CallToolResult`. This is the crate most directly reusable for a CLI/agent tool's output layer.
+
+**Modules and API surface** (`crates/michi-core/src/lib.rs` re-exports everything flat too, and the root `michi` crate re-exports `michi-core`'s items flat again — so `michi::DomainError`, `michi_core::DomainError`, and `michi_core::error::DomainError` all resolve to the same type):
+
+**`error.rs`** — the module the task asked to prioritize:
+```rust
+pub enum ErrorClass { User, Internal, Transient }  // #[non_exhaustive]
+pub struct Sensitive&lt;T&gt;(pub T);  // Debug/Display both print "&lt;redacted&gt;" — for secrets in error context
+
+pub enum ErrorCode { InvalidInput, NotFound, Unauthorized, Forbidden, Conflict, RateLimited, Unavailable, Timeout, ExternalFailure } // #[non_exhaustive]
+impl ErrorCode {
+    pub fn label(&amp;self) -&gt; &amp;'static str;               // snake_case label, e.g. "not_found"
+    pub fn is_retryable_by_default(&amp;self) -&gt; bool;      // true for RateLimited/Unavailable/Timeout/ExternalFailure
+    pub fn default_class(&amp;self) -&gt; ErrorClass;          // maps code -&gt; User or Internal
+}
+
+pub struct DomainError { pub code: ErrorCode, pub message: String, pub hints: Vec&lt;Hint&gt;, pub recovery: Option&lt;RecoveryHint&gt;, pub retryable: bool, pub retry_after: Option&lt;Duration&gt; } // #[non_exhaustive]
+impl DomainError {
+    pub fn new(code: ErrorCode, message: impl Into&lt;String&gt;) -&gt; Self;  // retryable defaults from code.is_retryable_by_default()
+    pub fn hint(self, hint: impl Into&lt;String&gt;) -&gt; Self;               // builder, chainable
+    pub fn recovery(self, r: RecoveryHint) -&gt; Self;
+    pub fn retryable(self, retryable: bool) -&gt; Self;
+    pub fn retry_after(self, d: Duration) -&gt; Self;
+    pub fn exit_code(&amp;self) -&gt; i32;                     // always 1
+    pub fn render(&amp;self) -&gt; String;                     // "error: &lt;label&gt;\nmessage: &lt;msg&gt;\nexit_code: 1\n" + help[]/recovery[] blocks
+    pub fn render_github_annotation(&amp;self) -&gt; String;    // "::error title=&lt;label&gt;::&lt;msg&gt;" with \n/\r percent-encoded
+    pub fn render_json(&amp;self) -&gt; String;                 // hand-rolled JSON: {"isError":true,"error":...,"message":...,"retryable":bool,"hints":[...],"recovery":null|{...}}
+    pub fn to_call_tool_result(&amp;self) -&gt; CallToolResult;  // is_error:true, content = [render()], structured_content = render_json()
+}
+impl Display, std::error::Error for DomainError.
+#[cfg(feature="miette")] impl miette::Diagnostic for DomainError  // ONLY implements code() and help() — no source spans, no derive, no labels/severity
+
+pub enum Error { InvalidInput(String), NotFound(String), Domain(#[from] DomainError) }  // #[non_exhaustive], thiserror-derived
+impl Error { pub fn render(&amp;self) -&gt; String; pub fn exit_code(&amp;self) -&gt; i32; pub fn class(&amp;self) -&gt; ErrorClass; pub fn is_retryable(&amp;self) -&gt; bool; }
+```
+Note: `render_json()`/`to_call_tool_result()` build JSON via hand-written string escaping (`crate::kv::json_escape_str`), not `serde_json` — works even without the `serde` feature.
+
+**`mcp.rs`** — MCP integration, always compiled (no feature gate):
+```rust
+pub struct ContentBlock { pub text: String, pub audience: Vec&lt;Audience&gt; } // #[non_exhaustive]
+pub struct CallToolResult { pub content: Vec&lt;ContentBlock&gt;, pub is_error: bool, pub structured_content: String } // #[non_exhaustive]
+```
+With `serde` feature: both get custom wire-shape mapping (`ContentBlockWire` renders `type: "text"`, `annotations: { audience }`; `CallToolResultWire` parses `structured_content` from a JSON string into a `serde_json::Value` and back) — this is the piece that would matter if monokl exposes an actual MCP tool endpoint.
+
+**`response.rs`** — `AgentResponse`, the main builder, fluent/chainable, `#[non_exhaustive]`:
+```rust
+pub enum OutputFormat { #[default] Text, Json }
+pub const DEFAULT_TRUNCATE_CELLS: usize = 200;
+impl AgentResponse {
+    pub fn new(type_name: impl Into&lt;String&gt;) -&gt; Self;
+    pub fn items(self, rows: Vec&lt;Vec&lt;Value&gt;&gt;, fields: &amp;[&amp;str]) -&gt; Self;   // sets TOON render path
+    pub fn kv_items(self, items: Vec&lt;KvItem&gt;) -&gt; Self;                    // sets KV render path
+    pub fn total_count(self, n: usize) -&gt; Self;
+    pub fn hint(self, hint: impl Into&lt;String&gt;) -&gt; Self;
+    pub fn hints(self, hints: Vec&lt;Hint&gt;) -&gt; Self;
+    pub fn recovery_hint(self, r: RecoveryHint) -&gt; Self;
+    pub fn truncate_cells_at(self, limit: usize) -&gt; Self;
+    pub fn as_error(self) -&gt; Self;
+    pub fn human_content(self, text: impl Into&lt;String&gt;) -&gt; Self;         // dual assistant/user output
+    pub fn render(&amp;self, format: OutputFormat) -&gt; String;
+    pub fn render_toon(&amp;self) -&gt; String;
+    pub fn render_kv(&amp;self) -&gt; String;
+    pub fn render_hints_only(&amp;self) -&gt; String;
+    pub fn render_for(&amp;self, audience: Audience) -&gt; String;              // Assistant -&gt; render_text(); User -&gt; human_content or fallback to text
+    pub fn has_human_content(&amp;self) -&gt; bool;
+    pub fn to_call_tool_result(&amp;self) -&gt; CallToolResult;
+}
+```
+Note: `docs/spec/03-rust-api.md` documents these builder methods as taking `&amp;mut self`, but **the actual code in `response.rs` uses `self` (consuming, chainable) builder style** — the spec doc is stale here; trust the source.
+
+**Other modules:** `audience.rs` (`enum Audience { Assistant, User }`), `hints.rs` (`struct Hint(pub String)`, `render_hints`/`append_hints` — produces `help[N]:\n  ...` blocks), `recovery.rs` (`struct RecoveryHint { tool, params: Vec&lt;(String,KvValue)&gt;, reason: Option&lt;String&gt; }`, `.param()`/`.reason()` builders, `render_recovery`/`append_recovery` — produces `recovery[N]:\n  tool: suggestedParams: { k: v } — reason` lines), `kv/mod.rs` (`struct KvItem{key,value}`, `enum KvValue{Text,Int,Float(f64,u8),Bool,Duration,Missing}`, `render_kv(items, total_count, hints) -&gt; String` — column-aligned `key: value` block, `Missing` renders as em-dash `—`), `status.rs` (`enum Health{Ok,Degraded(String),Error(String)}`, `StatusItem`, `StatusResponse::new/with_hints/render` — `tool:`/`description:` lead lines + per-item health annotations `[DEGRADED: ...]`/`[ERROR: ...]`), `idempotency.rs` (`FailedOp`, `PartialSuccess{completed,failed,skipped}.render()/.exit_code()` — for partially-completed multi-step ops, distinct from `michi-resilience::AlreadyDone` which is for fully-completed-before ops), `empty.rs` (`empty_state(type_name)`, `empty_state_with_hints` — `"type[0]{}:\ntotalCount: 0\n"`), `pipeline/mod.rs` (`PipelineStep`, `Pipeline{id,steps}.render()` — pure data + TOON-style render only; no execution, execution is deferred to the not-yet-built async pipeline crate), `telemetry/mod.rs` (`NoopProvider` — literally does nothing, `.span()`/`.count()` are no-ops; a zero-cost placeholder for future real telemetry).
+
+**Cargo features:** `default = []`. `serde = ["dep:serde","dep:serde_json","michi-toon/serde"]` — needed for `Audience`/`Hint`/`KvValue`/`ContentBlock`/`CallToolResult` `Serialize`/`Deserialize` and the wire-shape mapping. `schemars = ["dep:schemars","michi-toon/schemars"]` — needed for `JsonSchema` derives (useful for MCP `outputSchema` generation) on most public structs. `miette = ["dep:miette"]` — needed only if you want `DomainError` to implement `miette::Diagnostic` (very thin: just `code()`+`help()`).
+
+**Dependencies on siblings:** depends on `michi-truncate`, `michi-resilience`, and `michi-toon` (uses `michi_toon::escape_value`/`escape_value_quoted` in `idempotency.rs` and `pipeline/mod.rs`, and `michi_toon::Value`/`ToonOptions`/`render_toon` in `response.rs`). Also re-exports `michi_resilience::*` and `michi_truncate::*` at its own root (`pub use michi_resilience::*; pub use michi_truncate::*;` in `lib.rs`), so `michi_core::RetryConfig`, `michi_core::truncate`, etc. all resolve too.
+
+---
+
+## 5. Root `michi` facade (`/Users/gabe/Projects/michi/src/lib.rs`)
+
+Ten lines of real logic: `#![deny(unsafe_code)] #![warn(missing_docs)]`, then:
+```rust
+pub use michi_core::*;
+pub use michi_resilience as resilience;
+pub use michi_toon as toon;
+pub use michi_truncate as truncate;
+#[cfg(feature = "napi")] pub mod napi;
+pub type Result&lt;T&gt; = std::result::Result&lt;T, michi_core::Error&gt;;
+```
+So everything from `michi-core` (which itself re-exports `michi-resilience` and `michi-truncate`) is available flat at `michi::*`, while `michi-toon` is namespaced under `michi::toon::*` only (not flattened at the root — confirmed by `tests/toon_integration.rs`'s `crate_root_reexports_are_reachable` test, which accesses `michi::render_kv`, `michi::Hint`, `michi::AlreadyDone`, `michi::RetryConfig`, `michi::Truncated`, `michi::truncate`/`truncate_inline` directly at root, but always reaches TOON types via `michi::toon::...`).
+
+**Cargo features on the facade crate:** `default = []`. `napi = [...]` — Node.js bindings only, irrelevant to a Rust consumer like monokl. `serde`, `schemars`, `miette` — simple pass-throughs that turn on the corresponding sub-crate features.
+
+`src/napi.rs` / `src/napi.rs/num.rs` and `packages/michi-node/` are the Node.js NAPI binding layer — not relevant to a Rust-only consumer; only compiled under the `napi` feature.
+
+---
+
+## Dependency graph among the five crates
+
+```
+michi-truncate   (zero deps — most upstream)
+      ^
+      |
+michi-resilience (zero deps, no dependency on truncate or toon)
+      ^
+      |
+michi-toon  ---depends on---&gt; michi-truncate
+      ^
+      |
+michi-core  ---depends on---&gt; michi-truncate, michi-resilience, michi-toon
+      ^
+      |
+michi (facade) ---depends on---&gt; all four above, re-exports them
+```
+Confirmed directly from each crate's `Cargo.toml [dependencies]` section: `michi-resilience` has zero deps (not even on `michi-truncate`); `michi-toon` depends only on `michi-truncate` + `compact_str`; `michi-core` depends on all three primitive crates + `thiserror`; the root `michi` crate depends on all four workspace crates by path (version `"0.1.0"` pins, so a git-tag dependency would need all four to be tagged together, which the single `v0.1.0` workspace tag already satisfies).
+
+---
+
+## Practical implications for monokl
+
+1. **Reuse `michi-toon::{ToonOptions, Value, render_toon}` directly** for any tabular/list agent output monokl needs — it's a complete, tested implementation matching the format monokl's spec presumably already targets (michi's own `docs/spec/02-toon-format.md` is the TOON grammar). Don't hand-roll TOON escaping/truncation — `escape_value`, `sanitize_header_token` and the max-cell-len truncation logic already handle the edge cases (commas, quotes, newlines, NaN/Inf floats, structural chars in headers).
+2. **`michi-core::response::AgentResponse`** is the highest-leverage single reuse point if monokl wants a unified builder for TOON-list-or-KV output plus hints/recovery/error/MCP-result assembly — it composes nearly everything else in the workspace.
+3. **`michi-core::error::DomainError`** is a ready-made typed error model (code/class/hints/recovery/retryable/retry_after) with three render targets (agent text, GitHub Actions annotation, JSON) and an MCP `CallToolResult` conversion — likely reusable wholesale rather than reinventing monokl's own error-rendering.
+4. **`michi-truncate::truncate`** truncates by **character count**, not tokens or bytes — if monokl needs actual LLM-token-budget truncation, this crate does not provide that; it would need to be layered on top (e.g., feed a token-estimated char budget into `truncate()`).
+5. **`michi-resilience`** gives retry-delay math and `Retry-After` parsing only — if monokl needs an actual retry-executing HTTP wrapper or a circuit breaker, that does not exist yet anywhere in this workspace (explicitly deferred to a future `pipeline` crate per `docs/spec/06-decisions.md`).
+6. **No TOON parser exists as public API** — if monokl needs to *read* TOON (not just emit it), that would have to be written new; michi does not supply it despite package descriptions implying otherwise.
+7. **Not yet on crates.io** — monokl would depend via git tag (`michi = { git = "https://github.com/orin-axi/michi", tag = "v0.1.0" }`, plus corresponding `michi-core`/`michi-toon`/etc. path deps are internal so a single top-level `michi` git dep should suffice) per the project's own stated interim recommendation, and per `PRINCIPLES.md`, monokl adopting it for real would itself count as the "real consumer integration" that's gating the eventual crates.io release.</result>
+<usage><subagent_tokens>133694</subagent_tokens><tool_uses>48</tool_uses><duration_ms>199998</duration_ms></usage>
+</task-notification>
