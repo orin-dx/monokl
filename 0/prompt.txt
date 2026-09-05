@@ -1,0 +1,1 @@
+What can we reuse from the crates and implementation itself? As we publish michi crates? Look at all the specs
