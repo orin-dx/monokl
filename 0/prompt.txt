@@ -1,0 +1,3 @@
+Is it possible to attache some level of confidence after the fact with the data that is returned? Think of it as enrichment of the AST data. We want our asystem to allow for that and to minimize required context when possible.
+
+Shall we tackle the langID + capabilities now?
