@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bpcpd9py1</task-id>
+<tool-use-id>toolu_01DG5FxkCo2Pty46roN9or75</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/bpcpd9py1.output</output-file>
+<status>killed</status>
+<summary>Background command "Set up an isolated throwaway crate to compile-verify the AC-009 match logic" was stopped</summary>
+</task-notification>
