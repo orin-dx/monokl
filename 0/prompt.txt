@@ -1,0 +1,64 @@
+<task-notification>
+<task-id>a3bb96d681cfc9096</task-id>
+<tool-use-id>toolu_01SrdhSFAuQJjWzpZQS6mrPM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a3bb96d681cfc9096.output</output-file>
+<status>completed</status>
+<summary>Agent "Research and compare codegraph project to monokl" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># CodeGraph: Analysis &amp; Comparison to Monokl
+
+## 1. What CodeGraph Is
+
+**CodeGraph** (`@colbymchenry/codegraph`, MIT, v1.4.1/1.0 released) is a mature, production TypeScript CLI + embeddable library + MCP server. Positioning is explicit and narrow: *"Supercharge AI coding agents with semantic code intelligence — surgical context, fewer tool calls, faster answers. 100% local."* — human use is secondary; the README's benchmark section frames everything around agent tool-call/token/cost reduction.
+
+**Architecture** (`CLAUDE.md:36-64`):
+```
+files → ExtractionOrchestrator (tree-sitter) → SQLite (nodes/edges/files, FTS5)
+      → ReferenceResolver (imports, name-matching, framework patterns)
+      → GraphTraverser/GraphQueryManager (callers/callees/impact)
+      → ContextBuilder (markdown/JSON for AI consumption)
+```
+- **Parsing**: `web-tree-sitter` + `tree-sitter-wasms` (WASM grammars, no native compile step) across 30+ languages, one extractor file per language (`src/extraction/languages/*.ts`), plus hand-written extractors for non-tree-sitter formats (Svelte/Vue/Liquid/Delphi).
+- **Storage**: real SQLite via Node's built-in `node:sqlite`, with `nodes`/`edges`/`files`/`unresolved_refs` tables (`src/db/schema.sql`), FTS5 full-text index with triggers, and SQLite's **built-in `bm25()`** ranking function used directly (`src/db/queries.ts:1389`: `bm25(nodes_fts, 0, 20, 5, 1, 2)`).
+- **Resolution**: cross-file reference resolution with a retry queue — `unresolved_refs` rows persist as `pending`/`failed` and are retried on subsequent syncs rather than requiring a full reparse (`schema.sql` comments above that table).
+- **Sync**: a background daemon + native FS watcher (FSEvents/inotify/RDCW) debounces edits (2s default) and auto-reindexes; MCP responses prepend a "⚠️ stale" banner for files still in the debounce window (`README.md` "How auto-syncing works").
+- **MCP surface**: deliberately **one primary tool**, `codegraph_explore` — other tools (`node`, `search`, `callers`, `callees`, `impact`, `files`, `status`) exist but are unlisted by default because "one strong tool steers agents better than a menu of narrower ones" (`README.md` "MCP Tools"; rationale documented at length in `CLAUDE.md:98-134`).
+- **Extras**: framework-aware route detection (17 frameworks → `route` nodes), cross-language bridge synthesis (Swift↔ObjC, RN bridge, Expo), all synthesized edges tagged `provenance:'heuristic'` + `metadata.synthesizedBy` for traceability.
+- Ships real benchmarks: 7 open-source repos, headless Claude-Code A/B, median of 4 runs, tracking tool calls/time/tokens/cost (`README.md:185-310`, harness at `__tests__/evaluation/runner.ts`, `docs/benchmarks/call-sequence-analysis.md`).
+
+## 2. Head-to-Head
+
+| Dimension | CodeGraph | Monokl (spec) |
+|---|---|---|
+| Index persistence | Persistent SQLite + FTS5, daemon-synced | Explicitly no persistent index (non-goal); in-memory recompute + `.monokl/cache.json` for parsed data |
+| Ranking | SQLite's built-in `bm25()` over FTS5 | Custom BM25 (K1/B tuned) over ripgrep prefilter — more control, no DB dependency |
+| Parsing | tree-sitter (WASM), generic queries, 30+ languages, 1 extractor file each | oxc (native, type-aware) for TS/JS, ra-ap-syntax for Rust — deeper precision, far fewer languages |
+| Freshness | Push-based: FS watcher + debounce + staleness banners | Pull-based: stat/blake3 cache check on each invocation |
+| Agent tool surface | 1 primary MCP tool by design (empirically validated) | ~20 CLI commands, each schema'd separately |
+| Query language | Field filters (`kind:`, `lang:`, `path:`, `name:`) + free text to FTS | `+req`/`-excl`/phrase/`regex:`, boolean/grep-like |
+| Output contracts | Boolean `--json`, no schema versioning | JSON Schema per result type, `--only`/`--fields` projection |
+| Graceful degradation | None documented — languages either supported or not | `AnalyzerCapabilities` (Unsupported/Heuristic/Structural/Exact) |
+| PR/git-scoping | One narrow command (`affected`, import-reachability to tests) | General git-scope model (FullRepo/ChangedFiles/ChangedLines/ImpactedNeighbors) applicable to any command |
+| Provenance | Per-edge `provenance`/`synthesizedBy` tags | Per-analyzer/operation precision level (coarser) |
+| Evaluation | Real headless-agent A/B benchmarks, checked into repo | Not mentioned in spec |
+| Distribution | Bundled Node runtime, installers, signed/attested releases | Native Rust binary — already simpler/faster to distribute |
+
+## 3. Recommendations for Monokl
+
+1. **Adopt the "sufficiency, not menu" tool-design principle.** CodeGraph's own experiments (`CLAUDE.md:98-134`) showed that adding narrow tools or "steering" instructions doesn't move agent behavior — only a tool whose single response is *complete enough to stop the agent reading* does. Monokl's `explain` (inspect+refs+dependents) is the right instinct; when an MCP server is built, expose one or two composite tools by default (e.g., `explain`, `search`) and keep the ~20 granular commands as CLI/unlisted-MCP fallbacks, not the primary agent-facing surface.
+
+2. **Add per-edge provenance tagging**, not just per-analyzer capability levels. `edges.provenance` + `synthesizedBy` (schema.sql) lets an agent see *how* a hop got into the graph. Monokl's `WorkspaceIndex` import graph should tag synthesized/heuristic edges (e.g., dynamic `require()`, re-export chains) the same way — cheap to add, high trust value.
+
+3. **Build an eval harness now, not later.** Monokl's BM25 tuning (K1=1.5, B=0.5) and token-budget design are currently unvalidated assumptions. Copy CodeGraph's methodology: headless agent A/B on real repos, median-of-N, measuring tool calls/tokens/wall-clock — cheap to build, and it's the only way to know if the ranking pipeline actually helps.
+
+4. **Reconsider the "no persistent index" non-goal, at least partially.** SQLite+FTS5 (or a lighter embedded equivalent) gives O(log n) symbol/text lookup without reparsing, and the `unresolved_refs` retry-queue pattern (persist failed cross-file resolutions, retry only those on next sync) is more surgical than monokl's blanket cache-hash invalidation. Even without a full DB, adopt the retry-queue idea for `ImportGraphEnricher`.
+
+5. **Explicit staleness disclosure.** If monokl ever runs as a long-lived MCP process, borrow the "⚠️ pending sync" banner pattern rather than silently serving cache-stale results.
+
+6. **Framework-aware route/entrypoint enrichment** is a concrete, high-value `WorkspaceEnricher` to add for JS (Express/Next.js routes) given monokl's two-level architecture already anticipates pluggable enrichers.
+
+Where monokl is already ahead: JSON Schema per result + field projection, general git-scope composability across *all* commands (vs. codegraph's one-off `affected`), and capability-driven graceful degradation — none of these exist in codegraph today.
+
+**Cloned repo**: `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/codegraph`</result>
+<usage><subagent_tokens>61140</subagent_tokens><tool_uses>18</tool_uses><duration_ms>158466</duration_ms></usage>
+</task-notification>
