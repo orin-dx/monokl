@@ -1,0 +1,1 @@
+<local-command-stdout>✓ Installed 3 plugins. Plugins are now active.</local-command-stdout>
