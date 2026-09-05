@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>af3167134aaab0928</task-id>
+<tool-use-id>toolu_01DrSyC5CuMJ4uSB4CcLBKiU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/af3167134aaab0928.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-gate SPEC-010 after fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Verdict: FAIL
+
+**verdict@1** written to `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/verdict.json` (validates against `verdict@1`). Spec gated: `/Users/gabe/Projects/monokl/.claude/specs/SPEC-010.json`.
+
+## All six claimed fixes are genuine
+
+I re-derived every michi claim from source rather than trusting the fix narrative. The pin correction is real and complete:
+
+- `cb355b8c…` is a real commit; `git rev-list --count v0.1.0..cb355b8` = **exactly 68**; the rev's root `Cargo.toml:53` has `miette = ["michi-core/miette"]`; `git grep -E 'default_class|ToonError|fn validate' v0.1.0` returns **zero** matches.
+- AC-003's rewritten consequence is exactly right — the guard is verbatim `if fields.is_empty() &amp;&amp; !obj.is_empty() { … }`, `rows.push` does emit a zero-length row, and `opts.validate()?` runs unconditionally before `render_toon()`.
+- AC-010's format justification now matches reality: `DomainError::render()` writes a raw `message:` line, and `append_hints()` writes `help[N]:\n` + `  {hint}\n` **with no sanitization**.
+- AC-017 is gone; grounding confirmed (`crates/monokl/src/` holds only `lib.rs`; clap appears in no `.rs` file).
+
+AC-001, AC-011, AC-013, AC-014, AC-009, AC-016 also re-verified as stated. I compiled AC-004's trait declaration on stable rustc — the arity guarantee is real.
+
+## It fails on four hard blockers that are new ground, not pin fallout
+
+The previous gate's blanket clearance of AC-002/004/005/006/007/008/009/011/013/014/016 does not survive contact with the upstream type definitions:
+
+1. **`ErrorContext` is undefined** (AC-008, api_surface, consumed by AC-012's `RecoveryHint::new(ctx.command)`). Zero matches in michi at the rev; in monokl it appears *only inside SPEC-010 itself*.
+2. **`SymbolKind::as_str()` / `Visibility::as_str()` do not exist** (AC-005, AC-006). The entire corpus has one `fn as_str`, at `01-core-architecture.md:1393`, on an unrelated newtype. No `impl SymbolKind` or `impl Visibility` anywhere.
+3. **Five of AC-006's seven column expressions don't compile.** `RankedBlock.block` is a plain named field — `#[serde(flatten)]` is serialization-only and there is no `Deref` (zero hits corpus-wide), so `block.file` etc. need `block.block.file`. AC-006 also writes bare `rank`/`final_score`, implying an unstated destructuring.
+4. **AC-010's chain walk has two readings.** "a walk *over self* … as a `&amp;dyn Error`" vs. "*starting from* `self.source()`". Only Io/Walk/RegexBuild/Json carry a source, and the readings diverge materially there — reading B silently drops `Walk`'s `path` and `Json`'s locked Display text, contradicting the purpose field's "information-preserving" claim.
+
+Five lower-severity blockers round it out: AC-015 says `DomainError::default_class()` where the method lives on `impl ErrorCode` (AC-011 gets it right — the spec contradicts itself); AC-004 miscites AC-001 for the `debug_assert!` finding (true fact, wrong source, asserted by no criterion); AC-003 miscites SPEC-003 AC-006 (which is about `deny_unknown_fields`); AC-010's "multi-line subprocess stderr" gloss on `Git.message` is unsourced; and AC-015's "HEAD is 1 commit past" is now false (it's 2).
+
+No TBDs. Error cases properly covered (6 criteria with `is_error_case: true`). Scope fits one planning cycle. Condition 1 — every criterion a testable proposition requiring no implementer judgment — is what fails.
+
+`retry_count: 2`, below the escalation threshold. **If a third round leaves blockers 1–3 open, escalate**: all three are cases where SPEC-010 depends on API surface its upstream specs never locked, which may mean SPEC-003/SPEC-006 need amendment rather than this spec.</result>
+<usage><subagent_tokens>129604</subagent_tokens><tool_uses>36</tool_uses><duration_ms>601891</duration_ms></usage>
+</task-notification>
