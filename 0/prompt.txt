@@ -1,0 +1,1 @@
+Lets take a stab at cleanin gup the docs for AI context. Consider our architecture, the rust best practices. Error handling, generics, traits, lifetimes, iterators, closures, concurrency, etc
