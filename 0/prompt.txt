@@ -1,0 +1,1 @@
+Continue SPEC-008 implementation: check if T-003-S8 has completed, and if so, dispatch T-004 next in the 19-task sequence.
