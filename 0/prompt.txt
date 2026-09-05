@@ -1,0 +1,1 @@
+We should be agpl 3 for sure. For the error model how do we want to consider things? should michi domain error be more flexible? Is supposed to be a reusable library. But maybe Monikl has a very custom error model. Thing through it
