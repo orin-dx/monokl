@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>a9447203ce3f39370</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/a9447203ce3f39370.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Go language support for monokl" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Go as monokl's 4th Language — Research Findings
+
+## A. Native Rust Go-parser landscape
+
+**gosyn** ([chikaku/gosyn](https://github.com/chikaku/gosyn)) is real and viable, contrary to expectations for a niche parser: 152,004 downloads, 17 published versions since Feb 2022, last crates.io publish 2026-07-14 (days old), commits weekly, MIT-licensed, 33 stars/7 forks, 3 real downstream dependents. Source confirms Go 1.18+ generics support — `parse_type_parameters()`, `type_parameters()`, and tests for generic instantiation/generic pointer types all exist. This is the strongest native-parser candidate found across all four languages evaluated this session.
+
+By contrast: **go-parser/go-types** (Goscript project) explicitly excludes generics ("pre-1.18... excluding generics") and the whole project is now unmaintained, superseded by Volang. **golang-parser** (bk-rs/golang-rs) is a struct-tag-to-Rust-struct converter, not a general parser (13 stars). **gofmt** (zjykzk) is a brand-new (Oct 2025, 594 downloads) formatter, unproven. **gomod-rs/gomod-parser** only parse `go.mod`, not source. No "goast" Rust crate exists.
+
+## B. Semantic-analysis cost model
+
+`go/packages.Load` scales with package count, not embeddable in a cold CLI call: on a 20k-package monorepo (77,688 files), `InitialWorkspaceLoadDuration` was **3m26s** cold, with `go list` alone taking 1m6s ([golang/go#69523](https://github.com/golang/go/issues/69523)). Even a *warm* gopls daemon serving a new client on a 2,047-package repo took 10+ seconds before becoming usable ([golang/go#48829](https://github.com/golang/go/issues/48829)). This confirms daemon-only architecture, same conclusion as Rust's `ra_ap_hir`.
+
+A lighter, syntax-only path is exactly monokl's existing Rust pattern (parse + structural extraction, no resolution) — directly portable via gosyn, since Go's own `go/parser`/`go/ast` are Go-only and using them at all means cgo/FFI, which monokl wants to avoid.
+
+Import resolution *is* easier than Rust's for the common case — codegraph's own `resolveGoCrossPackageReference` proves it out today: read `go.mod`'s module directive, strip the prefix from an import path to get a project-relative directory, look up the exported symbol. No macros, no monomorphization. Real gotchas: (1) **go.work** — codegraph's `go-module.ts` explicitly reads only the root `go.mod` and documents nested/workspace modules as unhandled; (2) **build tags** — gopls auto-resolves the filename-suffix convention (`_linux.go`, `_amd64.go`) but explicitly cannot auto-detect arbitrary `//go:build mytag` constraints ([gopls workspace docs](https://github.com/golang/tools/blob/master/gopls/doc/workspace.md)), so a structural tool will see phantom duplicate symbol definitions across tag-gated files; (3) vendoring has no Go-specific handling in codegraph, only generic gitignore-negation.
+
+## C. codegraph's Go handling (read in full)
+
+Go gets real hand-tuned investment, closer to TS than to the thin Python tier. `extraction/languages/go.ts` (105 lines): custom return-type unwrapping (pointer/multi-return/generic-arg stripping), receiver-type regex handling generic receivers `(s *Stack[T])`, uppercase-first-letter export detection — comparable to `rust.ts` (151 lines), well beyond `python.ts` (53 lines, no return-type/receiver logic at all).
+
+Go has **two** framework resolvers: `frameworks/go.ts` (Gin/Echo/Fiber/Chi/net-http route detection including Go 1.22 `"METHOD /path"` patterns) and `frameworks/goframe.ts` (GoFrame's reflective `g.Meta` struct-tag routing, joined via a separate synthesizer). `resolution/go-module.ts` is a dedicated `go.mod` parser mirroring `cargo-workspace.ts`'s role, but simpler — single-file only, no glob member expansion like Cargo's `members=["crates/*"]`. `import-resolver.ts` contains real Go-specific logic (`isExternalImport` go-branch, `resolveGoCrossPackageReference`) directly analogous to `resolve_rust_path`. No `go.work` support exists anywhere (confirmed by grep).
+
+## D. BM25 tokenization for Go
+
+Length≥2 filter is fine — single-char idioms (i,j,k) are filtered equally in every language; 2-char idioms (`wg`, `ok`, `db`, `tx`) and 3-char (`err`, `ctx`) survive untouched. Struct tags tokenize cleanly since backticks/colons/quotes are delimiters: `` `json:"name,omitempty"` `` → json/name/omitempty — sensible, if low-IDF. monokl's STOP_WORDS is TS/Rust-tuned and misses Go keywords the same way it missed Rust's crate/dyn/async: absent are `func`, `package`, `chan`, `defer`, `select`, `range`, `go`, `iota`. `interface`/`struct` already present coincidentally help Go. `go` itself (2 chars, survives the filter) is Go's near-zero-IDF goroutine keyword and should be added.
+
+## Recommendation
+
+Give Go a **native structural tier**: gosyn as primary parser (tree-sitter-go as fallback, since codegraph already ships `tree-sitter-go.wasm`), heuristic `go.mod`-based import resolution mirroring `resolve_rust_path`, extended STOP_WORDS (`func`/`package`/`chan`/`defer`/`select`/`range`/`go`/`iota`), with `go.work` and `//go:build` resolution explicitly scoped out of v1 as documented gaps.
+
+**CapabilityPrecision: Structural** — no type-checking, no build-tag-aware disambiguation, no workspace support, but well above Heuristic given gosyn's real AST and codegraph's proven `go.mod`-based cross-package resolution.</result>
+<usage><subagent_tokens>75500</subagent_tokens><tool_uses>45</tool_uses><duration_ms>256595</duration_ms></usage>
+</task-notification>
