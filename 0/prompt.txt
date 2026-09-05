@@ -1,0 +1,1 @@
+Check whether ExitGate-SPEC008-retry2 has completed. If it has replied, process its verdict (dispatch another fix round if it failed, or proceed to close out SPEC-008 and move to SPEC-009 if it passed). If not, check in directly via SendMessage and wait again.
