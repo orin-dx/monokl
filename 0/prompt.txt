@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bnptijvmh</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/6d1d1796-a048-47fd-a51f-13242fffb1c8/tasks/bnptijvmh.output</output-file>
+<status>completed</status>
+<summary>Background command "Brief wait checkpoint while T-012 completes" completed (exit code 0)</summary>
+</task-notification>
