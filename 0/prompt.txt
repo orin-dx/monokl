@@ -1,0 +1,21 @@
+<task-notification>
+<task-id>a36c387e4e040b85e</task-id>
+<tool-use-id>toolu_016nGvtLJQmo7JufJKMuekPr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a36c387e4e040b85e.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Python code-intelligence landscape" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The report (705 words) is above — content verified against primary sources (Jedi docs, tree-sitter-python issue tracker, Ruff crate READMEs on GitHub, pyright binder/issue tracker, Cursor forum) and cross-checked against the actual monokl spec text at `/Users/gabe/Projects/monokl/docs/monokl-spec.md` (tokenizer at lines 876-937, Python fidelity questions at lines 8116-8203, `CapabilityPrecision` enum usage at lines 6553-6669 and label mapping at 6756-6759).
+
+Key findings not to lose:
+
+- **Ruff's `ruff_python_ast`/`ruff_python_parser` are explicitly disclaimed as unstable** ("The Rust API exposed here is unstable and will have frequent breaking changes," still v0.0.x) — despite being the more tempting Rust-native fit, they're internal Ruff implementation details, not a publishable dependency contract.
+- **tree-sitter-python's open issues are concentrated in bleeding-edge type-hint syntax** (PEP 604 unions, PEP 695 type aliases), not in decorators/classes/`__all__` — the parts monokl actually needs are stable.
+- **Pyright resolves `__all__`/re-exports at the binder phase**, before type inference — this is genuinely cheap, syntax-level work, directly supporting `Structural`-tier implementation of problems #1 and #3 without a type checker.
+- Sourcegraph's own precise-Python tool (`scip-python`) is a **fork of pyright**, not a lighter structural analyzer — even a well-funded team reached for the full type checker rather than build a syntax-only equivalent.
+- Monokl's existing `tokenize()` needs **no changes** for Python — snake_case already segments correctly on the `_` hard-delimiter rule; the `@` decorator gap is a symbol-schema problem, not a tokenizer problem.
+- Found and flagged a **spec inconsistency**: line 8182 references `CapabilityPrecision::Approximate`, which is not an actual variant of the real enum (`Unsupported &lt; Heuristic &lt; Structural &lt; Exact`, defined at lines 6756-6759 and 6611/6667). Recommended fix: use `Heuristic`.
+
+Bottom line recommendation: keep tree-sitter-python as planned (mature, semver'd, architecturally consistent with OXC/ra-ap-syntax's "parser only, monokl builds the semantics" pattern); target `Structural` precision for re-export attribution, `__all__` visibility, and decorator tagging; `Structural`-but-heuristic for Protocol matching; `Heuristic` (not `Approximate`) for annotation resolution until real pyright integration lands.</result>
+<usage><subagent_tokens>68559</subagent_tokens><tool_uses>37</tool_uses><duration_ms>278544</duration_ms></usage>
+</task-notification>
