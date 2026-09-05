@@ -1,0 +1,47 @@
+<task-notification>
+<task-id>a16e85fd99e9b6b79</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a16e85fd99e9b6b79.output</output-file>
+<status>completed</status>
+<summary>Agent "Lambda-implementer T-004B (SPEC-001)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both corrections landed exactly at their expected lines (222 and 228), unchanged from the plan's targeting. Task complete.
+
+```json
+{
+  "task_id": "T-004B",
+  "status": "done",
+  "steps_completed": [
+    "Read AC-011 and AC-020 directly from /Users/gabe/Projects/monokl/.claude/specs/SPEC-001.json and confirmed the corrected literal text they lock matches the plan's paraphrase",
+    "Confirmed red: grep for old 'json serialization failed' literal returned 1, grep for 'mnkl init --rebuild' returned 1, grep for 'SPEC-001 AC-011, AC-020' in decisions log returned 0",
+    "Ran the plan's exact Python heredoc script to correct 01-core-architecture.md lines 222 and 228 in place, with assert guards on the pre-edit text",
+    "Ran the plan's exact Python heredoc script to insert the documented correction bullet into 05-research-and-decisions.md immediately after the LanguageAnalyzer trait bullet",
+    "Confirmed green: all four grep checks matched expected counts (1, 1, 0, 1), git diff --stat showed exactly 2 changed lines in 01-core-architecture.md and 1 inserted line in 05-research-and-decisions.md",
+    "Cleaned up /tmp/t004b_fix_01_core.py and /tmp/t004b_fix_05_log.py",
+    "Verified T-003/T-004's relaxed grounding greps are already reflected in the plan file (no action needed, per the plan's own note)",
+    "Staged only the two modified doc files and committed with the plan's exact commit message"
+  ],
+  "test_result": "pass",
+  "commit_sha": "bb068be",
+  "criteria_evidence": [
+    {
+      "criterion_id": "AC-011",
+      "test_file": "/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md",
+      "test_line": 222,
+      "implementation_file": "/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md",
+      "implementation_line": 222
+    },
+    {
+      "criterion_id": "AC-020",
+      "test_file": "/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md",
+      "test_line": 228,
+      "implementation_file": "/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md",
+      "implementation_line": 228
+    }
+  ],
+  "concerns": "This is a docs-only corpus correction task, not a code TDD cycle — no cargo test was run. The plan's grep commands served as the red/green verification in place of a Rust test, per the task's own design. Scope was respected: crates/monokl/src/error.rs was not touched, and only docs/spec/01-core-architecture.md and docs/spec/05-research-and-decisions.md were modified and committed. Pre-existing unrelated working-tree changes (.claude/plans/ACTIVE.md, .claude/specs/SPEC-004.json, and several untracked files) were left untouched and unstaged.",
+  "reasoning": "Verified AC-011 and AC-020 in SPEC-001.json lock exactly the corrected literals the plan specifies. Confirmed the pre-edit red state matched expected grep counts before making any change. Executed the plan's own heredoc scripts verbatim rather than improvising edits, per instructions. Post-edit grep checks all matched expected green state and the diff was scoped to exactly the intended lines. Committed only the two intended files with the plan's exact commit message."
+}
+```</result>
+<usage><subagent_tokens>48877</subagent_tokens><tool_uses>11</tool_uses><duration_ms>91720</duration_ms></usage>
+</task-notification>
