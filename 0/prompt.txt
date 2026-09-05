@@ -1,0 +1,216 @@
+The user just ran /insights to generate a usage report analyzing their Claude Code sessions.
+
+Here is the full insights data:
+{
+  "project_areas": {
+    "areas": [
+      {
+        "name": "Rust monorepo remediation plan execution",
+        "session_count": 5,
+        "description": "Claude drove a pre-approved 45-task remediation plan for a Rust monorepo to completion, dispatching tasks sequentially and landing each with passing tests. Heavy use of Bash, Edit, and TaskCreate/TaskUpdate tooling kept the plan tracked across long sessions. A process hygiene lapse surfaced when spec JSON and plan docs believed committed had never actually landed, requiring repo-state verification and a reconstituted two-commit split."
+      },
+      {
+        "name": "michi-pipeline concurrency features",
+        "session_count": 4,
+        "description": "Work centered on adding parallel execution, cancellation, and half-open single-flight gating to the michi-pipeline crate. Claude orchestrated a long series of TDD tasks through sub-agents, growing the suite to 77/77 green tests. Concurrency correctness was the primary goal, with sub-agent delegation handling the incremental implementation steps."
+      },
+      {
+        "name": "monokl spec-driven TDD pipeline",
+        "session_count": 4,
+        "description": "Claude orchestrated a large spec-driven TDD pipeline for the monokl crate, driving SPEC-005 through SPEC-008 past their exit gates and starting SPEC-009. Several gate-failure retry loops were needed — SPEC-005 took five-plus rounds over field-type pinning, and SPEC-006/007 each required fix rounds to kill surviving mutants. The Agent tool carried most of the implementation load under Claude's coordination."
+      },
+      {
+        "name": "Publishing and release config verification",
+        "session_count": 2,
+        "description": "The user requested publishing prep for a Rust plus TypeScript monorepo using Callisto, with an emphasis on empirically verified configuration. Claude validated the setup against the real CLI rather than assuming correctness. When the user demanded adversarial re-verification, Claude found and fixed a silent bug where callisto.toml used directory paths for [[package]] match values that never matched."
+      },
+      {
+        "name": "Test authoring and CI gate maintenance",
+        "session_count": 2,
+        "description": "Ongoing test writing and verification work supported the larger implementation efforts, with repeated cycles of running suites, reading failures, and patching code. Documentation gates were part of the surface too — a rustdoc intra-doc link pointing at a not-yet-existing function briefly broke the doc-warnings CI check before being caught and fixed. Bash-driven test runs and Read/Edit loops dominated this activity."
+      }
+    ]
+  },
+  "interaction_style": {
+    "narrative": "You operate primarily as an **orchestrator, not a coder**. Across these sessions you hand Claude large, pre-approved bodies of work — a 45-task remediation plan, a spec-driven TDD pipeline spanning SPEC-005 through SPEC-009, a parallel-execution-plus-cancellation feature for michi-pipeline — and then let it run. The tool distribution tells the story: 905 Bash calls, 224 Agent dispatches, and 131 TaskUpdates against only 421 user-visible messages. That ratio means **long autonomous stretches punctuated by sparse, high-leverage interventions**. You are not babysitting; you set direction, define the exit gate, and check back.\n\nYour specs are heavy upfront rather than iterative. The Markdown volume (399 files) alongside Rust (232) and JSON (199) suggests you write the plan documents and spec JSON *first*, then ask Claude to execute against them. This is why your sessions tolerate 5+ retry rounds on a single SPEC-005 field-type pinning gate without you rewriting the goal — the target was already unambiguous, so failure means fix-and-reconfirm, not renegotiate. You accept retry loops as the cost of a verified pipeline rather than a signal to intervene.\n\nWhere you *do* intervene, it's adversarial rather than corrective. The most telling moment: after Claude delivered a working callisto.toml, you **demanded an adversarial re-verification** and that challenge surfaced a match-pattern bug where directory paths silently never matched. You didn't spot the bug — you distrusted the confidence. Similarly, the uncommitted-spec-files hygiene lapse forced mid-session repo-state verification. **Your defining habit is treating \"tests pass\" and \"done\" as claims to be stress-tested, not conclusions.** All four analyzed sessions landed mostly-achieved with high satisfaction, but the friction profile is dominated by buggy_code (4) — which is exactly what you'd expect from someone who deliberately runs long and audits hard rather than reviewing every diff.",
+    "key_pattern": "You dispatch large pre-specified workloads and let Claude run autonomously for long stretches, intervening rarely but adversarially — challenging claims of success until they're empirically proven."
+  },
+  "what_works": {
+    "intro": "Across 17 sessions spanning July and August, you ran large-scale, spec-driven Rust engineering work — orchestrating multi-agent TDD pipelines, landing 36 commits, and holding a high bar for verification.",
+    "impressive_workflows": [
+      {
+        "title": "Orchestrating multi-agent spec pipelines",
+        "description": "You hand off large bodies of work — a 45-task remediation plan, SPEC-005 through SPEC-009 for the monokl crate — to sub-agents and let Claude sequence them to completion rather than micromanaging each step. With 224 Agent calls, 70 task creations and 131 task updates, you've built a genuine orchestration workflow where the plan is pre-approved up front and execution runs largely unattended. The exit-gate structure means failures surface as retry loops rather than as silent regressions."
+      },
+      {
+        "title": "Demanding adversarial re-verification",
+        "description": "When Claude produced a callisto.toml for your Rust+TS monorepo, you didn't accept it at face value — you challenged the result and asked for a hostile re-check. That caught a match-pattern bug where directory paths silently never matched anything, a failure mode that would have shipped invisibly. Insisting on validation against the real CLI rather than plausible-looking config is the difference between 'it looks right' and 'it is right'."
+      },
+      {
+        "title": "TDD with mutation-testing gates",
+        "description": "Your work on michi-pipeline added parallel execution, cancellation, and half-open single-flight gating through a long series of test-first tasks, with the suite growing to 77/77 green. You go further than passing tests — SPEC-006 and SPEC-007 required extra fix rounds specifically to kill surviving mutants. Treating mutation survival as a blocking gate keeps concurrency correctness honest in a way that line coverage never would."
+      }
+    ]
+  },
+  "friction_analysis": {
+    "intro": "Across long, orchestration-heavy Rust sessions you consistently reached your goals, but friction clustered around unverified state, silently-wrong configuration, and repeated quality-gate retry loops that ate wall-clock time.",
+    "categories": [
+      {
+        "category": "Trusting reported state instead of verifying it",
+        "description": "Several times work was reported as done when the repository or CI didn't actually reflect it, forcing mid-session forensics. You could add a cheap standing rule — a `git status`/`git log` check after every task lands — so drift is caught in seconds rather than reconstructed later.",
+        "examples": [
+          "Spec JSON files and a plan doc believed to be committed had never been committed, requiring repo-state verification and a reconstituted two-commit split mid-session",
+          "A rustdoc intra-doc link in T02 pointed at a function that didn't exist yet, breaking the doc-warnings CI gate before anyone noticed"
+        ]
+      },
+      {
+        "category": "Silently-wrong config caught only by adversarial challenge",
+        "description": "Configuration that parses cleanly but never matches anything is the worst failure mode, because nothing errors out. Rather than waiting to demand a re-verification at the end, ask for an empirical proof-of-effect (run the real CLI, assert the expected packages are listed) as part of the original task.",
+        "examples": [
+          "The initial callisto.toml used directory paths for [[package]] match values, which silently matched nothing and was only found after you demanded an adversarial re-verification",
+          "Correctness was ultimately established by validating against the real CLI rather than by reading the config, suggesting that step belonged earlier in the loop"
+        ]
+      },
+      {
+        "category": "Exit-gate retry loops in the spec-driven TDD pipeline",
+        "description": "Multiple SPECs failed their exit gates repeatedly, burning fix-and-reconfirm cycles on issues that were predictable from the gate criteria. Front-loading the gate's specific demands — field-type pinning rules, mutation-testing thresholds — into the implementation prompt would collapse several rounds into one.",
+        "examples": [
+          "SPEC-005 needed 5+ retry rounds over field-type pinning before passing its exit gate",
+          "SPEC-006 and SPEC-007 each required additional fix rounds for surviving mutants, extending an already long orchestration session"
+        ]
+      }
+    ]
+  },
+  "suggestions": {
+    "claude_md_additions": [
+      {
+        "addition": "## Commit Hygiene\nAfter completing each task, run `git status --porcelain` and confirm the working tree is clean before declaring the task done. Never assume files are committed — verify with `git log --stat -1` that the expected files are in the commit. Spec/plan files (*.json, plan docs) must be committed in the same task that creates them.",
+        "why": "A whole session was derailed when spec JSON files and a plan doc Claude believed were committed had never actually been committed, forcing mid-session repo-state reconstitution.",
+        "prompt_scaffold": "Add as a new top-level '## Commit Hygiene' section near the top of CLAUDE.md, above build/test instructions."
+      },
+      {
+        "addition": "## Verification Discipline\nNever claim a config or code path 'works' based on reading it. Verify empirically: run the real CLI/tool and confirm the expected output, or add a failing test first and watch it go red then green. When a config uses match/glob patterns, print the resolved matches to prove they are non-empty.",
+        "why": "The callisto.toml `[[package]]` match values used directory paths that silently never matched, and this was only caught when the user demanded an adversarial re-verification.",
+        "prompt_scaffold": "Add as a new '## Verification Discipline' section, directly after the Commit Hygiene section."
+      },
+      {
+        "addition": "## Rust Gates (run before marking any task complete)\n```\ncargo fmt --check\ncargo clippy --all-targets -- -D warnings\nRUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps\ncargo test --workspace\n```\nDo not introduce a rustdoc intra-doc link to an item that does not exist yet — either create the item in the same commit or use plain code formatting.",
+        "why": "A rustdoc intra-doc link pointing at a not-yet-existing function broke the doc-warnings CI gate, and gate failures repeatedly forced retry rounds across SPEC-005 through SPEC-008.",
+        "prompt_scaffold": "Add under an existing '## Testing' or '## Build' section; if none exists, create '## Rust Gates' after Verification Discipline."
+      },
+      {
+        "addition": "## TDD + Mutation Testing\nAll new behavior lands test-first: write the failing test, confirm it fails for the right reason, then implement. For any module covered by `cargo mutants`, run mutation testing before declaring the exit gate passed and kill surviving mutants in the same task rather than a follow-up round.",
+        "why": "SPEC-006 and SPEC-007 each needed extra fix rounds specifically for surviving mutants, which could have been caught inside the original task.",
+        "prompt_scaffold": "Add under the '## Testing' section alongside the Rust Gates block."
+      }
+    ],
+    "features_to_try": [
+      {
+        "feature": "Hooks",
+        "one_liner": "Shell commands that auto-run at lifecycle events like after edits or before you stop.",
+        "why_for_you": "Your two biggest friction sources were uncommitted files and gate failures (fmt/clippy/rustdoc) discovered late; a Stop hook that fails loudly on a dirty tree and a PostToolUse hook that formats and doc-checks Rust edits would have prevented both without you noticing.",
+        "example_code": "// .claude/settings.json\n{\n  \"hooks\": {\n    \"PostToolUse\": [\n      {\n        \"matcher\": \"Edit|Write\",\n        \"hooks\": [\n          {\"type\": \"command\", \"command\": \"cargo fmt --all 2>/dev/null; RUSTDOCFLAGS='-D warnings' cargo doc --no-deps -q 2>&1 | tail -20\"}\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\"type\": \"command\", \"command\": \"git status --porcelain | grep . && echo 'WARNING: uncommitted files remain' || true\"}\n        ]\n      }\n    ]\n  }\n}"
+      },
+      {
+        "feature": "Custom Skills",
+        "one_liner": "Reusable prompts stored as markdown that run with a single slash command.",
+        "why_for_you": "You ran the same spec-driven exit-gate loop across SPEC-005 through SPEC-009 and a 45-task remediation plan; encoding the gate sequence (fmt → clippy → doc → test → mutants → commit verify) as /gate makes each retry round one keystroke instead of a re-explained procedure.",
+        "example_code": "# .claude/skills/gate/SKILL.md\n---\nname: gate\ndescription: Run the full Rust exit gate and verify commit state\n---\nRun these in order, stopping at the first failure and fixing it before continuing:\n1. `cargo fmt --all --check`\n2. `cargo clippy --all-targets --all-features -- -D warnings`\n3. `RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps`\n4. `cargo test --workspace`\n5. `cargo mutants --in-diff` — kill any surviving mutants now, not later.\n6. `git status --porcelain` must be empty. Then `git log --stat -1` and confirm every file you touched appears in the commit.\nReport a single PASS/FAIL verdict with the failing command verbatim."
+      },
+      {
+        "feature": "Task Agents",
+        "one_liner": "Claude spawns focused subagents for parallel or deep exploration work.",
+        "why_for_you": "You already lean on this heavily (224 Agent calls), but the failures were adversarial ones — a silently non-matching config and surviving mutants; dedicating a skeptical 'red team' subagent to each completed spec would catch those before the user has to challenge you.",
+        "example_code": "claude \"Use a subagent as an adversarial reviewer for SPEC-009: assume the implementation is wrong. Try to construct inputs where the config patterns match nothing, where tests pass vacuously, and where a mutant survives. Report concrete reproductions only — no praise.\""
+      }
+    ],
+    "usage_patterns": [
+      {
+        "title": "Front-load the adversarial check instead of waiting to be challenged",
+        "suggestion": "Ask for an empirical, hostile verification pass as part of every spec completion, not as a reaction to a bug you suspect.",
+        "detail": "In the Callisto session the match-pattern bug only surfaced because you pushed back and demanded re-verification — Claude's first pass had accepted a config that silently matched nothing. Since 4 of your friction events were buggy code, making 'prove it against the real tool' a standing requirement converts a lucky catch into a reliable one. Pair this with running the actual CLI and printing the resolved match set, rather than reasoning about the config text.",
+        "copyable_prompt": "Before you call this done: run the real CLI against this config and paste the actual output showing which packages/files matched. If any match list is empty or a pattern is unused, treat that as a failure and fix it. Do not reason from the config text — I only accept observed output."
+      },
+      {
+        "title": "Batch the gate retry loop instead of round-tripping",
+        "suggestion": "Have the subagent iterate to a green gate autonomously with a retry budget, reporting only the final verdict plus a log of what it fixed.",
+        "detail": "SPEC-005 needed 5+ retry rounds over field-type pinning and SPEC-006/007 each needed mutant fix rounds — each round cost you a turn. Given you're already orchestrating sub-agents across a 45-task plan, delegating the fix-and-reconfirm cycle inside a single task keeps your attention at the spec level. Cap the budget so a genuinely stuck spec escalates to you rather than spinning.",
+        "copyable_prompt": "For SPEC-N: run the exit gate, and if it FAILs, fix and re-run autonomously up to 5 times. Only come back to me with (a) a PASS plus a bullet list of every fix you made, or (b) a FAIL after 5 attempts with the exact failing command output and your hypothesis. Don't ask permission between rounds."
+      },
+      {
+        "title": "Make repo state a checkpoint, not an assumption",
+        "suggestion": "Verify commit contents with `git log --stat` after each task rather than trusting that a commit happened.",
+        "detail": "The 45-task remediation session lost time because spec JSON files and a plan doc were believed committed but never were, requiring a two-commit split to be reconstituted mid-flight. With 36 commits across these sessions and heavy Bash usage, a one-line verification per task is cheap insurance. Do this at the end of every task, and especially before starting a task that depends on artifacts from a previous one.",
+        "copyable_prompt": "At the end of every task in this plan, run `git status --porcelain` and `git log --stat -1`, and explicitly confirm that each file you created or edited appears in that commit. If anything is missing or the tree is dirty, stop and tell me before moving to the next task."
+      },
+      {
+        "title": "Capture the recurring rules so you stop restating them",
+        "suggestion": "Move your standing expectations (TDD-first, full gate, clean tree, empirical verification) into CLAUDE.md so they apply automatically.",
+        "detail": "Across all four analyzed sessions the same expectations show up implicitly — test-first development, passing exit gates, verified commits — but none are captured as persistent instructions. Encoding them means subagents inherit them too, which matters given how much of your work is delegated. Start with the four additions above and prune anything that turns out to be noise.",
+        "copyable_prompt": "Read the last few sessions' patterns in this repo and draft a CLAUDE.md for me covering: (1) the Rust exit gate commands, (2) TDD-first with mutation testing, (3) commit verification after each task, (4) empirical verification of configs. Keep it under 40 lines and make it directive, not explanatory."
+      }
+    ]
+  },
+  "on_the_horizon": {
+    "intro": "Your work has already crossed the threshold from AI-assisted coding into AI-orchestrated engineering — 45-task remediation plans, spec-driven TDD pipelines with exit gates, and sub-agent fleets landing green test suites — and the next frontier is making those pipelines self-verifying, self-healing, and running without you in the loop.",
+    "opportunities": [
+      {
+        "title": "Self-Healing Exit Gates With Mutation Budgets",
+        "whats_possible": "Your SPEC-005/006/007 gates needed 5+ manual retry rounds over field-type pinning and surviving mutants — that loop can run itself. Imagine a gate runner that, on FAIL, automatically classifies the failure (surviving mutant, type mismatch, doc-link break), spawns a targeted fix sub-agent with only the relevant blast radius, re-runs the gate, and escalates to you only after N failed rounds with a diagnosis. Overnight, a spec goes from written to green without a single human retry.",
+        "how_to_try": "Build a gate-runner script that shells out to `cargo test`, `cargo mutants`, and `cargo doc -D warnings`, then have Claude drive it in a loop with the Agent tool spawning one fix-agent per failure class and TaskCreate/TaskUpdate tracking retry counts.",
+        "copyable_prompt": "Build me a self-healing exit-gate runner for this Rust workspace, then use it to drive SPEC-009 to green without asking me for intermediate approval.\n\nRequirements for the runner (put it in tools/gate.sh plus a small Rust or Python driver):\n1. Runs, in order: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`, `cargo doc --no-deps` with RUSTDOCFLAGS=\"-D warnings\", and `cargo mutants --in-place --timeout 60` scoped to changed files.\n2. Emits a machine-readable JSON verdict: {gate, status, failure_class, artifacts, offending_symbols}. failure_class must be one of: FMT, LINT, TEST_FAIL, DOC_LINK, SURVIVING_MUTANT, TYPE_PIN.\n3. Exits non-zero on any FAIL.\n\nThen orchestrate: for SPEC-009, run the gate. On FAIL, spawn ONE sub-agent per failure_class via the Agent tool, giving each agent only the offending files and the JSON verdict — not the whole repo. Each sub-agent must write a failing test first if one doesn't exist, then fix. Re-run the gate. Repeat up to 5 rounds per gate.\n\nHard rules:\n- Never weaken a test, add #[ignore], or loosen a clippy lint to pass a gate. If that's the only path, STOP and report.\n- After every round, `git status --porcelain` and commit; I have been burned by files I believed were committed that were not. Verify with `git show --stat HEAD` before claiming a commit landed.\n- Keep a running RETRY_LOG.md with round number, failure_class, hypothesis, fix, and result.\n\nAfter 5 failed rounds on any gate, stop and give me a written diagnosis of why the gate is unreachable."
+      },
+      {
+        "title": "Adversarial Verification Agent For Every Config",
+        "whats_possible": "The callisto.toml bug — directory paths in [[package]] match values that silently never matched — was only caught because you demanded adversarial re-verification. That demand should be a standing agent, not a one-off. Picture a red-team sub-agent that runs after every config, CI, or build-tooling change, whose only job is to prove the config is wrong by exercising the real CLI, asserting on actual observed effects, and hunting for silent no-ops where absence-of-error is being mistaken for success.",
+        "how_to_try": "Use the Agent tool to spawn a dedicated adversarial reviewer with a mandate to falsify rather than confirm, and give it Bash access to run the real binary (callisto, cargo, tsc) rather than reasoning about config from documentation.",
+        "copyable_prompt": "Act as an adversarial verification agent for this repo's tooling configuration. Your job is to PROVE the config is broken, not to confirm it works. Assume I am wrong until the CLI proves otherwise.\n\nScope: callisto.toml, all CI workflow YAML, Cargo.toml workspace config, and the TypeScript build config.\n\nMethod — for each configuration claim, you must produce empirical evidence:\n1. Identify every pattern-matching or glob-style field (package match values, path filters, workflow path triggers, include/exclude lists). For each one, construct a test that proves it actually matches something. A config that matches zero things must be flagged as SILENT_NO_OP — this is the exact class of bug that bit us before with directory paths in [[package]] match.\n2. Run the real CLI with verbose/dry-run flags and capture actual output. Do not infer behavior from docs or from the absence of an error message. Absence of error is NOT evidence of correctness.\n3. For each CI job, prove it would actually trigger on a realistic change by tracing path filters against `git diff --name-only` output from the last 20 commits.\n4. Deliberately introduce a temporary breaking change in a scratch branch and confirm the tooling CATCHES it. If a gate passes on knowingly-broken code, that gate is worthless — flag it.\n\nOutput a table: claim | verification command | actual observed output | VERIFIED / SILENT_NO_OP / UNPROVEN. Anything not VERIFIED gets a proposed fix plus the command that will prove the fix worked.\n\nDo not fix anything until you have finished the full audit. I want the complete list of lies first."
+      },
+      {
+        "title": "Parallel Spec Fleet With Merge Referee",
+        "whats_possible": "You're already dispatching sub-agents serially through 45-task plans and SPEC-005 through SPEC-009 — but specs with disjoint file ownership don't need to be serial. Imagine a dependency graph over your spec JSONs, a fleet of agents working independent branches simultaneously, and a merge-referee agent that resolves conflicts, re-runs the full gate on the integrated result, and rejects any branch that breaks a sibling's tests. Your 500 hours of pipeline time compresses toward the length of the critical path.",
+        "how_to_try": "Have Claude build the dependency DAG from your existing spec files, then use git worktrees plus parallel Agent invocations with SendMessage for cross-agent coordination and TaskCreate/TaskUpdate as the shared board.",
+        "copyable_prompt": "I want to move from serial spec execution to a parallel spec fleet. Set this up end to end.\n\nPhase 1 — Build the DAG:\nRead every spec JSON in the repo. For each spec, statically determine its file-ownership set (which crates/modules/files it will touch) and its hard dependencies on other specs. Emit specs/dag.json with nodes, edges, and owned-paths. Flag any two specs whose owned-paths overlap — those cannot run in parallel and must be edged.\n\nPhase 2 — Launch the fleet:\nCompute the maximal independent set of ready specs. For each, create a git worktree (`git worktree add ../wt-SPEC-NNN -b spec/NNN`) and dispatch a sub-agent via the Agent tool scoped to ONLY that worktree and ONLY its owned paths. Each agent runs strict TDD: failing test first, minimal implementation, refactor, then the full exit gate (fmt, clippy -D warnings, test, doc warnings, cargo mutants). An agent may not touch files outside its owned-paths set — if it needs to, it must SendMessage the orchestrator and block rather than edit.\n\nPhase 3 — Merge referee:\nAct as merge referee. Integrate completed branches one at a time onto a staging branch. After EACH merge, run the full workspace gate. If a merge breaks a previously-green test that belonged to a sibling spec, revert that merge, and dispatch a reconciliation agent with both specs' contexts to fix the interaction. Never merge a branch whose own gate is red.\n\nTracking: use TaskCreate for every spec and TaskUpdate on every state transition (READY, RUNNING, GATE_FAIL, MERGE_PENDING, MERGED, BLOCKED). After every merge, `git status --porcelain` must be clean and I want `git log --oneline --graph` in your report.\n\nStart with the current ready set and run until the DAG is exhausted or you hit a genuine blocker. Report the wall-clock speedup versus serial at the end."
+      }
+    ]
+  },
+  "fun_ending": {
+    "headline": "Claude confidently declared the spec files committed — then discovered they'd never been committed at all, and had to reconstruct a two-commit split mid-flight",
+    "detail": "During a marathon 45-task Rust monorepo remediation plan, a routine repo-state check revealed the spec JSON files and plan doc Claude believed were safely in git were still sitting uncommitted. The session paused to verify actual repo state and reconstitute the intended commit history before continuing."
+  },
+  "at_a_glance": {
+    "whats_working": "You operate less like someone chatting with an assistant and more like someone running a build system: pre-approved multi-task plans, spec-driven TDD pipelines, and sub-agent delegation that lets execution run largely unattended. Landing a 45-task Rust remediation plan and driving multiple monokl SPECs past their exit gates shows this scales well. The standout habit is refusing to accept plausible-looking output — challenging the Callisto config and demanding a hostile re-check surfaced a silent match-pattern bug that would otherwise have shipped invisibly.",
+    "whats_hindering": "On Claude's side: work was sometimes reported as done when the repo didn't reflect it, and configs that parsed cleanly but never actually matched anything slipped through because absence-of-error was treated as success. Exit gates also failed repeatedly on issues that were predictable from the gate criteria themselves, burning fix-and-reconfirm rounds. On your side: the standing rules you clearly care about — TDD-first, clean tree, empirical verification — live in your head rather than in the project, so they have to be re-established each session, and adversarial checks arrive as a reaction rather than as part of the original task.",
+    "quick_wins": "Put your recurring expectations into CLAUDE.md so TDD-first, clean-tree, and empirical-verification rules apply automatically instead of being restated. Add a Hook that runs `git status`/`git log --stat` after each task lands, so repo drift surfaces in seconds rather than through mid-session forensics. And build a Custom Skill for your adversarial verification pass — a single slash command that exercises the real CLI and asserts on observed effects, invoked at spec completion rather than after you suspect a bug.",
+    "ambitious_workflows": "Expect gate loops to close themselves: a runner that classifies each FAIL (surviving mutant, type mismatch, doc-link break), spawns a narrowly scoped fix agent, re-runs, and escalates to you only with a diagnosis after a retry budget is exhausted. Make the red-team agent standing rather than on-demand, running automatically after every config or CI change with the sole goal of proving the setup wrong. Then start modeling dependencies between your specs — with disjoint file ownership, independent branches can run in parallel under a merge referee that re-runs the full gate on the integrated result, collapsing your pipeline time toward the critical path."
+  }
+}
+
+Report URL: file:///Users/gabe/.claude/usage-data/report-2026-08-20-153241.html
+HTML file: /Users/gabe/.claude/usage-data/report-2026-08-20-153241.html
+Facets directory: /Users/gabe/.claude/usage-data/facets
+
+At-a-glance summary (for your context only — the user has not seen any output yet):
+# Claude Code Insights
+
+28 sessions total · 17 analyzed · 421 messages · 500h · 36 commits
+2026-07-07 to 2026-08-20
+
+## At a Glance
+
+**What's working:** You operate less like someone chatting with an assistant and more like someone running a build system: pre-approved multi-task plans, spec-driven TDD pipelines, and sub-agent delegation that lets execution run largely unattended. Landing a 45-task Rust remediation plan and driving multiple monokl SPECs past their exit gates shows this scales well. The standout habit is refusing to accept plausible-looking output — challenging the Callisto config and demanding a hostile re-check surfaced a silent match-pattern bug that would otherwise have shipped invisibly. See _Impressive Things You Did_.
+
+**What's hindering you:** On Claude's side: work was sometimes reported as done when the repo didn't reflect it, and configs that parsed cleanly but never actually matched anything slipped through because absence-of-error was treated as success. Exit gates also failed repeatedly on issues that were predictable from the gate criteria themselves, burning fix-and-reconfirm rounds. On your side: the standing rules you clearly care about — TDD-first, clean tree, empirical verification — live in your head rather than in the project, so they have to be re-established each session, and adversarial checks arrive as a reaction rather than as part of the original task. See _Where Things Go Wrong_.
+
+**Quick wins to try:** Put your recurring expectations into CLAUDE.md so TDD-first, clean-tree, and empirical-verification rules apply automatically instead of being restated. Add a Hook that runs `git status`/`git log --stat` after each task lands, so repo drift surfaces in seconds rather than through mid-session forensics. And build a Custom Skill for your adversarial verification pass — a single slash command that exercises the real CLI and asserts on observed effects, invoked at spec completion rather than after you suspect a bug. See _Features to Try_.
+
+**Ambitious workflows:** Expect gate loops to close themselves: a runner that classifies each FAIL (surviving mutant, type mismatch, doc-link break), spawns a narrowly scoped fix agent, re-runs, and escalates to you only with a diagnosis after a retry budget is exhausted. Make the red-team agent standing rather than on-demand, running automatically after every config or CI change with the sole goal of proving the setup wrong. Then start modeling dependencies between your specs — with disjoint file ownership, independent branches can run in parallel under a merge referee that re-runs the full gate on the integrated result, collapsing your pipeline time toward the critical path. See _On the Horizon_.
+
+Output the text between <message> tags verbatim as your entire response. Do not omit any line:
+
+<message>
+Your shareable insights report is ready:
+file:///Users/gabe/.claude/usage-data/report-2026-08-20-153241.html
+
+Want to dig into any section or try one of the suggestions?
+</message>
