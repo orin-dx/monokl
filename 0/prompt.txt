@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a82fbc5577a978b4d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a82fbc5577a978b4d.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PLAN-001 per vector-challenger feedback" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Corrected plan written to `/Users/gabe/Projects/monokl/.claude/plans/PLAN-001.json` (built via a generator script at `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/build_plan.py`, kept for reference). All five vector-challenger findings addressed:
+
+1. **False criteria coverage**: T-009's `covers_criteria` is now `[]` — it's a documentation-only task. Added a top-level `deferred_criteria` field naming AC-001 (Io-variant clause only — the other 13 variants remain covered by T-001–T-008) and AC-004 (fully deferred, 0% discharged), each with the concrete blocking reason.
+
+2. **Circular verification**: the 12 flagged criteria (AC-003, AC-005, AC-011, AC-012, AC-013, AC-013B, AC-015, AC-016, AC-017, AC-018, AC-020B, AC-021) now get an *additional* grounding step per task that greps the independent, pre-existing `docs/spec/*.md` design corpus (line numbers, literal strings, call-chain structure) — verified against the real files before locking them in, not just against the prose error.rs's own step had just written.
+
+3. **Zero runnable tests**: new **T-010** appends a real `#[cfg(test)] mod tests` with `assert_eq!` for all 13 non-Io Display literals, and proves all 13 pass via a real `cargo test` run in an isolated `/tmp` fixture crate (no io-errors/registry dependency) — I built and ran this fixture myself first (`13 passed; 0 failed`) before writing it into the plan. Io's own test is explicitly marked deferred with a note on exactly what it should look like once unblocked.
+
+4. **Mechanical bugs**: T-007's em-dash grep now uses a literal `—` character (empirically verified — the old `\xe2\x80\x94` byte-escape silently fails to match on this project's `grep`). T-009 now runs `mkdir -p .claude/blockers/` first and its heredoc no longer bakes stray backslashes around `` `orin-cargo` ``. T-009's `depends_on` is now `["T-008"]`. T-001–T-008 now each do a full-file rewrite (not append) so every commit has balanced braces and is diffed against the complete file rather than a brittle `sed -n 'N,Mp'` slice.
+
+5. **Understated blocker scope**: added a top-level `baseline_build_status` field, built from reading `crates/monokl/src/lib.rs` and `Cargo.toml` directly — 14 `pub mod` + 1 `#[cfg(test)] mod tests_types` declared, none exist as files (not even error.rs until T-001); `[[bin]]` points at a nonexistent `src/main.rs`. States this is expected/pre-existing and tells lambda-recon to rely on the plan's own diff/grep + isolated-fixture verification instead of a real `cargo build`.</result>
+<usage><subagent_tokens>180038</subagent_tokens><tool_uses>37</tool_uses><duration_ms>726253</duration_ms></usage>
+</task-notification>
