@@ -1,0 +1,54 @@
+<task-notification>
+<task-id>ac0ba892896abdd5f</task-id>
+<tool-use-id>toolu_01AfPqYRT6YTKrkJ6o79Ln21</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/ac0ba892896abdd5f.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit spec's concurrency design" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Concurrency Audit — monokl-spec.md
+
+## 1. `persist.rs` `CacheState`/`lock_state()` poisoning (lines 1425–1441)
+
+**Design:** `lock_state()` = `cache_state().lock().unwrap_or_else(PoisonError::into_inner)` — silently recovers from a poisoned `Mutex&lt;CacheState&gt;`.
+
+**Real concern, not just style.** Trace the actual mutation sequence in `flush()` (lines 1532–1560): it calls `state.write_queue.drain(..)` into a local `cache` clone *before* doing anything that could panic (`serde_json::to_string_pretty`, `evict_lru`). If a panic occurs after the drain but before `state.cache_file = Some(cache)` is assigned (e.g. inside `evict_lru`'s serialization loop), the mutex poisons with `write_queue` already emptied but the merged result never committed — silently discarding queued writes. The next `lock_state()` call recovers silently, and callers have no signal that data vanished. This is exactly the "structurally valid but logically corrupt" scenario the audit asked about — not a hypothetical.
+
+Compounding this: `analyze()`'s Tier 1–4 path (lines 1686, 1698–1699) calls into `persist::lookup`/`lookup_by_hash`/`refresh_mtime`/`queue_write` from *inside* Phase 1's `par_iter()` closure, so the lock is being acquired/released at high frequency from many rayon workers concurrently — more surface area for a mid-critical-section panic than a single-threaded caller would have.
+
+**Also note an inconsistency**: `pipeline/session.rs`'s `standard_index()` (line 6059) uses `.lock().map_err(|_| {...})?` — treating poisoning as a *propagated error*, the opposite policy from `persist.rs`. The spec applies two different poisoning philosophies to structurally similar `Mutex`-guarded state without acknowledging the discrepancy.
+
+**Recommendation:** Pick one policy. Given the corruption risk shown above, treat poisoning as fatal (mirror `session.rs`'s approach) rather than recovering silently — a poisoned `CacheState` means an unknown subset of `write_queue` may have been lost. `parking_lot::Mutex` (no poisoning) is not a fix; it just hides the same problem structurally instead of solving it. If silent recovery is truly desired for availability, at minimum log at `error!` level, not swallow.
+
+## 2. Phase 2's sequential enricher fold (lines 2091–2125, 2945–2948)
+
+**Design:** Phase 2 is a sequential `for analysis in &amp;analyses { for enricher in &amp;mut enrichers { enricher.update(...) } }`.
+
+**Correctly sequential *per enricher*, but there's a real, correctly-typed opportunity being left unused.** `WorkspaceEnricher: Send` only (line 1880) — not `Send + Sync` — which is exactly the bound needed to move each `Box&lt;dyn WorkspaceEnricher&gt;` onto its own thread (not share one across threads). Since each enricher independently folds over the same read-only `&amp;[Arc&lt;FileAnalysis&gt;]` (both `ImportGraphEnricher` and `SymbolIndexEnricher` only push into private `Vec`s, order-independent for correctness), running the two enrichers concurrently against the shared sorted `analyses` slice is sound and type-correct today.
+
+That said, it's a low-value win: only two enrichers exist, so the ceiling is ~2x on a phase that's pure `Vec::push` bookkeeping versus Phase 1's actual OXC parsing — rayon scope/join overhead could easily eat the gain at typical enricher counts. Verdict: **real opportunity, correctly reasoned as not worth the complexity** given current enricher count and cost profile. Worth revisiting only if the enricher list grows substantially.
+
+## 3. `DashMap&lt;String, Arc&lt;FileAnalysis&gt;&gt;` key type (lines 1365, 1372–1377, 5804)
+
+`cache().get(path.as_str())` **is correct, not an oversight.** `DashMap&lt;K,V&gt;::get&lt;Q&gt;` requires `K: Borrow&lt;Q&gt;`; `String: Borrow&lt;str&gt;` is a standard-library impl, and `String`'s `Hash`/`Eq` are defined to delegate to `str`, so hash/eq consistency holds — this is the same idiom that makes `HashMap&lt;String,_&gt;::get("foo")` work everywhere in Rust. No bug.
+
+On the performance framing: there's no allocation at *lookup* either way (`.as_str()` is a free borrow); the only allocation is at `insert()` (`path.to_string()`), and an `Utf8PathBuf`-keyed map would pay an equivalent clone on insert. So String-vs-`Utf8PathBuf` keying is a wash performance-wise. The spec doesn't state a rationale for String over `Utf8PathBuf`; a plausible one (unstated) is NAPI-boundary parity (paths arrive as JS strings via `@orin-axi/monokl`). Recommendation: harmless either way; if changed, prefer `Utf8PathBuf` purely for stronger typing, not performance.
+
+## 4. `Send + Sync` on `LanguageAnalyzer` implementors (lines 1260, 1612–1614, 5119–5122)
+
+`RustAnalyzer { workspace_root: Option&lt;Utf8PathBuf&gt;, package_roots: FxHashMap&lt;String, Utf8PathBuf&gt; }` is trivially `Send + Sync` — no `Rc`/`RefCell`/raw pointers anywhere, and `FxHashMap&lt;K,V&gt;` (a `HashMap` with `FxBuildHasher`, itself a ZST) is `Send`/`Sync` whenever `K,V` are, which they are here.
+
+`TsAnalyzer { resolver: Resolver }` depends on `oxc_resolver::Resolver` being `Send + Sync`; this holds in practice (its internal resolution cache is built for concurrent use), but **the spec never demonstrates this** — no `static_assertions::assert_impl_all!(TsAnalyzer: Send, Sync)` anywhere, despite this bound being load-bearing (`Arc&lt;dyn LanguageAnalyzer&gt;` shared across rayon workers, line 5108). Since this is an external-crate assumption baked silently into a trait bound the whole design depends on, it's the kind of thing that should be pinned with an explicit compile-time assertion rather than left to "it happens to compile." **Recommendation:** add `assert_impl_all!` tests for both analyzer structs.
+
+## 5. Data races between concurrent `analyze()` calls (lines 2091–2101, 1680–1708)
+
+**Provably safe within Phase 1**: `walk_entries` comes from a single-threaded `ignore::WalkBuilder` walk, so each path is unique; `par_iter()` therefore never has two threads calling `cache::insert()`/`persist::queue_write()` for the *same* key concurrently inside one `WorkspaceIndex::build`. No race there.
+
+**A real, if narrow, cross-call race exists**: `pipeline/search.rs` Stage 8 (line 5930) also runs `analyzer.analyze()` under `into_par_iter()`, and `WorkspaceSession` (§6027) caches one `AnalyzerRegistry` + `DashMap` across repeated calls in a long-lived process. Two independent top-level calls (e.g. a `search()` and a `dependents()`-triggered `standard_index()` build) sharing one session could legitimately call `analyze()` on the same path concurrently. `DashMap::insert`'s last-write-wins is safe here only in the "eventually consistent" sense — both writers compute from an actual disk read at call time, so neither value is *stale* relative to its own read, but the two reads could observe genuinely different file states if the file is edited mid-race. That's an inherent TOCTOU property of any filesystem-backed cache, not a monokl-specific flaw, and the tiered mtime/hash design already treats this as "eventually corrected on next stat" rather than promising linearizability. Not a bug; worth a one-line note in the doc that this is accepted, not proven-impossible.
+
+## 6. `fs2` advisory locks vs. atomic tempfile+rename (lines 1552–1558, 4963, 5019, 5829–5834)
+
+These solve **different problems, not redundant ones**: tempfile+rename (already in `flush()`) guarantees no reader ever sees a torn/partial `cache.json`; it does *not* prevent a lost-update race where two concurrent processes each read-merge-write and the second `rename()` silently discards the first process's queued entries. `fs2` advisory locking around the read-merge-write critical section is what prevents that lost update, and is a reasonable, standard choice given the closed world (only monokl processes touch `.monokl/cache.json`).
+
+**Gap**: the spec asserts fs2 is used (twice, in prose only) but never shows the actual lock-acquisition code or states where in the `flush()`/`init()` sequence the lock is taken/released, nor whether it's shared or exclusive, nor stale-lock handling after a killed process. For a "reconstruction-grade" spec this is an under-specified mechanism. **Recommendation:** add the missing code snippet (open/create a `.monokl/cache.lock` sibling file, exclusive-lock around the read-merge-write-rename span in `flush()`, shared-lock or no-lock for pure reads) so the two mechanisms' division of labor is unambiguous.</result>
+<usage><subagent_tokens>94010</subagent_tokens><tool_uses>18</tool_uses><duration_ms>233647</duration_ms></usage>
+</task-notification>
