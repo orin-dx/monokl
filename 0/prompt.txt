@@ -1,0 +1,31 @@
+<task-notification>
+<task-id>a38d33f71fbff3d16</task-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a38d33f71fbff3d16.output</output-file>
+<status>completed</status>
+<summary>Agent "Vector-planner for SPEC-001" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The vector-challenger review came back **fail**, with concrete, verified issues. Summary for you:
+
+**Overall verdict: FAIL** — the plan is well-crafted mechanically but has real coverage and correctness defects.
+
+Key findings:
+
+1. **False criteria coverage (blocking)**: T-009's `covers_criteria` lists `AC-001` and `AC-004`, but T-009 only writes a markdown blocker document — zero Rust implementation. AC-004 is a pure behavioral criterion (Display/`source()` pass-through) that's 0% discharged, not partially. Since every SPEC-001 criterion ID appears in *some* task's `covers_criteria`, a naive check reports 24/24 coverage on a plan that actually implements 22. Fix: set T-009's `covers_criteria` to `[]`, keep it as documentation-only, and add a plan-level `deferred_criteria` field for AC-001's Io clause and AC-004.
+
+2. **Circular verification (blocking-adjacent)**: 12 criteria (AC-003, AC-005, AC-011, AC-012, AC-013, AC-013B, AC-015, AC-016, AC-017, AC-018, AC-020B, AC-021) are "verified" by grepping for rustdoc prose the same step just wrote — proves nothing. Suggested fix: replace with absence-checks against not-yet-existing sibling files (persist.rs, git_scope.rs, io_safety.rs) to demonstrate vacuous truth instead.
+
+3. **Zero runnable Rust tests**: every Display-text criterion is checked via source-literal grep, never `assert_eq!(err.to_string(), ...)`. Should add a deferred `#[cfg(test)]` module with real assertions, marked as unrunnable pending the io-errors blocker.
+
+4. **Concrete mechanical bugs**:
+   - T-007's em-dash grep (`\xe2\x80\x94` escape) empirically fails against correct output — verified by running it.
+   - T-009 lacks `mkdir -p .claude/blockers/` (directory doesn't exist) and has stray literal backslashes baked into the heredoc around `` `orin-cargo` ``.
+   - T-009's `depends_on: [T-001]` should be `[T-008]` — its own content asserts state only true after T-008.
+   - T-001 through T-006 commit syntactically invalid Rust (unclosed enum) for 6 commits straight, with brittle absolute-line-number diffs and no recovery instructions on mismatch.
+
+5. **Understated blocker scope**: the plan blames only io-errors/registry for skipping `cargo build`, but `lib.rs` declares 15 modules with only `lib.rs` existing on disk, plus a `[[bin]]` pointing at a nonexistent `main.rs` — the crate is unbuildable independent of io-errors, and lambda-recon's baseline test run will fail with no plan instruction for that.
+
+Files: plan at `/Users/gabe/Projects/monokl/.claude/plans/PLAN-001.json`, spec at `/Users/gabe/Projects/monokl/.claude/specs/SPEC-001.json`.
+
+Would you like me to send this feedback back to the plan-writing agent to produce a corrected revision, or do you want to review/direct the fixes yourself first?</result>
+<usage><subagent_tokens>77259</subagent_tokens><tool_uses>5</tool_uses><duration_ms>1258677</duration_ms></usage>
+</task-notification>
