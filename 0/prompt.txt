@@ -1,0 +1,1 @@
+How do we leverage this enrichment, anootation and confidence score? How would we compute or gather such information? Would some of it come from the AST? Some added after the fact? What tools/utilities/libraries and techniques should we use? What does the state of the art say? What does research say?
