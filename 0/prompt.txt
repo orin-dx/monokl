@@ -1,0 +1,44 @@
+<task-notification>
+<task-id>a4eb7e239413451aa</task-id>
+<tool-use-id>toolu_01AaShutLTjXyMeMgtnfp1jR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a4eb7e239413451aa.output</output-file>
+<status>completed</status>
+<summary>Agent "Research eval harness methodology for code-search tools" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## CodeGraph's actual evaluation harness
+
+CodeGraph has **two separate, easily-confused harnesses**:
+
+**1. `__tests__/evaluation/`** — not agent-based at all. `runner.ts:33-61` calls CodeGraph's own `searchNodes`/`findRelevantContext` APIs directly (no LLM, no tool calls) against 12 hand-written cases (`test-cases.ts:3-93`) on a single codebase, scoring recall/MRR (`scoring.ts:3` `PASS_THRESHOLD = 0.5`) in one run. This is a unit-test-style regression check, not the A/B harness the task description refers to.
+
+**2. `scripts/agent-eval/`** — the real headless-agent A/B system. `run-all.sh:44-63` launches `claude -p` twice per question, `--strict-mcp-config` pointed at either a CodeGraph MCP server or an empty one (built-in Read/Grep/Bash always available), pinned to `--model sonnet --effort high` "per the standing A/B policy... don't raise" (`run-all.sh:11`) — an explicit guard against model-version drift. `parse-run.mjs:40-45` and `offload-eval-cost.mjs` extract tokens/cost from Claude Code's own authoritative `result.total_cost_usd` / `modelUsage[model].costUSD` (good practice — real per-model billing, not reconstructed pricing). `offload-eval-judge.mjs:5-24` uses a same-vendor LLM judge run from a neutral cwd (so it can't "cheat" by reading source) for correctness scoring.
+
+## Why the cost numbers didn't replicate — the bug/gap in their own data
+
+Their own docs already half-confess this:
+
+- **N=1 by design in the flagship matrix.** `docs/benchmarks/codegraph-ab-matrix.md:38`: "One run per arm (a **snapshot** — run-to-run variance is real; treat ±1-2 reads and ±10s as noise...)." That table's own headline (`:18-24`) reports cost "roughly flat — marginally higher on the with-arm" while tool calls/reads dropped 41-76%. That's the exact with-tokens-down/cost-up pattern the outside replication found — visible in codegraph's own single-run data before they even published the polished README numbers.
+- **Token savings ≠ cost savings, mechanistically.** `call-sequence-analysis.md:410-415`: "token-count savings (57%) look bigger than cost savings (35%)... mechanism is volume, not cache-ability" — the without-arm's huge token volume is mostly cheap cache-reads (~$0.10-0.30/MTok) from repeated re-reads of the same files, while the with-arm's MCP payloads are fresh, uncached, full-price input. Fewer calls with more fresh tokens per call can cost more than many calls of mostly-cached tokens.
+- **A raw-metric API bug silently corrupted an earlier result.** `call-sequence-analysis.md:417-419`: `result.usage` in that Claude Code version was last-turn-only, not cumulative — "an earlier excalidraw cut reported '−34% tokens' off this bug; the real figure is ~90%." A silent SDK field-semantics change quietly produced a false headline number.
+- **Prompt-steering swamps the tool's own effect.** Arms A-I (`call-sequence-analysis.md:38-390`) show trace-tool adoption swinging 2/12 → 8/12 purely from `--append-system-prompt` wording, with cost/duration moving in lockstep — meaning any single A/B run is really measuring "tool × prompt," not "tool" alone.
+- **Task/repo selection risk.** One canonical "flow" question per repo (plays to the tool's designed strength: trace path A→B), and the polished README benchmark uses only 7 repos chosen for the README itself — self-selection risk even with median-of-4 (`README.md:197`, `parse-bench-readme.mjs`).
+- **Mixed-model subagent pricing.** `offload-eval-cost.mjs:7-19`: Explore subagent runs on Haiku, main agent on Sonnet — naive per-token cost math is wrong by ~3x unless split by model.
+
+## Reusable benchmarks from the field
+
+- **SWE-bench / Verified / Lite** (swebench.com, arXiv:2310.06770; OpenAI's Verified curation: openai.com/index/introducing-swe-bench-verified) — end-to-end patch-passes-hidden-tests. Good for "did the tool change task success," but conflates search quality with model/prompting; expensive per run.
+- **RepoBench-R** (arXiv:2306.03091) — isolates *retrieval*: given a repo, does the tool surface the correct cross-file snippet. Directly adaptable to score monokl's search API alone, decoupled from any agent.
+- **CodeSearchNet** (arXiv:1909.09436, github.com/github/CodeSearchNet) — large-scale NL-to-code retrieval with MRR, the same metric codegraph uses but with a real held-out annotated set instead of 12 hand-picked cases.
+- **CrossCodeEval** (arXiv:2310.11248) — built specifically so single-file context fails, forcing genuine cross-file retrieval — a good stress test for symbol/reference recall.
+
+RepoBench-R and CodeSearchNet are the right fit for a tool-level (not agent-level) eval; SWE-bench Lite is the right fit for a thin end-to-end confirmation layer.
+
+## Proposed monokl v1 harness (buildable now)
+
+- **Two layers, not one.** (1) Static retrieval eval: monokl's search API against a RepoBench-R/CodeSearchNet-style labeled set (recall@k, MRR) — cheap, deterministic, run on every commit. (2) Agent A/B: headless CLI agent, monokl-MCP-enabled vs. grep/glob/Read-only baseline, same model/effort pinned and logged.
+- **Metrics per run:** tool calls (by type), tokens (sum per-turn, not `result.usage`), wall-clock, dollar cost from the harness's own authoritative per-model billing field (not reconstructed), and task success (patch/answer vs. ground truth via SWE-bench-style hidden test where possible, LLM-judge only as fallback, cross-vendor judge to avoid self-preference).
+- **N and variance:** minimum 5 runs per condition, report median + IQR, never a single-run headline; flag and separately report any run with tool-loading races or errors rather than silently excluding.
+- **Repo/task selection:** ≥10 repos spanning language/size, task set drawn from real issues (SWE-bench-lite-style), not one canonical "flow" question per repo designed around the tool's own strength; freeze the task list before running either arm.
+- **Report both token and dollar deltas separately**, broken out by cache-read vs. fresh-input token mix, so a token win is never presented as a cost win without the cache-composition caveat.</result>
+<usage><subagent_tokens>67043</subagent_tokens><tool_uses>16</tool_uses><duration_ms>127259</duration_ms></usage>
+</task-notification>
