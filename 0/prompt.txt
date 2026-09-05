@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>a6cab6d18f34c7c32</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/a6cab6d18f34c7c32.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Rust patterns for interface/trait-impl graph indices" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Research: Reverse Trait-Implementation Index for Monokl
+
+## 1. How real Rust tooling builds "who implements this trait"
+
+rust-analyzer builds this as a **per-crate Salsa-memoized full pass**, not a lazy per-query scan. The `hir-ty` crate's `trait_impls_in_crate_query` walks every module in a crate's `DefMap`, and for each `impl` block records the impl id keyed by (trait id, self-type fingerprint) into a `TraitImpls` struct wrapped in `Arc` ([method_resolution.rs](https://github.com/rust-lang/rust-analyzer/blob/e131bfc747df1b21ae6ea04eb9c55001e06b7bf0/crates/hir_ty/src/method_resolution.rs)). That's a genuine reverse index (trait → impls), built once per crate and reused by both method resolution and IDE features, then invalidated/rebuilt incrementally by Salsa when the crate changes. The IDE-facing "Go to Implementation" feature ([goto_implementation.rs](https://github.com/rust-lang/rust-analyzer/blob/master/crates/ide/src/goto_implementation.rs)) doesn't reimplement this — it classifies the token under the cursor and delegates to `Impl::all_for_trait(sema.db, trait_)` (traits), `Impl::all_for_type` (ADTs/inherent impls), or `impls_for_trait_item` (trait methods/consts, walking back to the owning trait), all bottoming out in that same per-crate index.
+
+rustdoc does the analogous thing for HTML output: while rendering, it accumulates a global implementors list per trait across the whole crate graph (impls can live in other crates) and emits it as a static `implementors/.../trait.TraitName.js` file the trait's doc page loads at view time ([rustc-dev-guide](https://rustc-dev-guide.rust-lang.org/rustdoc.html); [rust-lang/rust#43893](https://github.com/rust-lang/rust/issues/43893)). It's a build-time global pass, not a per-page-view computation.
+
+cargo-modules embeds `ra_ap_hir`/`ra_ap_ide` (confirmed in its [Cargo.toml](https://github.com/regexident/cargo-modules/blob/main/Cargo.toml)) and inherits trait-impl awareness from rust-analyzer's own index rather than building a second one.
+
+**Takeaway**: the standard approach is exactly monokl's existing enricher shape — a dedicated reverse-index structure built during a full pass. rust-analyzer differs only by adding Salsa incremental caching, which monokl deliberately forgoes.
+
+## 2. Would petgraph be a better fit?
+
+No compelling case. First, `SymbolIndex` and the proposed trait-impl index aren't graphs — they're `name -&gt; Vec&lt;(FileIdx, usize)&gt;` dictionaries, out of petgraph's scope regardless. Second, for `ImportGraph`: petgraph's `Graph`/`DiGraph` ([docs.rs](https://docs.rs/petgraph/latest/petgraph/graph/struct.Graph.html)) is a `u32`-backed-`NodeIndex` adjacency list — near-identical to monokl's hand-rolled `FileIdx` design. Its one real win, `neighbors_directed(idx, Incoming)` ([petgraph::visit](https://docs.rs/petgraph/latest/petgraph/visit/index.html)), replaces what monokl already gets from explicit forward/reverse `FxHashMap`s — arguably more transparent for a two-enricher system than an opaque `NodeIndex`. Adopting it would also either leak petgraph's `NodeIndex` as the public handle (undermining the "`FileIdx` is not `Serialize`" compile-time guard) or require wrapping it anyway, gaining nothing. petgraph also pulls in `fixedbitset`, `hashbrown`, `indexmap` ([crates.io](https://crates.io/crates/petgraph/dependencies)) for algorithms (SCC, Dijkstra) monokl doesn't need. **Verdict**: keep the hand-rolled `FxHashMap` approach.
+
+## 3. Idiomatic bounded BFS in Rust
+
+`VecDeque&lt;(FileIdx, u32 /*depth*/)&gt;` frontier, `FxHashSet&lt;FileIdx&gt;` visited-set checked **at enqueue time** (not just dequeue — mirrors codegraph's separate `enqueued` set), a `depth_limit` compared before pushing, and a `result_cap` checked at every `results.push()` site, not just the loop head. For cap-signaling: rather than a bare `Vec&lt;T&gt;` that silently stops growing, extend michi's existing single `thiserror` enum with a non-fatal variant `TraversalCapExceeded { visited: usize, cap: usize }`, surfaced via `Result&lt;TraversalReport, MonoklError&gt;` where `TraversalReport { sites: Vec&lt;_&gt;, truncated: bool }` — making a cap-hit a first-class, matchable outcome.
+
+## 4. Sketch: `TraitImplEnricher` / `TraitImplIndex`
+
+This mirrors `SymbolIndexEnricher`, not a new graph. `TraitImplIndex` is `FxHashMap&lt;String, Vec&lt;(FileIdx, usize)&gt;&gt;` keyed by trait name, pointing at impl-block sites — inverting `RustStructEntry.trait_impls: Vec&lt;String&gt;` across the corpus. `update()` iterates each file's struct entries, pushing `(file_idx, decl_offset)` per trait name; `finalize()` sorts each `Vec` by `(FileIdx, offset)` for determinism. The map stays `FxHashMap` (never serialized) — only final CLI result lists need stable order, so no `BTreeMap` swap applies here. For "upstream discovery": trait `T` → `TraitImplIndex` gives implementor sites → cross-reference each struct in `SymbolIndex` for usage sites → expand via `ImportGraph` reverse edges under the §3 bounded-BFS rules — composing all three indices without a fourth graph structure.
+
+## Recommendation
+
+Add `TraitImplEnricher` + `TraitImplIndex` following the `SymbolIndexEnricher` pattern exactly; skip petgraph entirely; implement interface→implementor "upstream discovery" as a capped BFS composing `TraitImplIndex` → `SymbolIndex` → `ImportGraph` reverse edges, with enqueue-time `FxHashSet` visited tracking and an explicit `TraversalReport{truncated}` return.
+
+---
+Draft saved at `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/report_draft.md` (761 words incl. markdown/URL tokens) if you want the raw file.</result>
+<usage><subagent_tokens>42926</subagent_tokens><tool_uses>12</tool_uses><duration_ms>178525</duration_ms></usage>
+</task-notification>
