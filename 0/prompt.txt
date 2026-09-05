@@ -1,0 +1,1 @@
+/compact keeping what we need to start the next set of work
