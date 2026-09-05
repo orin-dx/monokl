@@ -1,0 +1,59 @@
+<task-notification>
+<task-id>a409f0cb2484ae0d5</task-id>
+<tool-use-id>toolu_01EeshrQzpDnrXn7LD8e1hV1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/a409f0cb2484ae0d5.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit spec's generics and traits design" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Generics &amp; Traits Audit — `docs/monokl-spec.md`
+
+## 1. Core traits: `LanguageAnalyzer`, `WorkspaceEnricher`, registry additions
+
+**Well-designed and correct:**
+- `pub trait LanguageAnalyzer: Send + Sync` (line 1260) — the bound is exactly right: `Arc&lt;dyn LanguageAnalyzer&gt;` is shared read-only across `rayon::par_iter()` workers (line 2091, 5930), so both `Send` and `Sync` are required and present.
+- `pub(crate) trait WorkspaceEnricher: Send` (line 1880) — only `Send`, not `Sync`, and that's *correct*, not a bug: enrichers are moved into a single-threaded loop (lines 2110-2118) and mutated exclusively via `&amp;mut self` after the parallel analyze phase finishes; they're never shared concurrently, so `Sync` would be an over-constraint. `finalize(self: Box&lt;Self&gt;, …)` (line 1882) is a legal object-safe receiver.
+- `capabilities(&amp;self) -&gt; AnalyzerCapabilities` (line 5151) aggregates 4 `CapabilityPrecision` fields + 2 bools into one struct return — the right way to avoid 6 separate trait methods (`refs_precision()`, `definition_precision()`, …). Good factoring, not bloat.
+
+**Real bug — trait definition is incomplete relative to its own usage.** `AnalyzerRegistry`/`query_support.rs` call `analyzer.language_id()`, `analyzer.capabilities()`, `analyzer.analyze_with_profile(...)` through `&amp;dyn LanguageAnalyzer` / `Arc&lt;dyn LanguageAnalyzer&gt;` (lines 5147-5165, 6568-6624, 6598). For dyn dispatch to resolve these, they **must** be trait methods. But the canonical trait block (1260-1263) only ever declares `supports`/`analyze`, and `impl LanguageAnalyzer for TsAnalyzer` (1674-1709) is never restated with the three new methods. As literally specified, `AnalyzerRegistry::from_workspace_opts` pushing `Arc::new(TsAnalyzer::…)` into `Vec&lt;Arc&lt;dyn LanguageAnalyzer&gt;&gt;` (line 5064) would not type-check. This is the single highest-risk gap for verbatim reconstruction. Fix — restate the trait and give `analyze` a default in terms of `analyze_with_profile` (also resolves §5):
+```rust
+pub trait LanguageAnalyzer: Send + Sync {
+    fn language_id(&amp;self) -&gt; LanguageId;
+    fn supports(&amp;self, path: &amp;Utf8Path) -&gt; bool;
+    fn capabilities(&amp;self) -&gt; AnalyzerCapabilities;
+    fn analyze_with_profile(&amp;self, path: &amp;Utf8Path,
+        source: Box&lt;dyn FnOnce() -&gt; Result&lt;String&gt;&gt;, profile: AnalysisProfile)
+        -&gt; Result&lt;Arc&lt;FileAnalysis&gt;&gt;;
+    fn analyze(&amp;self, path: &amp;Utf8Path, source: Box&lt;dyn FnOnce() -&gt; Result&lt;String&gt;&gt;)
+        -&gt; Result&lt;Arc&lt;FileAnalysis&gt;&gt; {
+        self.analyze_with_profile(path, source, AnalysisProfile::Full)
+    }
+}
+```
+and add the matching methods to `TsAnalyzer`'s impl block. Adjacent gap: `AnalyzerCapabilities` and `CapabilityPrecision` are used ~22 times (constructed, compared with `&lt;` at 6614/6670) but their type definitions (derives for `Copy`/`PartialOrd`/`Ord`) never appear anywhere in the doc — can't verify they support the comparisons the spec relies on.
+
+## 2. Generic functions
+
+`rank_blocks&lt;S: std::hash::BuildHasher&gt;` / `score&lt;S: BuildHasher&gt;` (lines 1040, 1086) accepting `&amp;HashMap&lt;String, usize, S&gt;` is the idiomatic, std-blessed way to accept both `HashMap` and `FxHashMap` without `rank/` depending on `rustc_hash` — zero-cost via monomorphization, correctly used in `pipeline.rs` where `df: FxHashMap&lt;String, usize&gt;` is passed straight in (line 8 of `grep1` context). Minor refinement: only `.get()` is used (line 1098), so an even narrower/cleaner idiom is `df: impl Fn(&amp;str) -&gt; usize` — decouples the function from "must be a `HashMap`" entirely (works for a sorted `Vec`, an FST, etc.) at the same zero cost. Not urgent; current form is defensible. Other generics are all appropriately chosen: `impl Into&lt;Utf8PathBuf&gt;` constructors (585, 2830-2836, 7544) are correct ergonomic argument-position `impl Trait`; `render_json&lt;T: Serialize&gt;` (2278-2292) is correctly generic since `Serialize` isn't dyn-friendly in a useful way and instantiation count is small. No misuse found.
+
+## 3. Trait object catalog
+
+- `Box&lt;dyn FnOnce() -&gt; Result&lt;String&gt;&gt;` (1262, 1680, 5177, 6567) — **necessary**, not merely acceptable: making the source-loader generic (`F: FnOnce() -&gt; Result&lt;String&gt;`) would make `analyze` generic and break object safety, which would break every `Arc&lt;dyn LanguageAnalyzer&gt;`/`&amp;dyn LanguageAnalyzer` call site in the registry and query_support. Correct trade-off.
+- `Arc&lt;dyn LanguageAnalyzer&gt;` (5053-5108) and `Vec&lt;Box&lt;dyn WorkspaceEnricher&gt;&gt;` (2072, 2143, 6063) — correct use of dynamic dispatch: the registry is heterogeneous and feature-gated (TS/Rust/future Python/C#); per-file dispatch cost is negligible next to actual parsing, and monomorphizing over N analyzer types would need an enum-of-analyzers with no real benefit. Keep as-is.
+- **Minor bug**: `fn panic_payload_to_napi_error(payload: &amp;Box&lt;dyn Any + Send&gt;)` (line 2778) — classic "reference to a boxed trait object" anti-pattern (`clippy::borrowed_box`). Should be `&amp;(dyn Any + Send)`.
+- `Option&lt;Box&lt;InspectEntry&gt;&gt;` inside `RustData` (line 7176) is a deliberate, correct use of `Box` for enum-size normalization ("without inflating non-Rust language data," line 7180) — unrelated to dynamic dispatch, good design.
+
+## 4. Tagged enums (`InspectEntry`, `LangData`, `DependencyTarget`)
+
+The serde-tagged enum is the right idiom here over trait+`Box&lt;dyn Trait&gt;`: these types need `Deserialize` (trait objects can't deserialize without an external registry/`typetag`, not in the crate's dependency surface), and `schema.rs`'s `full_union_schema()` (~3921-3928) needs an exhaustive, closed variant set to emit `oneOf` — trivial with `match`, awkward with type-erased objects. Keep the enum shape.
+
+**Inconsistency found**: `LangData` (376, 7187) is `#[non_exhaustive]`, but `InspectEntry` (3232, 7306), `DependencyTarget` (319, 7219), and `RustPathAnchor` (340, 7206) are not — despite the doc's own roadmap already growing these (`RustPath` variant added to `DependencyTarget`; Python variants explicitly planned for `InspectEntry`, line 4710). Recommend `#[non_exhaustive]` on all three to match `LangData`'s treatment and avoid a semver break on the next language phase the spec itself promises.
+
+## 5. Blanket impls / default methods
+
+Biggest missed opportunity: `TsAnalyzer::analyze` (1680-1708) and `RustAnalyzer::analyze_cached_or_parse` (5174-5236) duplicate the same stat→`persist::lookup`→content-hash→`persist::lookup_by_hash`→parse→`cache::insert` skeleton almost verbatim, differing only in the parse step and one profile-validity check (5206-5207). The default-`analyze` fix in §1 removes one layer of duplication; the remaining tier-lookup skeleton should become a shared helper (e.g. `cache_tiers::lookup_or_parse(path, source, parse_fn, is_valid_fn)` taking closures) so each analyzer supplies only its parse step.
+
+## 6. Lifetimes / arena principle
+
+Only one `pub struct` with an explicit lifetime in the entire ~8400-line spec: `Lexer&lt;'a&gt;` (line 633), a short-lived query-DSL tokenizer over `&amp;str` — never touches OXC's `Allocator`/`AstNode`, never stored in `FileAnalysis`. `line_ranges_for_file&lt;'a&gt;` (6323) is a free function, not a struct, borrowing from an already-owned `ScopeSelection` (elision requires the explicit `'a` since there are two reference args). No `AstNode&lt;'a&gt;` or arena type appears in any public struct — ADR 0002's principle (line 2929) is upheld everywhere checked. No violations.</result>
+<usage><subagent_tokens>86094</subagent_tokens><tool_uses>28</tool_uses><duration_ms>285662</duration_ms></usage>
+</task-notification>
