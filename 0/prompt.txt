@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>a7c7cbd69f43b74b6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a7c7cbd69f43b74b6.output</output-file>
+<status>completed</status>
+<summary>Agent "Research code-search ranking approaches beyond BM25" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Code-Search Ranking for AI Agents: Research Findings
+
+## 1. Aider's repo map — verified from source
+
+Read directly from `aider/repomap.py` ([GitHub](https://github.com/Aider-AI/aider/blob/main/aider/repomap.py)) and docs ([aider.chat/docs/repomap.html](https://aider.chat/docs/repomap.html), [blog: "Building a better repository map with tree sitter"](https://aider.chat/2023/10/22/repomap.html)):
+
+- **Graph**: a NetworkX directed multigraph. Nodes = files; edges = def/ref relationships extracted via **tree-sitter** tag queries (migrated off `ctags` in Oct 2023 for richer signatures).
+- **Algorithm**: literally `networkx.pagerank(G, weight="weight", **personalization)`. Edge weights are reference-count square-root-normalized, with multipliers: 50x for files already in the chat, 10x for user-mentioned identifiers, 10x for "well-named" identifiers (snake/camel/kebab-case, 8+ chars), 0.1x penalty for private (`_`-prefixed) identifiers and for definitions with 5+ definers.
+- **Token budget**: a binary search over the number of top-PageRank tags included, counting tokens with the target model's tokenizer, converging to within ~15% of `--map-tokens` (default 1k, expands dynamically when no files are in chat).
+- **Evidence**: none found. Docs and blog explain mechanism and intuition only — no benchmark comparing repo-map/PageRank against plain grep, BM25, or random selection. This is a well-engineered, well-documented design justified by analogy to PageRank's web success, not by code-retrieval evaluation. (Third parties treat it as inspirational precedent rather than proven — e.g. a competing agent project cites it explicitly as "inspired by Aider" without independent validation: [NousResearch/hermes-agent#535](https://github.com/NousResearch/hermes-agent/issues/535).)
+
+## 2. Hybrid lexical + semantic retrieval
+
+Findings are mixed and tool-dependent, not a settled consensus:
+
+- **Sourcegraph Cody actually moved away from embeddings**, back toward its native (keyword/SCIP-based) code-search infrastructure, citing scaling and config-cost problems — [sourcegraph.com/blog: "How Cody understands your codebase"](https://sourcegraph.com/blog/how-cody-understands-your-codebase); their own lessons-learned writeup is [arXiv:2408.05344](https://arxiv.org/abs/2408.05344).
+- **Cursor** uses cloud-hosted dense embeddings via Turbopuffer ([Engineer's Codex writeup](https://read.engineerscodex.com/p/how-cursor-indexes-codebases-fast)); a third-party (not Cursor-published) blog claims 12.5% accuracy gain over keyword search — treat that figure as low-confidence marketing-adjacent, not verified benchmark.
+- **Continue.dev** runs the exact "over-fetch then rerank" pattern (`nRetrieve=25` → `nFinal=5`, `useReranking=true`) combining embeddings + keyword search + tree-sitter — [docs.continue.dev](https://docs.continue.dev/reference/deprecated-codebase).
+- **GitHub Copilot** shipped a new proprietary embedding model in 2025 claiming a 37.6% relative retrieval-quality lift over the prior lexical approach — first-party: [github.blog](https://github.blog/news-insights/product-news/copilot-new-embedding-model-vs-code/).
+- **CodeRAG-Bench** ([arXiv:2406.14497](https://arxiv.org/abs/2406.14497), ACL 2025) found current retrievers "struggle to fetch useful contexts especially with limited lexical overlap" — implying lexical matching remains foundational even where semantic retrieval is added, not that it's obsolete.
+- General hybrid-search literature shows BM25 dominates exact-identifier/rare-term queries while dense dominates paraphrase queries, and hybrid beats either alone by single-digit NDCG% — but these figures come from general/legal-document IR, not code-specific studies.
+- **Pattern**: embedding retrieval is used almost exclusively by tools with server-side vector DBs (Cursor, Copilot, pre-pivot Cody). No local-first CLI tool found running default embedding rerank — consistent with the latency/storage/privacy cost of either bundling a model or calling a cloud API, though I found no explicit engineering post stating this tradeoff outright; it's inference from the pattern.
+
+## 3. BM25 tuning for code
+
+- SQLite FTS5 **hardcodes k1=1.2, b=0.75** in its C source (`fts5Int.h`); not user-tunable ([sqlite.org/fts5.html](https://www.sqlite.org/fts5.html)) — so codegraph is stuck with generic-prose defaults regardless of intent.
+- **No rigorous published research** on code-specific BM25 tuning was found — this is folklore/practitioner territory, not validated science.
+- The general IR argument (from a synthesis blog, not peer-reviewed) is: lower `b` suits corpora with uniform document lengths ("FAQs, tweets"); code functions/blocks are more length-uniform than prose spanning tweets to books, which weakly supports monokl's B=0.5 being more defensible than blindly copying 0.75 — but this is reasoning-by-analogy, not tested evidence.
+
+## 4. Other signals found in real tools
+
+- **Open tabs/files boost**: well-attested — GitHub's documented "neighboring tabs" technique ([dzone.com](https://dzone.com/articles/github-copilot-multi-file-context-internal-architecture), [VS Code docs](https://code.visualstudio.com/docs/copilot/chat/copilot-chat-context)).
+- **Call-graph/PageRank-over-symbols**: Aider is the only clearly-citable real implementation (above); generic mentions of "PageRank bias" elsewhere were too vague to cite confidently.
+- **Recency/git-churn as a retrieval-ranking signal**: not found in any named major tool — churn tooling exists but is used for refactoring/risk prioritization, not context retrieval. Treat any recency-boost as unvalidated folklore.
+- **Test-vs-production weighting**: no citable evidence found in any tool's documented ranking logic.
+- **codegraph verified**: real tool at [github.com/colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) — tree-sitter → SQLite FTS5, matches the description given.
+
+## Recommendations for monokl
+
+1. **Adopt**: explicit over-fetch-then-rerank staging (retrieve N≫final via BM25, then apply node-type + coverage boosts as the "rerank" pass) if not already structured this way — this is the one genuinely well-evidenced pattern here, used by Continue.dev, codegraph, and general two-stage IR (cross-encoder rerank literature).
+2. **Adopt cautiously, small-scope**: a cheap import/reference-proximity nudge (boost snippets whose file is referenced by other high-ranking results) rather than full Aider-style PageRank — the mechanism is plausible and imitated widely, but even Aider never validated it beats simpler baselines, so keep it a minor multiplier, not a primary rank driver.
+3. **Do not adopt** default embedding-based semantic reranking. It's used only by cloud-hosted products with server infra; no code-specific evidence shows it beats lexical+structural signals for single-codebase retrieval (identifiers &gt;&gt; paraphrase in this setting), and it would compromise monokl's local-first, low-latency value proposition. If ever added, gate it behind an explicit opt-in flag.</result>
+<usage><subagent_tokens>57597</subagent_tokens><tool_uses>29</tool_uses><duration_ms>257233</duration_ms></usage>
+</task-notification>
