@@ -1,0 +1,95 @@
+<task-notification>
+<task-id>a337d830641ad81be</task-id>
+<tool-use-id>toolu_01CVp8Cuc827jBHzkpAtU13P</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a337d830641ad81be.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-review PLAN-001 after fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I read both artifacts from disk and executed every verification command in the plan against the real repo, including materializing T-010's `/tmp` fixture crate and running `cargo test` on it.
+
+**Confirmations on the five claimed fixes:** (1) T-009 now claims zero criteria and AC-001/AC-004 are in `deferred_criteria` — verified. (2) Every grounding step now greps `docs/spec/*.md` rather than the freshly-written file — verified, no circular checks remain. (3) T-010's 13 tests are real and genuinely pass — I built the fixture and got `test result: ok. 13 passed; 0 failed`. (4) The em-dash grep is now correct (literal `—`, returns 1 under this repo's ugrep 7.5.0); T-009 has `mkdir -p` and its heredoc contains zero backslashes; `depends_on` is right; all nine file snapshots are strictly additive (0 changed/removed lines between consecutive tasks). (5) `baseline_build_status` matches disk. **Three new mechanical defects halt tasks anyway.**
+
+```json
+{
+  "issues": [
+    {
+      "task_id": "T-003",
+      "type": "over-specified",
+      "description": "BLOCKING. Step 5's first grounding grep, `grep -c 'serde_json::from_str::&lt;CacheFile&gt;(&amp;content)?' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md`, expects 1 but returns 0. That turbofish string exists nowhere in the corpus — it is SPEC-001 AC-011's paraphrase, not the source text. The actual line 1602 reads `    let cache: CacheFile = serde_json::from_str(&amp;content)?;` (type on the binding, not the call). I ran this: 0 matches, and `grep -n 'from_str' 01-core-architecture.md` yields exactly one hit, line 1602. T-003 cannot complete as written.",
+      "suggested_fix": "Replace the pattern with the literal source text: `grep -c 'let cache: CacheFile = serde_json::from_str(&amp;content)?;' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md` expect `1`. Verified: returns 1."
+    },
+    {
+      "task_id": "T-007",
+      "type": "over-specified",
+      "description": "BLOCKING. Step 4's AC-001 shape check `awk '/^pub enum MonoklError \\{/{f=1;next} f&amp;&amp;/^\\}/{f=0} f' error.rs | grep -cE '^    [A-Za-z_]+ ?[{(]|^    [A-Za-z_]+,$'` expects 13 but returns 12 against the exact file T-007 itself writes. The character class `[A-Za-z_]` excludes digits, so `    NonUtf8Path { path: std::path::PathBuf },` never matches — `[A-Za-z_]+` consumes `NonUtf` and then hits `8`, not a space/brace/paren. The adjacent order-check command in the same step uses `[A-Za-z0-9_]+` and correctly lists all 13 names, so the two commands in one step disagree with each other. T-007 cannot complete as written.",
+      "suggested_fix": "Add digits to both alternations: `grep -cE '^    [A-Za-z0-9_]+ ?[{(]|^    [A-Za-z0-9_]+,$'`. Verified against the exact T-007 file content: returns 13."
+    },
+    {
+      "task_id": "T-010",
+      "type": "over-specified",
+      "description": "BLOCKING. Step 4 asserts `grep -c 'assert_eq!' /Users/gabe/Projects/monokl/crates/monokl/src/error.rs` expect `13`, but the file T-010 writes yields 14. `grep -c` counts matching lines, and the tests module's own inner doc comment — `//! Real `assert_eq!` tests for every Display literal this module locks, for the 13` — contains the token. The companion `grep -c '#\\[test\\]'` correctly returns 13, so again two checks in one step disagree. The byte-exact full-file `diff` in the same step passes, so the task fails its own count assertion while the file is provably correct.",
+      "suggested_fix": "Anchor to the call site's indentation: `grep -c '^        assert_eq!' /Users/gabe/Projects/monokl/crates/monokl/src/error.rs` expect `13`. Verified against T-010's exact file content: returns 13."
+    },
+    {
+      "task_id": "T-005",
+      "type": "under-specified",
+      "description": "The AC-012 `reason` literal is misquoted in the doc comment T-005 writes into error.rs. SPEC-001 AC-012 and docs/spec/03-multi-language-platform.md both use an em-dash: \"starts with '-' — refusing as it could be parsed as a git option\". Line 109 of the resulting error.rs writes it with a double hyphen: \"starts with '-' -- refusing / as it could be parsed as a git option\". T-005's own grounding grep at step 5 uses the correct em-dash, and T-010's `invalid_git_ref_display` test uses the correct em-dash — so the plan contradicts itself in three places, and the doc comment is the ONLY artifact discharging AC-012 (git_scope.rs is out of scope). An implementer copying the doc comment forward into validate_git_ref would ship the wrong literal.",
+      "suggested_fix": "In every T-005..T-010 heredoc copy of error.rs, change the AC-012 doc-comment line `/// corpus: \"ref is empty\" (empty input), \"starts with '-' -- refusing` to use U+2014: `/// corpus: \"ref is empty\" (empty input), \"starts with '-' — refusing`. All nine file snapshots must be updated together since each task rewrites the whole file."
+    },
+    {
+      "task_id": "T-003",
+      "type": "under-specified",
+      "description": "Step 5's third grounding command has no expected value at all: \"`grep -c 'serde_json::to_string_pretty\\|serde_json::to_string(value)' 01-core-architecture.md` reports the render_json/render_json_compact sites\". 'Reports' is not a pass/fail criterion — the implementer must decide what counts as success. (It returns 5 on the current corpus.) The same defect appears in T-005 step 5: \"`grep -c '/\\* … \\*/\\|/\\* ... \\*/' 03-multi-language-platform.md` reports at least `3` elisions in the surrounding collect_changes block\" — the grep is file-wide, not scoped to collect_changes, and returns 11, so the '3 elisions in collect_changes' claim AC-015 rests on is not actually being checked by this command.",
+      "suggested_fix": "T-003: state the exact expectation — `grep -c 'serde_json::to_string_pretty\\|serde_json::to_string(value)' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md` expect `5` (4 to_string_pretty + 1 to_string(value)). T-005: scope the elision count to the collect_changes block by line range, e.g. `sed -n '1419,1472p' /Users/gabe/Projects/monokl/docs/spec/03-multi-language-platform.md | grep -c '/\\* … \\*/'` and state the exact expected count (3) rather than a file-wide 'at least 3'."
+    },
+    {
+      "task_id": null,
+      "type": "missing",
+      "description": "AC-002B is claimed fully covered (T-007) but its behavioral half cannot be verified anywhere in this workspace. AC-002B requires that, when built with `--features miette`, `&lt;MonoklError as miette::Diagnostic&gt;::code()/::help()/::url()` all return None for all 14 variants. crates/monokl/Cargo.toml:36 defines `miette = [\"dep:miette\", \"io-errors/miette\"]`, so enabling that feature requires the io-errors crate the plan itself documents as absent — and T-010's fixture deliberately strips the `#[cfg_attr(feature = \"miette\", derive(miette::Diagnostic))]` line, so nothing in the plan ever compiles the miette-enabled form of the enum. T-007 discharges AC-002B with a grep for zero `#[diagnostic` attributes, which is a proxy, not the criterion. This is the same failure shape the prior review flagged on T-009: a criterion asserted as satisfied by a check that cannot reach the claim.",
+      "suggested_fix": "Add an AC-002B entry to `deferred_criteria` with scope 'behavioral half only — the zero-#[diagnostic]-attributes half IS verified by T-007's grep; the code()/help()/url()-return-None half is not, since --features miette transitively requires io-errors/miette', reason citing the same io-errors blocker as AC-001/AC-004, and note in T-010 step 8 that the deferred Io test should be joined by a `--features miette` Diagnostic test once io-errors exists."
+    },
+    {
+      "task_id": null,
+      "type": "missing",
+      "description": "AC-002's second clause is never verified by any task. AC-002 requires not only the `#[cfg_attr(feature = \"miette\", derive(miette::Diagnostic))]` line (T-001 greps for it) but also that the feature is defined as `[\"dep:miette\", \"io-errors/miette\"]` and pulled in unconditionally by `cli = [\"dep:clap\", \"miette\"]`. Both facts happen to be true on disk today (crates/monokl/Cargo.toml lines 33 and 36, confirmed), but no step checks them, so a Cargo.toml edit would silently break AC-002 with every task still green.",
+      "suggested_fix": "Add to T-001 step 4: `grep -c 'miette = \\[\"dep:miette\", \"io-errors/miette\"\\]' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expect `1`; `grep -c 'cli = \\[\"dep:clap\", \"miette\"\\]' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expect `1`."
+    },
+    {
+      "task_id": "T-010",
+      "type": "missing",
+      "description": "T-010 has `covers_criteria: []` even though it is the only task in the plan containing runnable assertions for the Display-text criteria AC-005, AC-006, AC-007, AC-008, AC-009, AC-010, AC-011, AC-012, AC-014, AC-016, AC-017, AC-018 and AC-020. Those criteria are attributed exclusively to T-001..T-008, whose verification is `diff`/`grep` on source text. lambda-implementer records `criteria_evidence` per task from `covers_criteria`, and lambda-exit-gate follows those pointers — so the gate will be pointed at grep-on-source steps for every Display criterion while the actual passing assertions sit in a task claiming nothing. This under-sells the exact gap the revision was meant to close.",
+      "suggested_fix": "Set T-010's covers_criteria to the 13 Display-literal criteria it actually asserts: [\"AC-005\",\"AC-006\",\"AC-007\",\"AC-008\",\"AC-009\",\"AC-010\",\"AC-011\",\"AC-012\",\"AC-014\",\"AC-016\",\"AC-017\",\"AC-018\",\"AC-020\"]. Leaving them also listed on T-001..T-008 is correct — those tasks write the literals, T-010 proves them."
+    },
+    {
+      "task_id": null,
+      "type": "missing",
+      "description": "AC-013, AC-013B, AC-015 and the call-site/count halves of AC-011 and AC-016 are marked fully covered but are discharged only by rustdoc prose plus a corpus grep — no Rust implements them and no test asserts them, because persist.rs, git_scope.rs and io_safety.rs are out of scope for this track. AC-013's proposition ('persist::load_cache returns Err(StaleDiskCache) when cache.version != CACHE_VERSION || cache.config_hash != config_hash; init intercepts it, flush does not') is a runtime behavior of a file that does not exist. lambda-exit-gate reads the spec from disk and looks for implementation plus test per criterion; it will find a doc comment. The plan's architecture note argues corpus-grounding is 'this track's complete, correct discharge', but that argument is made in prose the gate does not read, not in the machine-readable `deferred_criteria` field the gate does.",
+      "suggested_fix": "Add scoped `deferred_criteria` entries for AC-013, AC-013B, AC-015 (and the call-site-enumeration halves of AC-011 and AC-016) in the same shape as the AC-001 entry: scope = 'documented-contract half only — the Display literal and its rustdoc statement of the contract ARE implemented and corpus-grounded; the runtime behavior of persist::init/flush (resp. git_scope, io_safety) is not, since those modules are out of SPEC-001's scope per its own non_goals', reason naming the owning track. This keeps the gate from reading prose as implementation without weakening what the plan actually delivers."
+    },
+    {
+      "task_id": "T-008",
+      "type": "under-specified",
+      "description": "Step 4's AC-019 ordering check computes `close_line=$(grep -n '^}$' error.rs | tail -1 | cut -d: -f1)`. At T-008 time the enum's closing brace is the only `^}$` (line 166) so this works. After T-010 appends `mod tests { ... }`, the last `^}$` becomes line 298 while the alias is at line 185, so `sed -n \"299,184p\"` is a reversed range — any re-verification of AC-019 after T-010 (by lambda-exit-gate or canon-drift-checker) silently produces empty output and 'passes' for the wrong reason.",
+      "suggested_fix": "Change `tail -1` to `head -1` in that command so it always targets the enum's closing brace, which is the first line-start `}` in the file. Verified: `grep -n '^}$'` on the final T-010 file returns 166 first, 298 last."
+    },
+    {
+      "task_id": null,
+      "type": "under-specified",
+      "description": "Four verification steps use `grep -c &lt;pattern&gt; ... expect 0`, which prints `0` but exits 1 — under any `set -e` wrapper or an implementer treating non-zero exit as failure, a correct result reads as a failure. Affected: T-004 step 4 (`grep -c 'mnkl init' error.rs` expect 0), T-007 step 4 (`grep -c '#\\[diagnostic'` expect 0), T-010 step 1/2 (`grep -c 'assert_eq!' error.rs` expect 0). T-002/T-005/T-006/T-007's red-phase steps already handle this correctly with `|| echo 0`, so the plan is inconsistent about it.",
+      "suggested_fix": "Append `|| true` to each of those four commands (e.g. `grep -c 'mnkl init' /Users/gabe/Projects/monokl/crates/monokl/src/error.rs || true`), matching the `|| echo 0` idiom already used in T-002 step 1."
+    },
+    {
+      "task_id": "T-010",
+      "type": "under-specified",
+      "description": "The fixture Cargo.toml written in step 5 has no `[workspace]` table. Cargo walks ancestor directories looking for a workspace root; if any ancestor of the fixture path contains a Cargo.toml with a `members` glob, `cargo test` aborts with 'failed to load manifest for workspace member' before compiling anything. I hit exactly this failure mode when I first materialized the fixture under a directory that had an ancestor manifest — the plan's own claimed output is unreachable in that case, and the step gives the implementer no diagnosis for it.",
+      "suggested_fix": "Add an empty `[workspace]` line to the fixture manifest in T-010 step 5, immediately after the `[package]` block: `[workspace]` on its own line. This pins the fixture as its own workspace root regardless of ancestor manifests. Verified: with `[workspace]` present the fixture builds and all 13 tests pass in any parent directory."
+    }
+  ],
+  "overall": "fail",
+  "reasoning": "Orphaned-criteria check is clean: SPEC-001 has 24 acceptance criteria (AC-001, AC-002, AC-002B, AC-003, AC-004, AC-005..AC-013, AC-013B, AC-014..AC-020, AC-020B, AC-021). 23 appear in some task's covers_criteria; AC-004 appears in deferred_criteria with a stated, substantive reason, and AC-001's Io clause is scoped there too. No criterion is silently dropped. Wrong-order is clean: T-001..T-008 form a strict chain, T-009/T-010 both depend on T-008, and I verified by materializing all nine error.rs snapshots that each is a pure superset of the previous (0 removed or changed lines at every step), so no task references state a later task produces. Circular verification is genuinely gone — every doc-comment claim is now cross-checked against docs/spec/*.md, and I ran all 24 grounding greps: 23 return exactly what the plan predicts. T-010's tests are real: I built the fixture crate byte-for-byte from the plan's heredocs and got 'test result: ok. 13 passed; 0 failed', matching the plan's quoted output exactly, and I hand-traced each assertion (PathBuf Debug rendering for AC-007, String Debug for AC-012's ref_, the two `.into()` conversions through #[from]) — they are correct, not just passing. The em-dash grep fix is correct on this repo's actual grep (ugrep 7.5.0): the literal U+2014 pattern returns 1. Fail is driven by three verification commands that cannot pass against the exact files their own tasks write — T-003's from_str grep (0 vs expected 1, pattern is the spec's paraphrase not the source), T-007's variant count (12 vs 13, `[A-Za-z_]` excludes the digit in NonUtf8Path), and T-010's assert_eq! count (14 vs 13, the module doc comment contains the token). Each halts its task, and in two cases a sibling command in the same step contradicts the broken one. All three fixes are one-line and I verified each returns the expected value. The remaining issues are real but non-halting: an em-dash misquote of AC-012's literal in the doc comment that is the sole artifact discharging it, AC-002B and AC-013/AC-013B/AC-015 claimed as covered when only a proxy or prose discharges them, and T-010 claiming zero criteria despite holding the plan's only runnable evidence."
+}
+```
+
+Relevant paths: `/Users/gabe/Projects/monokl/.claude/plans/PLAN-001.json`, `/Users/gabe/Projects/monokl/.claude/specs/SPEC-001.json`, `/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md` (line 1602 is the one the T-003 grep misses), `/Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`, `/Users/gabe/Projects/monokl/crates/monokl/src/lib.rs`.</result>
+<usage><subagent_tokens>117444</subagent_tokens><tool_uses>28</tool_uses><duration_ms>493470</duration_ms></usage>
+</task-notification>
