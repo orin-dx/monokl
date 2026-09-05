@@ -1,0 +1,1 @@
+If there are things we need to adjust in michi to simplify mapping even if not fully reusing we should look into it. I can prompt the michi agent.
