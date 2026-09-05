@@ -1,0 +1,3 @@
+Consider these deeply to see if the models from michi fit, if we have to enhance them or build on top?? Research, consider rust patterns like traits, etc
+
+Research and use the deepest thinking level. Probably opus with high effort to consider it semantically, architecturally and comprehensively
