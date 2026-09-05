@@ -1,0 +1,3 @@
+<command-name>/compact</command-name>
+            <command-message>compact</command-message>
+            <command-args>keeping what we need to start the next set of work</command-args>
