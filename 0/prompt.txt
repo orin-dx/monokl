@@ -1,0 +1,1 @@
+Before we start should we consider if we should have one crate or multiple? Is there a benefit to splitting?
