@@ -1,0 +1,14 @@
+We should do this:
+
+❯ Any other projects, research we should consider for inspiration?
+
+Yes — a few genuinely unexplored pieces of prior art that are closer analogs to monokl than anything researched so far:
+
+- GitHub's stack-graphs (https://github.com/github/stack-graphs) + tree-sitter-graph — a Rust library purpose-built for scope-based name resolution across languages, without a full type-checker. This directly targets the exact problem that kept coming up (TS reference resolution, Rust's heuristic module-path walker, Python/Go/Java all lacking a cheap-but-real resolution tier) — worth checking whether it's a better general answer than solving it per-language.
+- ast-grep (https://ast-grep.github.io/) — Rust-native, tree-sitter-based structural search with its own query DSL. This is architecturally the closest sibling to monokl of anything examined yet (closer than codegraph, which is TypeScript). Worth studying its query-language design and how it handles less-invested languages.
+- difftastic (https://difftast.icl/) — Rust-native, tree-sitter-based structural diff, same author has written good engineering material on tree-sitter performance tradeoffs in Rust. Directly relevant since monokl already specs a diff command.
+- The call-graph/points-to analysis literature (CHA, RTA, k-CFA) — I flagged this as high-value two turns ago when you asked about backing the work with established science, but we got pulled into the Rust-idiom audit and doc reorg before actually researching it. Still open.
+
+Lower priority but worth a mention: CodeQL, SCIP/LSIF, Kythe, Glean — decade-old production code-intelligence schemas, only ever cited in passing as "established practice." Actually studying how they structure queries/indices would be good grounding, even if monokl doesn't adopt their schema.
+
+Want me to run research on the top four now?
