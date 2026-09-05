@@ -1,0 +1,281 @@
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   This is a continuation of an extremely long spec-hardening session for "monokl," a Rust crate providing AST-aware semantic code search for AI coding agents. The excerpt covered here began with the user asking about a "new SDD + semantic model way of coding," referencing `~/Projects/plugin-agents` (a name that turned out not to exist as a literal repo) and `~/Projects/callisto` (a real sibling project) for examples. In order, the user's explicit requests/intents in this excerpt were:
+   - Understand and adopt the "SDD + semantic model" methodology exemplified by callisto, applying it to monokl. Via `AskUserQuestion`, the user chose: scope = monokl's own spec only (not the whole orin-axi suite), and depth = "set up structure, then run it" (execute, not just plan) — explicitly overriding my own lighter-weight recommendation in favor of full rigor.
+   - "Keep going with what is spec'd out" — continue producing spec@1 tracks per the established pipeline.
+   - "Let's dig into the active things" — perform a genuine, fresh review of the specs already produced (SPEC-003, SPEC-004) rather than assuming their last automated verdicts were final.
+   - "yes" (twice, at different points) — confirming continuation into further work (once to proceed with drafting SPEC-005, once implicitly via the flow of the conversation).
+   - "Let's make sure they are at the same confidence level please before we move to track 5." — an explicit, direct instruction to equalize SPEC-003/004's rigor to match SPEC-005's (which had gone through both canon and axiom pipelines cleanly) before starting new work.
+   - "Proceed with a very high level of rigour to have a very well flushed out spec for implementation. Think through corner cases, not jut [sic] the happy path right?" — an explicit instruction to apply maximum rigor and deliberate corner-case analysis (not just happy-path coverage) to Track 5 and beyond.
+   - (Mid-turn) "Are we confident that we have the entirety of the happy path and the corner cases properly account for in TDD and SDD?" — a direct meta-question demanding an honest, calibrated self-assessment of the process's actual completeness guarantees, not reflexive reassurance.
+   - (System-level, final) A request to produce a TEXT-ONLY conversation summary with no tool calls, for context compaction purposes.
+
+2. Key Technical Concepts:
+   - **The `orin-dx-agent-plugins` marketplace**: nine cooperating Claude Code plugins (`basis`, `proof`, `axiom`, `graph`, `trace`, `canon`, `vector`, `lambda`, `delta`) covering the full dev lifecycle: `graph` (capture requirements) → `trace` (research, produces `research-report@1`) → `canon` (turn research into testable `spec@1`, detects spec drift against code) → `vector` (decompose spec into a TDD plan with exact red tests) → `lambda` (implement via TDD) → `delta` (ship). `axiom` gates every stage transition; `proof` does cross-language bug hunting on existing code.
+   - **canon's sub-agents and personas** (each with a distinct persona/backstory, read in full earlier in the session): `canon-drafter` (turns requirement@1+research-report@1 into spec@1; also runs in "correction mode"), `canon-verifier` (grounds each AC against source artifacts, classifies supported/unsupported/overfitted — does NOT issue a verdict), `canon-auditor` (adversarial quality review across five dimensions: untestable criteria, ambiguous phrasing, missing error cases, scope overlap, incomplete/TBD sections — for every issue, produces the rewritten fix text), `canon-exit-gate` (binding pass/fail/escalate verdict; default disposition fail; max 3 retries before ESCALATE; scope-too-large triggers a recommendation to split).
+   - **axiom's sub-agents**: `axiom-recon` (haiku, inventories the artifact), `axiom-verifier` (sonnet, neutral evidence collection — verified/failed/unverifiable), `axiom-exit-gate` (opus, adversarial final verdict — unverifiable treated as failure unless waived).
+   - **spec@1 JSON schema** (shared/schemas/spec@1.json): required fields `id`, `purpose`, `scope`, `non_goals` (≥1), `acceptance_criteria` (≥1, each with `id`, `criterion`, `is_error_case`, `judgment_call`, `rationale` required if judgment_call true); optional `api_surface`, `linked_requirement`, `linked_research`, `spec_file_path`, `revision_note`, `reasoning` (scratchpad, never forwarded downstream).
+   - **The canon orchestration mandate**: after `canon-exit-gate` passes, the calling agent must write the spec to `.claude/specs/<id>.json`, set `spec_file_path`, AND commit to version control. This project's session-standing rule ("never commit without explicit instruction") explicitly overrides that auto-commit convention — nothing has been committed to git in this excerpt.
+   - **The established "full double pipeline every track" rigor level**: every spec@1 track gets the FULL canon pipeline (drafter→verifier→auditor→exit-gate, retry to pass) PLUS a second, independently-built `axiom` pipeline (verifier→exit-gate) as a differently-postured cross-check — chosen explicitly by the user over a lighter single-pass alternative earlier in the session.
+   - **Recurring serde/Rust semantics findings** (each independently re-derived and empirically toolchain-tested across specs, sometimes wrongly generalized before being corrected):
+     - `Option<T>` fields get implicit missing-key/null deserialize leniency from serde's derive macro regardless of `#[serde(default)]`; `Vec<T>` fields do NOT get this — `#[serde(default)]` is load-bearing for `Vec<T>`, redundant for `Option<T>`.
+     - Variant-level `#[serde(rename_all = "camelCase")]` on an enum lowercases only the leading character of an already-PascalCase variant name (does not restructure internal word boundaries); field-level `rename_all = "camelCase"` on a struct DOES restructure across underscores (`trait_impl` → `traitImpl`).
+     - Enum-level `rename_all` renames only the variant TAG, never the fields of struct-shaped variants — that needs the separate `rename_all_fields` attribute, which was absent everywhere checked, so struct-variant field names stay in Rust snake_case on the wire regardless of the container attribute (this was gotten WRONG on the first attempt in SPEC-005's AC-005, a serious, high-stakes error, fixed after empirical toolchain reproduction).
+     - `#[non_exhaustive]` is purely a Rust-compiler exhaustive-match attribute; it has zero effect on serde's generated (de)serialize code.
+     - `#[serde(deny_unknown_fields)]`'s absence means unrecognized JSON keys are silently discarded, not rejected — true for plain structs AND for internally-tagged/adjacently-tagged enums alike.
+     - Internally-tagged (`tag = "kind"`, no `content`) vs. adjacently-tagged (`tag = "language", content = "data"`) serde enum representations produce structurally different JSON shapes (fields flattened alongside the tag vs. tag+payload in separate keys).
+     - `#[serde(flatten)]` on a struct field merges that field's own JSON keys directly into the parent object with no nesting — newly relevant for SPEC-006's `RankedBlock { #[serde(flatten)] block: CodeBlock, ... }`.
+     - `rename_all = "lowercase"` (used on `DiagnosticKind`) differs from `rename_all = "camelCase"` only for multi-word variant names; for `DiagnosticKind`'s three single-word variants (Degraded/Skipped/Warning) the two rules would produce identical output — a precise corner-case observation surfaced but not yet written into a spec.
+   - **The "document the spec, not the historical account" style rule**: established much earlier in the session for Part 6 (06-daemon-architecture.md), explicitly does NOT apply to `05-research-and-decisions.md` (a deliberate decision log) or to any spec@1's own `revision_note`/`reasoning` fields (explicitly meta/scratchpad). It DOES apply to `criterion` text and, more arguably, to `rationale` fields — violated and then fixed in SPEC-003 (AC-007/AC-008 carried a tally of "5 findings weakened, 1 struck through, 55 of 61 held up" from 07's own audit methodology) and SPEC-004 (AC-016's rationale narrated "was added after canon-exit-gate's retry-1 review found...").
+   - **Empirical toolchain verification**: starting partway through this excerpt, canon-exit-gate and axiom-exit-gate rounds began actually compiling the verbatim type definitions into throwaway crates and running them against a live `cargo`/`rustc`/`serde`/`serde_json` toolchain (version 1.96.0 cargo/rustc observed) rather than reasoning from documented semantics alone — this caught real errors that static reading had missed or wrongly confirmed.
+   - **Track/spec numbering established**: SPEC-001 (MonoklError, gated), SPEC-002 (reserved name, NOT yet drafted — cache-corruption recovery policy, deferred from SPEC-001, requires `superpowers:brainstorming` first per CLAUDE.md's rule), SPEC-003 (SymbolKind/Visibility/SymbolEntry, gated), SPEC-004 (Cargo.toml+lib.rs+workspace root Cargo.toml, gated), SPEC-005 (Dependency/export/JSX/LangData cluster, gated), SPEC-006/007/008 (the three-way split of what was originally "Track 5," SPEC-006 in progress at the point of this summary).
+
+3. Files and Code Sections:
+   - **`/Users/gabe/Projects/monokl/.claude/settings.json`** — added `enabledPlugins` block: `{"vector@orin-dx-agent-plugins": true, "axiom@orin-dx-agent-plugins": true, "canon@orin-dx-agent-plugins": true, "delta@orin-dx-agent-plugins": true, "graph@orin-dx-agent-plugins": true, "lambda@orin-dx-agent-plugins": true, "proof@orin-dx-agent-plugins": true, "trace@orin-dx-agent-plugins": true}` (mirroring callisto's set, explicitly excluding `basis`).
+   - **`/Users/gabe/Projects/monokl/.claude/semantic-model/`** — INDEX.md (routing table) plus 6 topic files: `error-taxonomy.md`, `core-types.md`, `query-and-ranking.md`, `cache-architecture.md`, `language-analyzer-contract.md`, `daemon-lifetimes.md`. `core-types.md` was cross-checked directly by me (not just an agent) against SPEC-003's corrected serde claims late in the session and found to have no drift (it never made the specific claims that needed correcting).
+   - **`/Users/gabe/Projects/monokl/.claude/specs/SPEC-001.json`** — MonoklError + Result<T>, 24 acceptance criteria (final count after all corrections), gated via 4 canon rounds + axiom. Had a real JSON SYNTAX ERROR (missing comma between two non_goals array entries, introduced by an earlier edit in this excerpt) discovered and fixed during the "dig into the active things" direct-read pass — confirmed via `python3 -c "import json; json.load(...)"` before and after.
+   - **`/Users/gabe/Projects/monokl/.claude/specs/SPEC-003.json`** — SymbolKind/Visibility/SymbolEntry, 12 acceptance criteria (AC-001 through AC-012). Extensive correction history: originally ESCALATED by canon-exit-gate (not pass/fail) after 3 rounds each catching one new error per fix (AC-001's arithmetic, AC-020's invented Display string [later renumbered], AC-011's false `signature` `#[serde(default)]` claim). After the escalation, a direct human-triggered review found and fixed audit-narrative bleeding into AC-007/AC-008. Then a FRESH canon-exit-gate budget was run (per explicit user instruction to equalize confidence with SPEC-005): failed twice more — once on a fabricated "TOON" citation in AC-005 (the term appears nowhere in docs/spec/*.md), once on the fix for that citing the wrong intermediary type (`FileAnalysis`, which derives only `Debug, Clone` at line 1404 — no `Deserialize`) instead of the real path `CacheFile.entries: BTreeMap<Utf8PathBuf, PersistedFileAnalysis>` (line 1538) → `PersistedFileAnalysis.symbols: Vec<SymbolEntry>` (line 1521, derives `Deserialize` at line 1516). I personally verified this exact chain by reading `01-core-architecture.md` lines 1397-1545 directly before applying the final fix. Third fresh-round canon-exit-gate passed clean; axiom-verifier (12/12 clean, empirically tested) and axiom-exit-gate (pass, high confidence) then also passed clean.
+   - **`/Users/gabe/Projects/monokl/.claude/specs/SPEC-004.json`** — Cargo.toml + lib.rs + workspace root Cargo.toml, 28 acceptance criteria (AC-001, AC-001B, AC-002 through AC-025 with AC-003B and AC-008B inserted). Scope was EXPANDED mid-review: canon-exit-gate round 2 found a non_goal falsely claiming "no [workspace] table exists in docs/spec/*.md" when Section 28 (01-core-architecture.md:3021-3078) is a real, necessary workspace root Cargo.toml (lint tables, `[workspace.package]`, 26-crate dependency version pins) — rather than keep excluding it, I brought it into scope with 9 new criteria (AC-017 through AC-025). Passed canon after 4 rounds (3 fail, 1 pass). Then axiom found the `orin-cargo` registry's actual `.cargo/config.toml` configuration is absent from the ENTIRE corpus — Section 1+28 together don't make the manifest independently resolvable; fixed with new AC-008B, corrected AC-001B and AC-025. Re-ran axiom fresh (per the equalization instruction): axiom-verifier (28/28 clean, empirically re-tested against live cargo 1.96.0 including the registry-restriction error text, the three-way `required-features` split, `duplicate key` vs. legal cross-table promotion, workspace-inheritance failure) and axiom-exit-gate (pass, high confidence) both passed clean.
+   - **`/Users/gabe/Projects/monokl/.claude/specs/SPEC-005.json`** — DependencyRecord/DependencyBinding/BindingKind/DependencyTarget/RustPathAnchor/ExportRecord/JsxAttribute/JsxElementEntry/LangData(+2 methods)/TsData/RustData/PythonData/GoData/JavaData, 19 acceptance criteria. Drafted DIRECTLY by me (not a separate canon-drafter dispatch) applying prior lessons proactively — correctly avoided over-generalizing `Option<T>` leniency to `Vec<T>`, but still initially over-generalized struct-level field-camelCase to enum struct-variant fields (the AC-005 wire-shape error described above). Passed canon after 3 rounds, then axiom (verifier caught one misattributed citation in AC-014 citing AC-019 backwards; exit-gate then passed with 38 empirically-confirmed assertions against a real compiled serde crate).
+   - **`/Users/gabe/Projects/monokl/.claude/plans/ACTIVE.md`** — updated extensively throughout: documents each spec's full correction history, the "Confidence equalization pass" section explicitly requested by the user, and the full track decomposition table. Most recent edit split the original "Track 5" row into three: `5a | Result/diagnostic primitives (...) | §4 (subset) | In progress — SPEC-006.json`, `5b | Search-command request/response types (...) | §4 (subset) | Not started — SPEC-007.json`, `5c | Workspace/extract config types (...) | §4 (subset) | Not started — SPEC-008.json`.
+   - **`/Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md`** — read in full for lines 253-320 (SymbolKind/Visibility/SymbolEntry), 312-456 (Dependency/export/JSX/LangData cluster), 1397-1545 (FileAnalysis/PersistedFileAnalysis/CacheFile — critical for SPEC-003's AC-005 fix), and most recently **lines 454-639**, the exact verbatim source for SPEC-006/007/008's remaining Section 4 types, read in full and quoted verbatim in the immediately preceding turn:
+     ```rust
+     #[derive(Debug, Clone, Serialize, Deserialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct CodeBlock {
+         pub file: Utf8PathBuf,
+         pub line_start: usize,
+         pub line_end: usize,
+         pub node_kind: SymbolKind,
+         pub code: String,
+         pub symbol_signature: Option<String>,
+         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+         pub matched_lines: Vec<usize>,
+         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+         pub matched_keywords: Vec<String>,
+     }
+
+     #[derive(Debug, Clone, Serialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct RankedBlock {
+         #[serde(flatten)]
+         pub block: CodeBlock,
+         pub bm25_score: f64,
+         pub coverage_boost: f64,
+         pub node_type_boost: f64,
+         pub final_score: f64,
+         pub rank: usize,
+         pub parent_context: Option<ParentContext>,
+     }
+
+     #[derive(Debug, Clone, Serialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct ParentContext {
+         pub kind: SymbolKind,
+         pub name: String,
+         pub line: usize,
+     }
+
+     #[derive(Debug, Clone, Serialize, Deserialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct Diagnostic {
+         pub kind: DiagnosticKind,
+         pub path: Option<Utf8PathBuf>,
+         pub message: String,
+     }
+
+     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+     #[serde(rename_all = "lowercase")]
+     pub enum DiagnosticKind {
+         Degraded,
+         Skipped,
+         Warning,
+     }
+
+     #[derive(Debug, Clone, Serialize, Deserialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct SearchOptions {
+         pub query: String,
+         pub path: Utf8PathBuf,
+         pub allow_tests: bool,
+         pub no_gitignore: bool,
+         pub limits: SearchLimits,
+         pub exact: bool,
+         pub language: Option<Language>,
+     }
+
+     impl Default for SearchOptions {
+         fn default() -> Self {
+             Self {
+                 query: String::new(),
+                 path: Utf8PathBuf::new(),
+                 allow_tests: false,
+                 no_gitignore: false,
+                 limits: SearchLimits::default(),
+                 exact: false,
+                 language: None,
+             }
+         }
+     }
+
+     #[derive(Debug, Clone, Serialize, Deserialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct SearchLimits {
+         pub max_results: Option<usize>,
+         pub max_bytes: usize,
+         pub max_tokens: Option<usize>,
+         pub max_candidates: usize,
+     }
+
+     impl Default for SearchLimits {
+         fn default() -> Self {
+             Self {
+                 max_results: Some(50),
+                 max_bytes: 2_097_152,
+                 max_tokens: Some(20_000),
+                 max_candidates: 1_000,
+             }
+         }
+     }
+
+     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+     #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+     #[serde(rename_all = "lowercase")]
+     pub enum Language {
+         #[cfg_attr(feature = "cli", value(name = "typescript"))]
+         TypeScript,
+         #[cfg_attr(feature = "cli", value(name = "javascript"))]
+         JavaScript,
+         #[cfg_attr(feature = "cli", value(name = "rust"))]
+         Rust,
+         #[cfg_attr(feature = "cli", value(name = "python"))]
+         Python,
+     }
+
+     #[derive(Debug, Clone, Serialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct SearchResponse {
+         pub results: Vec<RankedBlock>,
+         pub total_blocks_before_truncation: usize,
+         pub truncated: bool,
+         pub truncation_marker: Option<String>,
+         pub total_bytes: usize,
+         pub total_tokens: usize,
+         pub diagnostics: Vec<Diagnostic>,
+     }
+
+     #[derive(Debug, Clone, Serialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct SymbolsResult {
+         pub files: BTreeMap<Utf8PathBuf, Vec<SymbolEntry>>,
+         pub total_symbol_count: usize,
+         pub truncation_marker: Option<String>,
+         pub diagnostics: Vec<Diagnostic>,
+     }
+
+     #[derive(Debug, Clone, Serialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct DependentsResult {
+         pub file: Utf8PathBuf,
+         pub dependents: Vec<Utf8PathBuf>,
+         pub imports: Vec<Utf8PathBuf>,
+         pub total_dependent_count: usize,
+         pub total_import_count: usize,
+         pub truncation_marker: Option<String>,
+         pub diagnostics: Vec<Diagnostic>,
+     }
+
+     #[derive(Debug, Clone)]
+     pub struct LineHit {
+         pub line_number: usize,
+         pub text: String,
+     }
+
+     #[derive(Debug, Clone)]
+     pub enum TsconfigMode {
+         Auto,
+         Manual(Utf8PathBuf),
+         Skip,
+     }
+
+     #[derive(Debug, Clone)]
+     pub struct WorkspaceOptions {
+         pub root: Utf8PathBuf,
+         pub tsconfig: TsconfigMode,
+     }
+
+     impl WorkspaceOptions {
+         pub fn new(root: impl Into<Utf8PathBuf>) -> Self {
+             Self { root: root.into(), tsconfig: TsconfigMode::Auto }
+         }
+         #[must_use]
+         pub fn with_tsconfig(mut self, mode: TsconfigMode) -> Self {
+             self.tsconfig = mode;
+             self
+         }
+     }
+
+     #[derive(Debug, Clone, Serialize, Deserialize)]
+     #[serde(rename_all = "camelCase")]
+     pub struct ExtractRequest {
+         pub file: Utf8PathBuf,
+         pub line_start: Option<usize>,
+         pub line_end: Option<usize>,
+     }
+     ```
+     Key observations already made about this block: `LineHit`, `TsconfigMode`, `WorkspaceOptions` have NO serde derives at all (Debug+Clone only) — no JSON contract to lock, only Rust field/method shape; `RankedBlock` and `ParentContext` are Serialize-ONLY (no Deserialize); `RankedBlock` uses `#[serde(flatten)]` on its `block: CodeBlock` field (fields merge into one flat JSON object, no nesting); `DiagnosticKind` uses `rename_all = "lowercase"` (an outlier vs. the rest of the codebase's `"camelCase"`, though observably identical for these single-word variants); `Language` combines serde renaming with clap's `ValueEnum` derive and per-variant `value(name=...)` attributes (two independent naming mechanisms on one enum); `SearchOptions`/`SearchLimits` have hand-written `impl Default` (not derived) with SearchLimits' specific numeric defaults directly relevant to `07-edge-cases-and-failure-modes.md` Part 1 finding #11 ("Resource limits are opt-out by construction... only max_bytes is clamped").
+   - **`/Users/gabe/Projects/monokl/docs/spec/07-edge-cases-and-failure-modes.md`** — re-read lines 1-60 (header through Part 1 finding #22) immediately before the summary request, specifically to refresh the cross-cutting patterns and Part 1 findings relevant to SPEC-006/007's scope: finding #1 (dependents/diagnostics silent-drop — directly relevant to `Diagnostic`/`DiagnosticKind` in SPEC-006), finding #11 (resource limits opt-out by construction — directly relevant to `SearchLimits` in SPEC-007), finding #13 (symbols files-dedup/BTreeMap overwrite — relevant to `SymbolsResult`), finding #15/#23-equivalent (extract line_start<=line_end validation gap — relevant to `ExtractRequest` in SPEC-008).
+
+4. Errors and fixes:
+   - **SPEC-001.json JSON syntax error** (missing comma between two `non_goals` array entries): discovered during the direct-read "dig into the active things" pass, fixed immediately, verified via `python3 -c "import json; json.load(...)"`.
+   - **SPEC-003's escalation pattern** (three consecutive rounds each fixing what was flagged while introducing one new small error): the underlying lesson, made explicit multiple times, is that verified findings from one type/mechanism do NOT reliably transfer to a structurally different one by analogy — each serde attribute's actual behavior must be re-derived per type-shape, not assumed.
+   - **SPEC-003 AC-005's "TOON" fabrication**: cited "this spec's JSON/TOON output" as grounding for map-form deserialize scoping; the term TOON appears nowhere in docs/spec/*.md — it was pulled from a secondary reference (`.claude/semantic-model/core-types.md`) and an unrelated forward-looking CLAUDE.md note about a future dependency. Fixed by re-grounding in the actual deserialize path (`persist::load_cache`).
+   - **SPEC-003 AC-005's wrong intermediary type** (the fix for the above): cited `FileAnalysis.symbols` as the SymbolEntry deserialize route, but `FileAnalysis` derives only `Debug, Clone` (line 1404) — no `Deserialize`. The real route is `CacheFile.entries: BTreeMap<Utf8PathBuf, PersistedFileAnalysis>` (line 1538) whose `PersistedFileAnalysis.symbols: Vec<SymbolEntry>` (line 1521) is what actually derives `Deserialize` (line 1516). I personally re-verified this by reading the source directly (not trusting the gate) before applying the fix.
+   - **SPEC-005 AC-005's flagship error**: claimed enum-level `rename_all = "camelCase"` on `DependencyTarget` renames struct-variant field names (`is_relative`→`isRelative`) — FALSE. Enum-level `rename_all` only renames the variant TAG; struct-variant fields need the separate `rename_all_fields` attribute (absent here), so the real wire keys stay snake_case. This was caught only after canon-exit-gate compiled the verbatim cluster against a real serde toolchain and reproduced the actual JSON output.
+   - **SPEC-004's false non-existence claim**: a non_goal asserted "no [workspace] table appears anywhere in docs/spec/*.md" when Section 28 is a full, real workspace root Cargo.toml — led to a genuine scope expansion (bringing Section 28 into SPEC-004's scope) rather than a wording patch.
+   - **SPEC-004's registry-config gap**: axiom found that the `orin-cargo` Cargo registry's actual `.cargo/config.toml` configuration doesn't exist anywhere in the corpus, meaning the manifest SPEC-004 locks is NOT actually resolvable end-to-end even with both Section 1 and Section 28 present — fixed with new AC-008B stating the gap explicitly, and AC-001B/AC-025 corrected to stop implying full resolvability.
+   - **Audit-narrative bleeding into criterion text** (a STYLE violation, not a factual error): SPEC-003's AC-007/AC-008 and SPEC-004's AC-016 rationale carried unnecessary tallies of another document's (07-edge-cases-and-failure-modes.md's) own revision history — found only via my own direct read, not any automated round, since automated rounds check factual correctness/testability, not register. Fixed by trimming to the citation plus the substantive fact.
+   - **User feedback directly acted on**: "Let's make sure they are at the same confidence level please before we move to track 5" was treated as an explicit instruction to bring SPEC-003 and SPEC-004 up to full axiom-confirmed status (both had gaps: SPEC-003 had never passed cleanly nor been through axiom at all; SPEC-004's axiom fix was never re-confirmed) — NOT as permission to proceed to Track 5 with unequal confidence levels.
+   - **User feedback on rigor**: "Proceed with a very high level of rigour... Think through corner cases, not jut [sic] the happy path" was treated as requiring a METHODOLOGY CHANGE, not just "try harder" — committed explicitly to enumerating a corner-case checklist per type BEFORE drafting each criterion, rather than relying on the post-hoc audit stage to catch gaps (which is what happened in SPEC-004 and SPEC-005's first drafts).
+
+5. Problem Solving:
+   - Resolved: SPEC-001, SPEC-003, SPEC-004, SPEC-005 are all now fully gated through BOTH canon and axiom pipelines, with final-round claims empirically verified against a real compiled `cargo`/`rustc`/`serde` toolchain — confirmed to be at the same confidence level per explicit user request.
+   - Resolved: the git-commit question from earlier remains explicitly unresolved by design — nothing has been committed, per the standing "never commit without explicit instruction" rule, despite canon's own orchestration convention calling for auto-commit on gate pass. This was flagged clearly to the user once and not re-litigated since.
+   - Resolved (this turn): Track 5's scope was determined to be too large/structurally diverse for one planning cycle (14 types spanning ≥4 distinct serde mechanisms) and was split into three sub-tracks (SPEC-006/007/008), documented in ACTIVE.md.
+   - Newly surfaced, explicitly acknowledged as NOT fully resolved: whether the spec@1 tracks collectively constitute "the entirety of the happy path and corner cases" for TDD/SDD purposes. My honest answer (given directly to the user, see below) was calibrated: strong confidence in the REVIEW MECHANISM's ability to catch corner-case gaps (demonstrated repeatedly), but explicit acknowledgment that (a) no formal completeness proof exists, (b) the spec@1→actual-test-case translation (`vector-planner` stage) has never been run on any of these tracks, and (c) some corner cases are legitimately deferred via non_goals rather than resolved, meaning the system's corner cases aren't all closed even where one track is individually clean.
+   - Ongoing: SPEC-006 (Result/diagnostic primitives: CodeBlock, RankedBlock, ParentContext, Diagnostic, DiagnosticKind, LineHit) was marked "In progress" in ACTIVE.md but no draft content had yet been written at the point this summary was requested — only the source had been read and the corner-case-first methodology committed to.
+
+6. All user messages:
+   - "Keep going with what is spec'd out"
+   - "Let's dig into the active things"
+   - "yes" (in response to being asked whether to continue into the backlog after the direct-review pass found the audit-narrative style issue)
+   - "Let's make sure they are at the same confidence level please before we move to track 5."
+   - "Proceed with a very high level of rigour to have a very well flushed out spec for implementeation. Think through corner cases, not jut the happy path right?" [sic, contains typos "implementeation" and "jut"]
+   - (Mid-turn interjection) "Are we confident that we have the entirety of the happy path and the corner cases properly account for in TDD and SDD?"
+   - (Current, system-relayed) A request to produce a TEXT-ONLY conversation summary, explicitly forbidding any tool calls, for context compaction.
+
+7. Pending Tasks:
+   - Explicitly requested and in-progress: produce SPEC-006 (Result/diagnostic primitives: CodeBlock, RankedBlock, ParentContext, Diagnostic, DiagnosticKind, LineHit) with very high rigor and deliberate corner-case-first methodology (enumerate corner cases per type before drafting criteria, rather than relying on post-hoc audit), then run the full canon (drafter→verifier→auditor→exit-gate) + axiom (verifier→exit-gate) double pipeline, matching the established pattern for all prior specs.
+   - Implicitly queued (per the track decomposition already written into ACTIVE.md, not yet started): SPEC-007 (Search-command request/response types: SearchOptions, SearchLimits, Language, SearchResponse, SymbolsResult, DependentsResult) and SPEC-008 (Workspace/extract config types: TsconfigMode, WorkspaceOptions, ExtractRequest) — the remaining two-thirds of the original "Track 5."
+   - Longstanding, not recently re-raised: git commit of all spec@1/semantic-model work remains pending explicit user authorization; SPEC-002 (cache-corruption recovery policy, deferred from SPEC-001) remains unstarted and explicitly gated on running `superpowers:brainstorming` first, per CLAUDE.md's rule for new design decisions; the remaining ~15 tracks in ACTIVE.md's full 01-core-architecture.md decomposition (Cargo.toml done, types.rs mostly done via SPEC-003/005/006/007/008, but query language, tokens, text search, ranking, dedup, budget, LanguageAnalyzer trait, ContentHash, FileAnalysis, NodeKind, cache, persistence, TsAnalyzer, WorkspaceEnricher, indices, CLI/pipeline/main.rs, napi FFI boundary all remain "Not started").
+
+8. Current Work:
+   Immediately before the summary request, I had just read the full verbatim source for Track 5's remaining types (01-core-architecture.md lines 454-639, quoted in full above) and made the decision to split "Track 5" into three sub-tracks (SPEC-006/007/008), updating `.claude/plans/ACTIVE.md`'s track table accordingly via an Edit tool call:
+   ```
+   | 5a | Result/diagnostic primitives (`CodeBlock`, `RankedBlock`, `ParentContext`, `Diagnostic`, `DiagnosticKind`, `LineHit`) | §4 (subset) | In progress — `SPEC-006.json` |
+   | 5b | Search-command request/response types (`SearchOptions`, `SearchLimits`, `Language`, `SearchResponse`, `SymbolsResult`, `DependentsResult`) | §4 (subset) | Not started — `SPEC-007.json` |
+   | 5c | Workspace/extract config types (`TsconfigMode`, `WorkspaceOptions`, `ExtractRequest`) | §4 (subset) | Not started — `SPEC-008.json` |
+   ```
+   I explained this split rationale to the user directly: "Given the size and structural diversity of this cluster — 14 types spanning at least four genuinely different serde mechanisms (a `#[serde(flatten)]` struct, dual clap+serde renaming on one enum, a `rename_all = "lowercase"` outlier, and three types with *no* serde derive at all) — cramming it into one spec would violate the single-planning-cycle rule that's already forced a split once this session. Splitting Track 5 into three narrower tracks so each gets the depth you're asking for rather than getting thin from spreading across 14 types at once."
+
+   Then, mid-turn, the user's interjection about TDD/SDD confidence arrived. I answered it directly and in full (see Problem Solving section above for the exact calibrated content), and explicitly committed to a methodology change: "Concrete change I'm making because of this: rather than drafting first and relying on the audit stage to find gaps (which is what happened in 004 and 005), I'll enumerate a corner-case checklist per type *before* drafting each criterion for SPEC-006 — missing/null/wrong-type/extra-field, boundary values, empty collections, cross-field invariants, interaction with sibling types already locked. That should raise the floor on the first draft instead of leaning on review to catch what drafting missed. Proceeding with SPEC-006 on that basis now."
+
+   I then began re-reading `docs/spec/07-edge-cases-and-failure-modes.md` (lines 1-60, the header, cross-cutting patterns, and Part 1 findings #1 through #22) to refresh the exact prior audit findings most relevant to SPEC-006's scope before starting to draft — this Read call's result (the full text of those 60 lines, including finding #1 about `dependents`/diagnostics silent-drop and finding #11 about resource limits) was the last tool result received before the summary request arrived. No drafting of SPEC-006's actual JSON content had begun yet.
+
+9. Optional Next Step:
+   Continue directly from where the turn was interrupted: use the corner-case checklist methodology just committed to, draft SPEC-006.json (Result/diagnostic primitives: CodeBlock, RankedBlock, ParentContext, Diagnostic, DiagnosticKind, LineHit) covering the verbatim source at 01-core-architecture.md lines 454-504, applying explicit, pre-drafting corner-case enumeration per type (missing/null/wrong-type/extra-field, boundary values, empty collections, cross-field invariants, sibling-type interactions) rather than relying on the audit stage to find gaps after the fact — per my own stated commitment: "Proceeding with SPEC-006 on that basis now." Particular care is needed on: `RankedBlock`'s `#[serde(flatten)]` mechanism (untested elsewhere this session — the JSON shape must show CodeBlock's fields merged directly into RankedBlock's top-level object, not nested); `RankedBlock`/`ParentContext`'s Serialize-only status (no deserialize contract applies, should be stated explicitly per the established "N/A, not silently omitted" pattern); `DiagnosticKind`'s `rename_all = "lowercase"` outlier (worth the precise observation that it's observably identical to camelCase for these three single-word variants); `LineHit`'s complete absence of serde derives (no JSON contract exists at all — a compile-time-level fact, not a runtime behavior); and `Diagnostic`'s direct tie to `07-edge-cases-and-failure-modes.md`'s cross-cutting "silent data-drop with no diagnostic" pattern (worth citing as known context that this type-lock does not resolve, since whether/when diagnostics gets populated is a per-command behavioral question out of this track's scope). After drafting, run the full established double pipeline: canon (drafter→verifier→auditor→exit-gate, retry to pass) then axiom (verifier→exit-gate), applying the same empirical-toolchain-verification standard used for SPEC-003/004/005's final rounds.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/gabe/.claude/projects/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
