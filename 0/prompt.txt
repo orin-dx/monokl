@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>aebe54408748f0b4a</task-id>
+<tool-use-id>toolu_01BUf75cNiHsbgPeXfNjNcKe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/aebe54408748f0b4a.output</output-file>
+<status>completed</status>
+<summary>Agent "Validate monokl performance targets with real numbers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## OXC parser throughput (real numbers)
+
+Source: [oxc-project/bench-javascript-parser-written-in-rust](https://github.com/oxc-project/bench-javascript-parser-written-in-rust) (CodSpeed-based, hardware: Mac i7 6-core / Mac mini M2 8-core / MacBook Pro M3 Max). Corpus file `typescript.js` = 8,207,497 bytes (confirmed via GitHub API), `cal.com.tsx` = 1,056,294 bytes.
+
+On M3 Max, single-thread: oxc 26.4ms, swc 91.0ms, biome 139.3ms for `typescript.js` → **oxc ≈ 296 MB/s, swc ≈ 86 MB/s, biome ≈ 56 MB/s** (derived from ms/bytes; oxc is 3.4x swc, 5.3x biome, matching their stated "3x/5x faster" claim). Memory: oxc 68.8MB RSS vs swc 92.0MB vs biome 117.4MB for that file.
+
+## ripgrep/grep-searcher throughput
+
+Source: [ripgrep.dev/benchmarks](https://ripgrep.dev/benchmarks/) (i9-12900K, NVMe, warm cache), methodology descending from BurntSushi's original ripgrep benchmark post. 13.5GB single file, literal pattern: rg 6.73s → **≈2.0 GB/s**. Linux kernel tree (~75,000 files, ~900MB), regex: rg 0.082s (vs grep 0.671s, ack 3.231s) — this is dominated by directory-walk/gitignore filtering, not pure scan throughput, but shows the `ignore`+`grep-searcher` stack handles tens of thousands of files in under 100ms.
+
+## rust-analyzer as a proxy — weak, with caveat
+
+No published pure `ra_ap_syntax` parse-only throughput exists. Available numbers ([rust-lang/rust-analyzer#17491](https://github.com/rust-lang/rust-analyzer/issues/17491), [#4186](https://github.com/rust-lang/rust-analyzer/issues/4186), [rust-analyzer/metrics](https://github.com/rust-analyzer/metrics)) are for **full semantic analysis** (crate resolution, macro expansion, trait solving across the whole dependency graph): self-analysis-stats (~200k LOC + ~1M LOC deps) ≈15 min; diesel initial analysis anecdotally "a couple minutes, maybe 10"; "~5s per 100 crates waiting on rustc." The rust-analyzer team itself states rowan tree-construction is "twice as slow as syntree" and admits a general "lack of mechanical sympathy." **This is not a valid MB/s proxy for monokl** (syntax-only, no type inference) — treat it only as a signal that rowan-based parsing is architecturally on the slower side, and flag that monokl's Rust path has no real throughput validation.
+
+## FxHashMap memory facts
+
+FxHashMap is a type alias over `std::HashMap` with a different hasher only — identical hashbrown/SwissTable memory layout ([docs.rs/rustc-hash](https://docs.rs/rustc-hash/latest/rustc_hash/)). Empirically measured overhead ≈70-73% above raw key+value payload, cycling between ~12.5% (just after grow, 7/8 max load factor) and ~125% (just before next grow) ([ntietz.com/blog/rust-hashmap-overhead](https://ntietz.com/blog/rust-hashmap-overhead/)).
+
+## Memory arithmetic (50k / 100k files)
+
+Assumptions: 10 imports/file avg fan-out, 20 symbols/file, symbol names avg 12 chars with 2x reuse (500k unique keys @50k files), paths avg 50 chars, 1.7x HashMap overhead multiplier, Vec growth ≈75% utilization, +8-16B allocator rounding/alloc.
+
+- **ImportGraph** (fwd+rev): 2 map slots/file [(4B key+24B Vec)×1.7≈48B]×2=96B + 2 Vec heaps [10×4B/0.75+12B≈65B]×2=130B → **226B/file** → 50k≈**11MB**, 100k≈**22MB**
+- **SymbolIndex**: per unique key: slot [(24B String+24B Vec)×1.7≈82B] + string heap ≈16B + Vec heap [2×16B/0.75+10B≈53B] ≈**151B/key** → 50k (500k keys)≈**75MB**, 100k≈**150MB** (range 75-112MB / 150-225MB if reuse ratio varies 1.2x-2x)
+- **files+file_index** (duplicated paths — real inefficiency): Vec 50k×82B≈4.1MB + HashMap 50k×106B≈5.3MB → **9.4MB** at 50k (≈4.7MB is pure duplication waste), **18.8MB** at 100k
+
+**Total: 50k files ≈ 90-140MB; 100k files ≈ 190-270MB.** SymbolIndex dominates (~80%), so dedup-ratio is the most sensitive unvalidated assumption — more so than the u32-vs-usize FileIdx choice, whose ~8MB effect (≈2M FileIdx instances × 4B) roughly matches the spec's own "~16MB" claim.
+
+**vs. abandoned trigram index (600MB-1.2GB measured):** even at the pessimistic end (140MB @50k), current design is **4-8x smaller**. The savings claim is real, not marginal.
+
+## Verdict on latency targets
+
+- **build &lt;15s@50k**: at realistic ~5KB avg file (not the 8MB stress file), 50k files = 250MB corpus → &lt;1s pure OXC parse even single-threaded. 15s has huge headroom for I/O/hashing/indexing on JS/TS — looks generous. **Caveat: unvalidated for Rust** (no ra_ap_syntax throughput number exists); also assumes local SSD + warm-ish cache and multi-core rayon — needs explicit caveats for network filesystems/cold cache/single-core CI.
+- **search cold&lt;15s/warm&lt;300ms**: ripgrep's ~2GB/s and 75k-file/82ms numbers give &gt;100x headroom — looks overly generous unless AST-confirmation per candidate adds meaningful cost.
+- **symbols cold&lt;50ms/warm&lt;5ms**: trivial given OXC per-file throughput — generous.
+- **dependents cold&lt;15s/warm&lt;30ms**: warm is plain hashmap traversal, sub-ms in practice — very generous; cold shares build's risk.
+- **disk cache flush &lt;800ms**: no benchmark found either direction — unvalidated. Also flag a probable spec inconsistency: `FileIdx` is stated to have "no Serialize derive" yet the disk cache presumably needs to round-trip it.</result>
+<usage><subagent_tokens>37141</subagent_tokens><tool_uses>16</tool_uses><duration_ms>241366</duration_ms></usage>
+</task-notification>
