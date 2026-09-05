@@ -1,0 +1,1 @@
+Also consider how much of michi can we reuse? ~/projects/michi
