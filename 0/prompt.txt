@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>a92c4c9e37ba60025</task-id>
+<tool-use-id>toolu_016wezfxUmFux1nM19RotbHX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a92c4c9e37ba60025.output</output-file>
+<status>completed</status>
+<summary>Agent "Research michi project structure and conventions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have enough to report clearly and concisely.
+
+## What michi is
+
+`/Users/gabe/Projects/michi` is a Rust crate (`michi`, 道 "path/way") implementing **AXI response primitives** — pure, sync formatting/signaling conventions for agent-ergonomic CLI/MCP tools (TOON token-optimized list rendering, key-value rendering, truncation, structured errors, retry/idempotency, status, `help[]` hint blocks). It's the shared primitive layer under the **orin-axi** GitHub org/suite. Docs: `README.md`, `CLAUDE.md`, `ARCHITECTURE.md`, `docs/00-overview.md`, `docs/01-spec.md` (61.8K, full API/grammar spec), `docs/projects/01-mvp.md`.
+
+## What "axi" is
+
+"axi" is **not a branch/refactor** — no branch or commit mentions it (`git log --all`, `git branch -a` turned up nothing; only branches are `main` and `spec-parity`). "AXI" = **Agent eXperience Interface**, a set of 10 design principles for agent-ergonomic tooling (token budget as a first-class constraint), and **orin-axi** is the org/suite name. Per `docs/00-overview.md`, the suite has four tools built on `michi`:
+
+| Tool | Purpose | Uses michi for |
+|---|---|---|
+| **Monokl** | AST-based semantic code search | TOON list output |
+| Firkin | Barrel/index file generator | Structured error output |
+| Lumen | Coding-session analysis + ambient context | Status + hint primitives |
+| Pulse | Code-health intelligence | TOON list output |
+
+So **"monokl" is literally already named/scoped as a suite member in michi's own docs** — the new crate isn't just "similar in spirit" to michi's ecosystem, it's the planned sibling tool. "michi-axi work" = the work of building michi as the shared AXI-principles primitive layer that Monokl (and Firkin/Lumen/Pulse) will consume for output rendering.
+
+## Concrete patterns worth carrying into Monokl
+
+- **Depend on `michi` directly** for TOON list rendering / errors / hints rather than reinventing — it's designed exactly for this (`toon::list(...).total(n).hint(...).render()`).
+- **Errors**: `thiserror` (2.x), a single `michi::Error` enum with agent-renderable output + retry classification (`src/error.rs`).
+- **Lint/quality bar** (`.clippy.toml`, `deny.toml`, `CLAUDE.md`): no `unwrap`/`expect` in lib code, `#![deny(unsafe_code)]` scoped-allow only at FFI boundary, `disallowed-macros` banning `println!`/`eprintln!`/`dbg!` in lib code, cognitive-complexity threshold 20, `cargo-deny` license allowlist with explicit AGPL exception for the crate itself.
+- **Workspace layout**: root crate is pure/sync with zero default deps; a thin second crate (`packages/michi-node`) exists solely for `crate-type = ["cdylib"]` NAPI export, re-exporting via `pub use crate::napi::*` — real logic stays in the main crate's `src/napi.rs`, gated `#[cfg(feature = "napi")]`.
+- **Feature-gating pattern**: pure/sync core always compiled; async/heavier extensions (tokio-based `pipeline`, `cache` via `moka`+`sha2`, `fuzzy` via `nucleo-matcher`, `cli` via `indicatif`/`inquire`/`crossterm`) live in the same module directory but behind opt-in features, documented via a dependency mermaid graph in `ARCHITECTURE.md`.
+- **Testing**: `cargo nextest`, `insta` snapshots (`tests/snapshots/*.snap`), `proptest`, `divan` for benchmarks (not criterion).
+- **Docs style**: numbered `docs/00-overview.md`, `docs/01-spec.md` (verbatim-checked code examples), plus a `docs/superpowers/specs/` and `docs/superpowers/plans/` directory for long-form design/implementation-plan documents (e.g. `docs/superpowers/specs/2026-07-03-michi-design.md`, `docs/superpowers/plans/2026-07-03-michi-core.md`) — this is the "reconstruction-grade spec" authoring pattern you're looking for.
+- No camino/dashmap/rayon/blake3/ignore/tiktoken-rs usage found in michi itself (it's a rendering-only crate) — those would be genuinely new choices for Monokl's AST/indexing layer.</result>
+<usage><subagent_tokens>36603</subagent_tokens><tool_uses>12</tool_uses><duration_ms>90824</duration_ms></usage>
+</task-notification>
