@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a8a8145a9d58ab8df</task-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a8a8145a9d58ab8df.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PLAN-003 per vector-challenger feedback" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The corrected plan has been written to `/Users/gabe/Projects/monokl/.claude/plans/PLAN-003.json`, superseding the previous version at the same path.
+
+Summary of fixes, each independently re-verified by actually running the commands (including mutating the fixture the way vector-challenger did):
+
+1. **T-003 Visibility grep** — rescoped to the enum's own body via an `awk` line-range (`awk '/^pub enum Visibility \{/{f=1;next} f&amp;&amp;/^\}/{f=0} f' ... | grep -cE ...'`). Confirmed: naive whole-file pattern returns 5 (false match on `SymbolKind`'s own `Module,` variant), scoped pattern returns 4.
+2. **T-006 impl_owner grep** — anchored to the single specific doc-comment sentence line instead of the substring `impl_owner`. Confirmed: naive pattern returns 4 (doc comment spans 4 lines), anchored pattern returns 1.
+3. **AC-004 behavioral test** — added `trait_impl_kind_detail_camel_case_keys` to T-007, asserting the serialized JSON contains `"traitImpl"`/`"kindDetail"` not `"trait_impl"`/`"kind_detail"`. Confirmed it fails when `rename_all = "camelCase"` is deleted from the fixture's `SymbolEntry`.
+4. **AC-006/AC-007 extra-key test** — strengthened T-008's test to include both a correctly-named `"owner"` key and a wrong-valued `"impl_owner"` key, asserting `owner` matches only the correct key. Confirmed it fails (duplicate-field error) when `owner` carries a `#[serde(alias = "impl_owner")]` regression.
+5. **AC-010 under-tested** — T-010 now nulls all 5 Option-typed fields (signature, owner, traitImpl, visibility, kindDetail), not 2.
+6. **AC-011 error-naming clause** — T-009 now asserts the exact `missing field \`name\``/`\`kind\``/`\`line\`` substrings, using real serde_json error strings captured during verification.
+7. **Shared-file clobbering risk** — added a top-level `shared_file_warning` field plus matching notes on T-006 (`shared_file_note`) and in T-011's final step, warning that SPEC-005–008 must use append/scoped edits against `types.rs`, never a blind full-file overwrite, once this plan's content exists.
+8. **Fixture fidelity** — all fixture `Cargo.toml` blocks (T-002, T-004, T-005, T-007–T-011) now pin `edition = "2024"` with a `[lints.rust] unsafe_code = "deny"` table, matching the real workspace root `Cargo.toml` and `crates/monokl/Cargo.toml`.
+
+Final end-to-end verification: every task's `diff`/`grep` assertions and every fixture `cargo test` run were replayed programmatically against the actual generated plan JSON (extracting the literal heredoc/command text, not hand-retyped), and all matched their claimed expected output — culminating in T-011's cumulative fixture reaching `test result: ok. 13 passed; 0 failed`, exit 0, on an edition-2024 fixture. Coverage check confirms all 12 acceptance criteria (AC-001–AC-012) appear in some task's `covers_criteria`.</result>
+<usage><subagent_tokens>183516</subagent_tokens><tool_uses>62</tool_uses><duration_ms>4634294</duration_ms></usage>
+</task-notification>
