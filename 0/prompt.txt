@@ -1,0 +1,3 @@
+Don't forget that MD files should not be artifically wrapped, also note that we want the languge to be devoid of AI word salad, slop and filler words.
+
+We want to document the spec not the historical account of how that has changed as we've done more research. Historical account is not necessary here is it?
