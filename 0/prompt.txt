@@ -1,0 +1,3 @@
+What else should we delve deeper into? What other research should we do from the learnings to enhance our spec?
+
+Consider result quality and performance
