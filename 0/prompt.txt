@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>a7c7cbd69f43b74b6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/a7c7cbd69f43b74b6.output</output-file>
+<status>completed</status>
+<summary>Agent "Research code-search ranking approaches beyond BM25" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five research agents (Aider repo-map internals, hybrid lexical+semantic retrieval, BM25 tuning for code, additional ranking signals, and code-RAG benchmarks/rerank patterns) are running in parallel. I'll wait for their results and then synthesize the final cited report.</result>
+<usage><subagent_tokens>31941</subagent_tokens><tool_uses>9</tool_uses><duration_ms>91141</duration_ms></usage>
+</task-notification>
