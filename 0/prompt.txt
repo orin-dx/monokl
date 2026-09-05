@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a8330cdd68d273c5a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a8330cdd68d273c5a.output</output-file>
+<status>completed</status>
+<summary>Agent "Seventh re-gate of SPEC-010" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: FAIL** (confidence: high). Verdict written to `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/verdict.json` (validates against `/Users/gabe/Projects/agent-plugins/shared/schemas/verdict@1.json`).
+
+**AC-009's mechanism is correct, and I proved it rather than taking the claim on faith.** I built my own isolated crate (`ignore = "0.4"` → resolved 0.4.33, own `[workspace]`) with `innermost_walk_error()` and `classify()` exactly as AC-009 states them. Zero warnings, zero errors. All 9 variants classify as specified; the hand-built `WithPath { WithLineNumber { Glob } }` yields `InvalidInput`; `source()` is `None` for all 9. I also compiled the guarded form and got exactly `error[E0004]: non-exhaustive patterns: &amp;ignore::Error::Partial(_) not covered` — AC-009's empirical claim about match guards is right. Every round-6 defect is genuinely fixed. Independent sweeps of michi at `cb355b8c...` (24 claims) and of the monokl corpus came back clean on everything AC-004B, AC-010, AC-011, AC-014 and AC-015 assert.
+
+**Three false assertions in the fresh read block it:**
+
+1. **AC-009 rationale** — "since ignore is never mentioned in `docs/spec/*.md`" is false. `ignore` appears 10+ times across four spec documents, including `docs/spec/01-core-architecture.md:207` — the line declaring `source: ignore::Error`, the very field AC-009 exists to classify — and `:3072`, the `ignore = "0.4"` dependency line AC-009 elsewhere leans on. This is the **fourth** instance of the same defect class (unverified "never mentioned in the corpus" claims, already corrected for clap/OutputFormat and for michi). The conclusion survives; the supporting fact must be replaced.
+
+2. **AC-009 criterion** — "before returning it from `add_line`" misattributes the call frame. `add_line` (`gitignore.rs:460`) returns the *bare* `Err(Error::Glob{..})`; `add` (`:405`) applies the wrapping at `:430` via `err.tagged(path, lineno)`. Two-word fix; the nested-shape claim itself is correct (confirmed — `into_error_option` unwraps a length-1 collection, so a single bad line arrives as bare `WithPath{WithLineNumber{Glob}}`, not inside a `Partial`).
+
+3. **`symbol_kind_str` api_surface** — "only `#[derive(Serialize)]`" is false *and* load-bearing. The real derive is `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]`. The omitted `Copy` is precisely what lets AC-005's own `symbol_kind_str(e.kind)` and `e.visibility.map(visibility_str)` compile from `e: &amp;SymbolEntry`; under the asserted shape they fail with E0507.
+
+Conditions 2 (no TBDs), 3 (error cases flagged — 7 criteria), and 4 (single planning cycle) all pass. I explicitly checked and dismissed several things a later round might re-raise; those are recorded in the verdict's `reasoning` field so they don't come back. All three blockers ship with exact replacement wording — no follow-up question needed, and none requires re-reasoning about Rust semantics.</result>
+<usage><subagent_tokens>116867</subagent_tokens><tool_uses>31</tool_uses><duration_ms>710620</duration_ms></usage>
+</task-notification>
