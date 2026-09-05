@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>ab7aa3043649383f4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/ab7aa3043649383f4.output</output-file>
+<status>completed</status>
+<summary>Agent "Research oxc_semantic and ra_ap_hir capabilities" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># monokl: oxc_semantic vs ra_ap_hir for reference resolution
+
+## 1. `oxc_semantic` — Verdict: **(a) clearly worth it**
+
+`oxc_semantic` ([docs.rs](https://docs.rs/oxc_semantic), [crates.io](https://crates.io/crates/oxc_semantic)) is oxc's dedicated semantic-analysis crate, versioned in lockstep with `oxc_parser`/`oxc_ast`/`oxc_allocator` in the same Cargo workspace — all four are currently at `0.140.0`, so pairing is trivial: whatever `oxc_parser` version monokl pins, use the identical version string for `oxc_semantic` (no separate compatibility matrix). The crate has shipped 130+ versions and was last updated within days of this research, indicating active, ongoing maintenance ([oxc-project/oxc](https://github.com/oxc-project/oxc)).
+
+**What it gives you**: `SemanticBuilder::build(&amp;program)` traverses the AST once to produce a `Semantic` result containing a `Scoping` struct (the merged scope-tree + symbol table) with real lexical-scope-aware binding resolution — `SymbolId`s, `ScopeId`s, `Reference`/`ReferenceId`s, and `get_resolved_reference_ids()` to map a declaration to every local usage. It also runs `ModuleRecordBuilder` during parsing to track import/export bindings per file. This is genuinely scope-aware resolution (shadowing, hoisting, TDZ-aware binding, redeclaration handling) — categorically better than monokl's current regex/text-scan approach for anything within a single file.
+
+**Cross-module limits**: resolution is file-scoped. There's no built-in stitching of an import specifier's binding to the *declaration in another file* — that remains a caller-side job of combining each file's `Semantic`/`ModuleRecord` output with `oxc_resolver`'s specifier→path resolution ([oxc_resolver on crates.io](https://crates.io/crates/oxc_resolver), used by Nova, swc-node, knip), exactly as your current design already does for imports. So `oxc_semantic` doesn't eliminate the "combine per-file table with resolver" architecture — it upgrades what feeds into it, replacing regex-scanned local usages with real ones.
+
+**Arena/ownership**: `SemanticBuilder` consumes the same `Allocator` arena as the parser (parse first, then build semantic on the resulting AST in-arena). Its output (`Semantic`, symbol/scope data) is arena-tied; converting to fully owned data requires explicit copying by the caller — the same pattern monokl presumably already applies to the AST itself, so no new architectural burden.
+
+**Performance**: no published parse-vs-semantic ratio exists in docs; the project's own benchmark (`tasks/benchmark/benches/semantic.rs`) isolates `SemanticBuilder::build` cost but doesn't compare it to parse time. Given it's a single additional linear AST traversal with pre-sized allocations (capacity is counted in a first pass to avoid Vec growth), the order of magnitude is "comparable to, not dramatically larger than, parsing itself" — but this is inference, not a documented number.
+
+## 2. `ra_ap_hir` family — Verdict: **(b), with substantial integration cost that likely makes it (c) for a stateless per-invocation CLI**
+
+`ra_ap_hir` and siblings (`ra_ap_ide`, `ra_ap_load-cargo`, `ra_ap_project-model`, `ra_ap_hir_def`, `ra_ap_hir_ty`, `ra_ap_vfs`, `ra_ap_proc_macro_api`, etc.) are official crates.io mirrors of rust-analyzer's internal crates, released in lockstep on rust-analyzer's own cadence (currently `0.0.342`, updated within a day of this research) ([ra_ap_hir on crates.io](https://crates.io/crates/ra_ap_hir)). `hir::Semantics` is real: `resolve_path`, `resolve_method_call`, `type_of_expr`, macro-aware `descend_into_macros`, etc. — genuine name resolution and even type inference, far beyond `resolve_rust_path`'s directory-convention walk.
+
+**Feasibility evidence**: `cargo-modules` ([regexident/cargo-modules](https://github.com/regexident/cargo-modules)) is a real, published CLI that embeds this stack successfully — its `Cargo.toml` pins **14 separate `ra_ap_*` crates**, each with an exact `=0.0.328` version constraint (no `^`), confirming these APIs are not semver-stable between releases and require lockstep exact-pinning, mirroring rust-analyzer's own internal release rhythm.
+
+**Integration cost**: `Semantics` needs a populated `HirDatabase`/crate graph, which in practice means loading a project via `ra_ap_load-cargo`/`ra_ap_project-model` — i.e., running `cargo metadata`, optionally executing build scripts, and optionally compiling/loading proc-macro dylibs for macro-accurate resolution. rust-analyzer's own maintainers note this project-loading step costs on the order of ~5 seconds per 100 crates just waiting on rustc ([rust-lang/rust-analyzer#17491](https://github.com/rust-lang/rust-analyzer/issues/17491)), and it re-queries project layout repeatedly since there's no defined "loading complete" state. Nothing lighter-weight exists for real cross-crate resolution — building a single-file synthetic database (as rust-analyzer's tests do) forfeits resolution against real dependencies, which defeats the purpose.
+
+**Bottom line**: this cost model is designed for a warm, long-lived process (a language server), not a cold CLI invocation per command. Paying full `cargo metadata` + crate-graph construction on every monokl invocation would likely dominate runtime for anything but small crates. It's "(b) worth it" only if monokl grows a persistent/daemon mode with a cached `AnalysisHost`; as a pure stateless per-invocation CLI, it tips into "(c) not practical" — you'd effectively be re-implementing rust-analyzer's own justification for existing as a server.</result>
+<usage><subagent_tokens>43563</subagent_tokens><tool_uses>26</tool_uses><duration_ms>187587</duration_ms></usage>
+</task-notification>
