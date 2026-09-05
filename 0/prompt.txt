@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>a6f5944a292dbb461</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a6f5944a292dbb461.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PLAN-001 round 3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 24 acceptance criteria are accounted for (23 covered by tasks, plus AC-004 which is fully deferred with no task coverage — matching the plan's documented design), and the JSON is valid.
+
+## Summary
+
+I fixed all 6 findings from vector-challenger's third review round in `/Users/gabe/Projects/monokl/.claude/plans/PLAN-001.json`, independently re-verifying each one empirically before locking it in:
+
+**Blocking (1):** AC-002B's behavioral half is no longer fully deferred. I built the reviewer's proposed fixture on disk (`miette = { version = "7", features = ["fancy"] }` as a plain dependency, `#[derive(Debug, thiserror::Error, miette::Diagnostic)]` unconditional, plus a 14th test `all_non_io_variants_have_no_diagnostic_metadata`) and ran `cargo test` for real — confirmed **14 passed; 0 failed**. Updated T-010's Cargo.toml step, lib.rs step, expected-output step, `covers_criteria` (added AC-002B), and commit message accordingly. Narrowed the `deferred_criteria` AC-002B entry to "the Io variant's code()/help()/url() only" and removed the disproven "cannot substitute" claim.
+
+**Non-blocking (5):**
+1. T-007's AC-002B check changed from an awk-scoped scan to a whole-file `grep -c '#\[diagnostic' ... || true` (verified returns 0 against the real T-007 content).
+2. Added new task **T-004B** (after T-004, before T-005) that corrects `docs/spec/01-core-architecture.md` lines 222 and 228 to their SPEC-001-locked literals and appends a documented entry to `docs/spec/05-research-and-decisions.md` (citing `07-edge-cases-and-failure-modes.md` Part 1 finding #6 for AC-020's grounding) — verified the exact line numbers/text and tested the fix scripts on temp copies before writing them into the task. Relaxed T-003's and T-004's grounding greps to accept either the old or corrected literal.
+3. `baseline_build_status.what_lambda_recon_should_check_instead` now scopes the brace-balance heuristic to T-001–T-008 only, explicitly excluding T-010 (confirmed 54 open vs 53 close on T-010's real content, due to the `"{not valid json"` test literal) and pointing to T-010's own `cargo test` run as its structural proof.
+4. Fixed the `grep -c 'X' file 2&gt;/dev/null || echo 0` double-echo bug (verified it prints two `0` lines) to `grep -c 'X' file || true` across T-002–T-008 and T-010 (extended beyond the reviewer's listed T-002–T-007/T-010 to include T-008, which has the identical bug).
+5. T-008's AC-003 grounding step now includes a uniqueness grep (`grep -nE '^\s*(\)\s*)?-&gt;\s*(std::result::|anyhow::|io::|Box&lt;dyn)'` across both named Parts) — verified it returns exactly one match, at `blob_at_ref_in_repo`'s own signature line (`03-multi-language-platform.md:1551`).
+
+`spec_hash` was reconfirmed unchanged (spec file itself wasn't modified), and I verified full acceptance-criteria coverage (24 total: 23 covered by tasks, AC-004 fully and intentionally deferred) plus JSON validity before finishing.</result>
+<usage><subagent_tokens>174260</subagent_tokens><tool_uses>88</tool_uses><duration_ms>806713</duration_ms></usage>
+</task-notification>
