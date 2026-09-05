@@ -1,0 +1,42 @@
+<task-notification>
+<task-id>ac1cf87516b33f6c1</task-id>
+<tool-use-id>toolu_01PomubiZHEtqBjcEhqUSbhc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/ac1cf87516b33f6c1.output</output-file>
+<status>completed</status>
+<summary>Agent "Eighth re-gate of SPEC-010" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**PASS.** SPEC-010 is cleared to enter planning. Verdict at `/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/scratchpad/verdict-spec-010-r8.json`.
+
+```json
+{"verdict": "pass", "confidence": "high", "artifact_type": "spec@1", "retry_count": 8, "blockers": []}
+```
+
+## Round 7's three fixes
+
+**Fix 2 (add/add_line) — landed accurately.** Verified against real `ignore` v0.4.33 at `/Users/gabe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ignore-0.4.33/src/gitignore.rs`: `add_line` is declared at `:460` returning `Result&lt;&amp;mut GitignoreBuilder, Error&gt;` — the bare error. `add()` at `:405` is what tags it, at `:429-430`:
+
+```rust
+if let Err(err) = self.add_line(Some(path.to_path_buf()), &amp;line) {
+    errs.push(err.tagged(path, lineno));
+}
+```
+
+`tagged` is private (`lib.rs:277`), as are `with_path` (`:263`) and `with_depth` (`:271`); no `with_line_number` exists — consistent with how the spec now describes them.
+
+**Fix 3 (SymbolKind derive list) — landed accurately.** SPEC-003 AC-001 locks exactly `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]` + `#[serde(rename_all = "camelCase")]`. The `symbol_kind_str` entry now states this verbatim, and the `Copy` point is genuinely load-bearing for `symbol_kind_str(e.kind)` from a borrowed `&amp;SymbolEntry`. Same holds for `visibility_str` via AC-003.
+
+**Fix 1 (ignore-mention count) — did NOT land accurately.** Round 7 swapped one false claim for another. AC-009's rationale now says:
+
+&gt; ignore does appear in docs/spec/*.md -- exactly twice, both in 01-core-architecture.md (:207 ...; :3072 ...)
+
+The crate is actually referenced in **10 places across 3 files**: `01-core-architecture.md:98` (`ignore = { workspace = true }` — a second dependency line the claim omits entirely), `:207`, `:986`, `:2205`, `:2298`, `:3072`; `02-inspection-and-analysis.md:752`, `:1029`; `03-multi-language-platform.md:331`, `:2024`. Plus `05-research-and-decisions.md:73` (`ignore::WalkParallel`, describing ast-grep). The same false sentence is repeated in `revision_note`'s final paragraph.
+
+**Why this did not fail the spec.** It is rationale prose, not a criterion. I checked all 10 occurrences individually: every one is a dependency declaration or a `WalkBuilder`/`WalkParallel` traversal usage, so the rationale's operative conclusion — *nothing in the corpus says how to classify `ignore::Error`'s variants* — is still true. The miscount changes no implementable behavior and no criterion's testability. Suggested one-line correction if the drafter touches the file again: replace "exactly twice, both in 01-core-architecture.md" with "at ten locations across three files, all of them either dependency declarations (01-core-architecture.md:98, :3072) or `ignore::WalkBuilder` traversal usages (01:986, :2205, :2298; 02:752, :1029; 03:331, :2024), plus the `source: ignore::Error` field declaration this criterion exists to classify (01:207)".
+
+## Gate conditions
+
+All four hold. 16 criteria, all falsifiable (exact signatures, exact `FIELDS` arrays, a complete 14-variant mapping table, compile-verified `innermost_walk_error()`/`classify()`). Zero TBD/TODO/FIXME hits. Seven criteria carry `is_error_case: true` covering every failure path. Scope is one new file plus two Cargo.toml lines.
+
+I also independently re-verified every cross-spec citation rather than trusting the round-7 summary: SPEC-004 AC-006/AC-014, SPEC-001 AC-001 (all 14 variants in order against AC-007's `monokl_code()` table), SPEC-003 AC-004, SPEC-006 AC-001/AC-005 (including the `block.block.*` vs `block.rank` access-path distinction), SPEC-007 AC-011/AC-013, SPEC-008 AC-007. All correct.</result>
+<usage><subagent_tokens>93362</subagent_tokens><tool_uses>21</tool_uses><duration_ms>287562</duration_ms></usage>
+</task-notification>
