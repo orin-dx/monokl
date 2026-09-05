@@ -1,0 +1,28 @@
+<task-notification>
+<task-id>a8b527fa294c262fd</task-id>
+<tool-use-id>toolu_011YcJgAnwD1wxTnZv2fyu6D</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a8b527fa294c262fd.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PLAN-001 round 4 (final)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The plan structure is intact: 11 tasks, all top-level fields present, only T-010 and the two `baseline_build_status`/`goal` brace-count mentions were touched.
+
+## Summary
+
+Fixed the one issue vector-challenger's fourth review found in `/Users/gabe/Projects/monokl/.claude/plans/PLAN-001.json`: T-010's 14th test (`all_non_io_variants_have_no_diagnostic_metadata`, AC-002B's non-Io behavioral half) previously lived only in the ephemeral `/tmp` fixture that step 7 deletes, so it never landed in the actual commit despite the commit message claiming it did.
+
+**Changes made:**
+1. **Step 3** (write real file, `steps[2]`): appended the 14th test to the real `#[cfg(test)] mod tests` block in `crates/monokl/src/error.rs`, after `lock_poisoned_display`, gated with `#[cfg(feature = "miette")]` above `#[test]`. Copied the assertion logic byte-for-byte from the already-proven fixture version, including `use miette::Diagnostic;` as the first line and the `assert_eq!(variants.len(), 13);` guard. Updated the step's parenthetical to mention the 14th feature-gated test.
+2. **Step 4** (`steps[3]`, confirm green diff): updated to match step 3's write heredoc byte-for-byte — confirmed via md5 (`193b81962f6b3a5eb90c38e8a32a0e7f` for both). Updated grep-count expectations: `assert_eq!` count 13→14, `#[test]` count 13→14, and added a new grep check for `#[cfg(feature = "miette")]` expecting `1`.
+3. **Steps 5–7** (`steps[4..6]`, isolated fixture build/run/cleanup): left untouched, as instructed.
+4. **`baseline_build_status`**: corrected the brace-balance figure for T-010's file. I computed this myself rather than assuming the reviewer's expected "unchanged" figure — adding the 14th test adds 11 balanced `{`/`}` pairs, so the count moved from 54 open/53 close to **65 open/64 close** (the +1 imbalance from the JSON-literal test fixture is preserved, but the reviewer's assumption that the absolute counts stay 54/53 was mathematically incorrect; I flagged this in the updated text rather than silently matching the reviewer's guess). This appears in two places in the plan (the `goal` field's revision log and `baseline_build_status.what_lambda_recon_should_check_instead`), both updated consistently.
+
+**Independent verification performed:**
+- Extracted the real file content as it would exist after T-010's write step and rebuilt it in an isolated `/tmp` fixture that mirrors the real crate's actual feature gating (`#[cfg_attr(feature = "miette", derive(miette::Diagnostic))]` on the enum, `#[cfg(feature = "miette")]` on the test), rather than reusing the old fixture's unconditional-derive shortcut.
+- Ran `cargo test`: **14 passed, 0 failed** — confirms the moved, feature-gated test compiles and passes against the real file's exact structure, not just the separate fixture copy.
+- Confirmed brace count on the real file content: 65 open / 64 close.
+- Confirmed the plan file remains valid JSON, all 11 tasks intact, `spec_hash` (`sha256:68b34928...`) still matches the on-disk spec (unchanged — this was a plan-only fix, no spec correction).
+
+No other tasks, steps, or commit messages were touched.</result>
+<usage><subagent_tokens>101195</subagent_tokens><tool_uses>24</tool_uses><duration_ms>340839</duration_ms></usage>
+</task-notification>
