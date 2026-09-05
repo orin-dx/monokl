@@ -1,0 +1,1 @@
+Proceed with a very high level of rigour to have a very well flushed out spec for implementeation. Think through corner cases, not jut the happy path right?
