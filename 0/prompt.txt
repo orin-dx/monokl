@@ -1,0 +1,62 @@
+<task-notification>
+<task-id>a8caf8e299a17039d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/a8caf8e299a17039d.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit spec's error handling patterns" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Error-Handling Audit: monokl Spec (`docs/monokl-spec.md`)
+
+## 1. Panics / policy violations in non-test code
+
+**Real violations found:**
+- **Line 6308** (`git_scope.rs`, `scope_files_with_index`): `crate::types::QueryScope::FullRepo =&gt; unreachable!("handled above"),` — a genuine panic path in production code. It's redundant: `FullRepo` is already handled by an early return two lines above, so the match never needs to re-list it. **Fix**: restructure so the early-return arm is folded into the same match, eliminating the impossible arm entirely:
+  ```rust
+  match scope.mode {
+      QueryScope::FullRepo =&gt; Ok(full_repo_selection(files)),
+      QueryScope::ChangedFiles =&gt; { let p = prepare_scope_inputs(files, root, scope)?; Ok(changed_files_selection(p)) }
+      QueryScope::ChangedLines =&gt; { let p = prepare_scope_inputs(files, root, scope)?; Ok(changed_lines_selection(p)) }
+      QueryScope::ImpactedNeighbors =&gt; { let p = prepare_scope_inputs(files, root, scope)?; Ok(impacted_neighbors_selection(p, index)) }
+  }
+  ```
+- **Policy gap**: the workspace lint table (lines 2866–2882) denies `clippy::panic` and `clippy::todo` but **not** `clippy::unreachable` or `clippy::unimplemented`. That's why line 6308 slips past the stated policy undetected — the deny list should add both.
+- **Lines 4831/4833/4834** (`tests/integration_new_commands.rs` helper `run_ok_json`): `.expect("failed to spawn monokl binary")`, `.expect("stdout is UTF-8")`, `panic!(...)`. These are fine *behaviorally* (test helper), but the lint-exemption mechanism shown (line 153, `#![cfg_attr(test, allow(...))]` in `lib.rs`) only covers the `monokl` lib crate — it does **not** propagate to files under `tests/`, which compile as separate crate roots. As specified, none of the six integration test files carry their own `#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`, so under a package-wide `[lints]` table these targets would fail to build under `deny`. **Fix**: add the allow attribute at the top of each integration test file.
+- **`dedup.rs` line 1183**: `(a.line_end - a.line_start + 1).min(b.line_end - b.line_start + 1)` — unguarded `usize` subtraction that assumes `line_end &gt;= line_start` on every `CodeBlock`. Nothing enforces that invariant at the type level; a future producer that violates it panics on underflow. **Fix**: use `line_end.saturating_sub(line_start) + 1`, matching the `saturating_sub` pattern the spec itself uses correctly elsewhere (`git_scope.rs` line 6274).
+- **Line 5775**: `rust_inspection.rs` gains a *module-wide* `#![allow(clippy::expect_used)]` to justify `.expect()` in `LazyLock::new(|| Regex::new(...))`. This is broader than needed — it silently permits any other `.expect()` added later in that file. **Fix**: scope the allow to just the regex statics, e.g. `#[allow(clippy::expect_used)] static RE_X: LazyLock&lt;Regex&gt; = ...`.
+
+**Done well**: `tokens.rs`'s char-array indexing (`chars[idx-1]`/`chars[idx+1]`) is always guard-checked before use; `WorkspaceIndex`, `ImportGraph`, `SymbolIndex` consistently use `.get()`/`.map_or(&amp;[], ...)` instead of raw indexing; `napi/boundary.rs` correctly uses `catch_unwind` + graceful payload conversion (no `.unwrap()`) at the one place panics are legitimately expected to cross an FFI boundary.
+
+## 2. `MonoklError` design
+
+**Compile-breaking gap**: The enum is defined verbatim exactly once (Section 3, lines 190–227) with 11 variants. Part 3 code later constructs `MonoklError::InvalidGitRef{..}` (6178–6190), `MonoklError::Git{..}` (6208, 6239, 6345), and `MonoklError::SymlinkRejected{..}` / `MonoklError::FileTooLarge{..}` (6916, 6920) — **none of these variants exist** in the shown enum. As specified, every one of those sites fails to compile. This needs an updated, re-shown `error.rs` in Part 2/3.
+
+**Dead variants**: `Parse{path, details:String}` (194–195) and `Query{input,message:String}` (197–198) are declared but never constructed anywhere in the document. Parse failures are actually surfaced via `had_parse_errors: bool` + `tracing::warn!` (ts_analyzer.rs), and query failures only ever raise `TooManyTerms`. Either wire these up or remove them — as-is they're variant proliferation with no call site.
+
+**`String`-only fields**: `Parse.details` and `Query.message` are unstructured strings rather than a `#[source]` error. Defensible given OXC's parser diagnostics don't implement `std::error::Error`, but worth flagging since it loses machine-inspectable structure.
+
+**Good**: `#[non_exhaustive]` is applied correctly for a public enum expected to grow; `Io(#[from] FileIoError)`, `RegexBuild(#[from] grep_regex::Error)`, `Json(#[from] serde_json::Error)` compose cleanly via `#[from]` rather than duplicating fields — this is the right pattern and should be the model for the missing Git/safety variants too.
+
+## 3. `Result` idiom
+
+- **`TsAnalyzer::new`/`from_workspace_opts`** (1617–1644) return `Result&lt;Self&gt;` but the body always ends `Ok(Self { resolver })` — `Resolver::new` is infallible in oxc_resolver, so there's currently no path that returns `Err`. Contrast with **`RustAnalyzer::from_workspace_opts`** (5132), which correctly returns bare `Self` since it's genuinely infallible. The crate is inconsistent about this; if `TsAnalyzer::new`'s `Result` is deliberate future-proofing, say so in a doc comment — otherwise drop it.
+- **Good Option usage**: `resolve_import`, `find_tsconfig_from_root`, `LangData::ts()` correctly return `Option` for "no answer, not an error."
+- **`session.rs` line 6059**: `self.standard_index.lock().map_err(|_| { /* … */ })?` discards the `PoisonError`'s inner guard entirely rather than recovering it — acceptable here since propagating an error is the safe choice, but note it's the *better* pattern than persist.rs's approach (next section).
+
+## 4. `?` operator / `From` completeness
+
+Aside from the four missing `MonoklError` variants above (which make every `?`/`Err(...)` using `InvalidGitRef`/`Git`/`SymlinkRejected`/`FileTooLarge` fail to compile), all other `?` sites shown are backed by matching `#[from]` impls (`FileIoError`, `grep_regex::Error`, `serde_json::Error`) and compile cleanly as specified.
+
+## 5. `persist.rs::lock_state()` poison recovery
+
+```rust
+fn lock_state() -&gt; Result&lt;MutexGuard&lt;'static, CacheState&gt;&gt; {
+    Ok(cache_state().lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+```
+This silently launders a poisoned mutex back into a usable guard. A poison only occurs if some thread panicked *while holding this exact lock* — meaning a panic already slipped past this crate's own deny-panic policy, and the `CacheState` (an in-progress `write_queue`/`cache_file`) may be left mid-mutation. Recovering unconditionally hides evidence of that bug and risks propagating a torn write into `flush()`. **Idiomatic alternative**: don't blanket-recover. Either propagate a dedicated `MonoklError::CachePoisoned` (matching the crate's own `?`-based error style used one section later at `session.rs` line 6059), or, since this is disposable derived-cache data anyway, switch to `parking_lot::Mutex` (no poisoning semantics at all) rather than defeating `std::sync::Mutex`'s poisoning purpose. Notably the spec itself shows the better pattern (`map_err` + `?`) 4600 lines later — the two are inconsistent within the same document.
+
+## 6. `FileIoError` (`io_errors` crate)
+
+Well-designed, no changes needed: captures `path: Utf8PathBuf` + `#[source] io::Error` per variant (Read/Write/CreateDir/Remove), is `#[non_exhaustive]`, and exposes `path()`, `io_source()`, `io_kind()`, `is_not_found()` — good ergonomic accessors that let callers branch on IO semantics without pattern-matching internals. This is the strongest error-design piece in the document and should be the template applied to the missing `Git`/safety variants.</result>
+<usage><subagent_tokens>219655</subagent_tokens><tool_uses>32</tool_uses><duration_ms>304504</duration_ms></usage>
+</task-notification>
