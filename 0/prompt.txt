@@ -1,0 +1,94 @@
+<task-notification>
+<task-id>a54de32fc93e94fc4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/323facbb-0752-4ea8-a989-84746c2b2fcf/tasks/a54de32fc93e94fc4.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit spec's lifetimes, iterators, and closures" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Lifetime Audit — `docs/monokl-spec.md`
+
+### Findings
+
+**1. `parse_full` (lines 1715–1779) — correctly contained, and it shows.** Every arena-borrowed value (`Statement&lt;'_&gt;`, spans, `&amp;str` slices) is converted to `String`/`usize`/owned enums before being pushed into `symbols`/`dependencies`/`exports`/`jsx_elements`/`blocks`. The explicit `drop(parsed); drop(allocator);` (line 1745–1746) before building `FileAnalysis` is redundant under NLL (nothing borrowed survives the loop anyway) but is a deliberate, valuable piece of self-documentation of ADR 0002 — leave it, don't "clean it up."
+
+**2. Helper functions (`module_export_name_to_string` 1826–1832, `byte_offset_to_line` 1842–1845, `first_line_signature` 1859–1863, `find_tsconfig_from_root` 1847–1857) all correctly take arena/borrowed input and return owned output**, with elision doing all the work — no explicit lifetime parameters are needed or given, and none should be added.
+
+**3. `resolve_import` (1658–1664) and `looks_like_workspace_alias`** — elision is fully sufficient (`&amp;self`, `&amp;Utf8Path`, `&amp;str` in; owned `Option&lt;Utf8PathBuf&gt;` out). Nothing to change.
+
+**4. Same pattern holds on the Rust side.** `extract_item_block` (5404–5445) and Part 4's `extract_symbols`/`ast_symbol` (7938–7970) immediately do `.name().map(|n| n.text().to_string())` on every `ra-ap-syntax` node — never storing a `SyntaxNode`/token. `wrapped_function_body_start`/`variable_function_signature` (8043–8087) go further: they return raw `u32` byte offsets rather than borrowed spans, which is an even cleaner way to avoid lifetime entanglement than returning `Option&lt;&amp;Expression&lt;'_&gt;&gt;` would have been.
+
+**5. Minor style nit, not a bug:** `module_export_name_to_string`'s `id.name.as_str().to_string()` (1828–1830) could be `id.name.to_string()` directly if oxc's `Atom` implements `Display` (it does) — the `.as_str()` hop is unnecessary but harmless.
+
+**6. No genuine `Cow&lt;'_, str&gt;` opportunities found.** Candidates like `first_line_signature`, `rust_binding` (5546–5572), and `expand_use_clause` (5528–5544) already do all their work on `&amp;str` and convert to `String` exactly once, at the return boundary — introducing `Cow` there would add enum-matching overhead for no benefit. The one place duplication of an owned `String` occurs (`ImportDefaultSpecifier` binding: `imported: local.clone(), local, ...`, prose ~1783) needs the clone regardless of `Cow`, since two struct fields must each independently own the value.
+
+## Iterator Audit
+
+**Correctly left as loops (do not convert):**
+- `tokenize`/`tokenize_source` (879–940) — lookahead/lookbehind over `chars[idx±1]` and a stateful `current_word`/`current_fragment` accumulator with a post-loop flush. No iterator adapter expresses this more clearly.
+- `apply_budget` (1210–1247) — three interdependent mutable accumulators (`results`, `total_bytes`, `total_tokens`) plus early-`break` truncation logic. A `.scan()`/`.take_while()` rewrite would be harder to read, not easier.
+- `WorkspaceIndex::build`'s `files`/`file_index` population loop (2103–2109) — builds two independently-owned collections from one pass; the two `.clone()` calls on `analysis.source_path` are structurally required (Vec element + HashMap key can't share ownership without `Rc`/`Arc`), so this is correctly a loop, not a chain-vs-loop defect.
+
+**Genuine improvement — `dedup_blocks` (1162–1176):**
+```rust
+'outer: for block in blocks {
+    for kept in &amp;result {
+        if kept.block.file == block.block.file &amp;&amp; overlaps_significantly(&amp;kept.block, &amp;block.block) {
+            continue 'outer;
+        }
+    }
+    result.push(block);
+}
+```
+The labeled loop can drop entirely in favor of `.any()`:
+```rust
+for block in blocks {
+    let is_dup = result.iter()
+        .any(|kept| kept.block.file == block.block.file &amp;&amp; overlaps_significantly(&amp;kept.block, &amp;block.block));
+    if !is_dup { result.push(block); }
+}
+```
+Same O(n²) cost, no label, reads as "keep unless it duplicates something already kept."
+
+**Genuine improvement — the two `WorkspaceEnricher::update` impls (1918–1924, 1955–1959):**
+```rust
+fn update(&amp;mut self, idx: FileIdx, analysis: &amp;FileAnalysis) {
+    for dep in &amp;analysis.dependencies {
+        if let Some(resolved) = target_resolved(dep) { self.deferred.push((idx, resolved.clone())); }
+    }
+}
+```
+No branching beyond a single filter — textbook `filter_map`+`extend`:
+```rust
+self.deferred.extend(analysis.dependencies.iter()
+    .filter_map(|dep| target_resolved(dep).map(|r| (idx, r.clone()))));
+```
+`SymbolIndexEnricher::update` (unconditional push) is the even simpler `self.entries.extend(analysis.symbols.iter().map(|s| (idx, s.name.clone(), s.line)));`
+
+**`.clone()` usage in iterator chains is already well-judged, not `.cloned()`-able:** `evict_lru`'s `.map(|(p, e)| (p.clone(), e.last_accessed_ns)).collect()` (line 1564) deliberately clones only the path, not the whole (expensive) `PersistedFileAnalysis` — using `.cloned()` there would be a regression, not an improvement. `full.blocks.iter().filter(...).cloned().collect()` (6018) already correctly uses `.cloned()` over `.map(|b| b.clone())`.
+
+**No double-collect-then-iterate found** in any of the given code (`query/plan.rs`'s three separate `terms.iter().enumerate().filter().map().collect()` passes for required/excluded/scored are each single-pass and, at the 64-term cap, not worth merging into one fold — merging would trade clarity for a sub-microsecond win).
+
+## Closure Audit
+
+**`Box&lt;dyn FnOnce() -&gt; Result&lt;String&gt;&gt;` is the correct idiom, not a needless allocation.** `LanguageAnalyzer` (1260–1263) is used as a trait object throughout — `Vec&lt;Arc&lt;dyn LanguageAnalyzer&gt;&gt;` in `AnalyzerRegistry` (5053), `&amp;dyn LanguageAnalyzer` in `WorkspaceIndex::build` (2071) and `query_support.rs` (6568, 6583, 6608...). A generic `impl FnOnce() -&gt; Result&lt;String&gt;` parameter would make `analyze` generic, which is not object-safe and would break every one of these call sites. Boxing is required by the design, not a mistake — leave as-is.
+
+**Real bug: unnecessary clone in `WorkspaceIndex::build`'s hot loop (lines 2091–2101):**
+```rust
+let mut analyses: Vec&lt;Arc&lt;FileAnalysis&gt;&gt; = walk_entries.par_iter().filter_map(|path| {
+    let path = path.clone();
+    let path_for_closure = path.clone();
+    match analyzer.analyze(&amp;path, Box::new(move || { ... &amp;path_for_closure ... })) { ... }
+}).collect();
+```
+`path: &amp;Utf8PathBuf` from `par_iter()` already derefs to `&amp;Utf8Path` for `analyzer.analyze(path, ...)` and implements `Display` for the `tracing::warn!("...{path}...")` call — the first `let path = path.clone();` clones a `Utf8PathBuf` on every file in a parallel hot path for no reason. Fix:
+```rust
+walk_entries.par_iter().filter_map(|path| {
+    let path_for_closure = path.clone();
+    match analyzer.analyze(path, Box::new(move || { ... &amp;path_for_closure ... })) { ... }
+}).collect();
+```
+One clone removed per file, no behavior change.
+
+**Everywhere else the "clone-into-a-`move`-closure" pattern is minimal and correct**: `pipeline/inspecting.rs::extract`'s `file_for_closure = req.file.clone()` (6002), `query_support.rs::analyze_with_profile`'s `owned = file.to_owned()` (6572), and `extract_dependencies`'s `move |leaf| { ... path, workspace_root, package_roots ... }` (5463) all capture exactly what's needed — in the last case the "moved" captures are `Copy` references, not deep clones, and `move` is required only because the closure escapes the enclosing `flat_map` closure's stack frame. None of these should change.</result>
+<usage><subagent_tokens>121933</subagent_tokens><tool_uses>23</tool_uses><duration_ms>295492</duration_ms></usage>
+</task-notification>
