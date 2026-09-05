@@ -1,0 +1,50 @@
+<task-notification>
+<task-id>a7bc8df870910a31b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a7bc8df870910a31b.output</output-file>
+<status>completed</status>
+<summary>Agent "Lambda-exit-gate for SPEC-001" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need. Verification complete.
+
+```json
+{
+  "verdict": "pass",
+  "confidence": "high",
+  "artifact_type": "plan@1",
+  "retry_count": 1,
+  "blockers": [],
+  "verdict_summary": "13 implementable variants, all Display literals, and the Result alias verified against the on-disk spec; 14/14 tests independently re-executed and proven non-vacuous. Recorded gaps: AC-001's Io variant and AC-004 externally blocked (io-errors absent, accurately deferred); mutation run produced 0 mutants, so no mutation signal. Io gap needs human routing, not an implementer retry.",
+  "reasoning": "Spec read from disk at .claude/specs/SPEC-001.json; sha256 matches PLAN-001's spec_hash exactly, so no spec_drifted_since_planning gap. spec_file_path was set, so no spec_file_unset gap. error.rs read fresh; every claim below was re-derived, not accepted from the handoff summary."
+}
+```
+
+## What I verified independently
+
+**Enum shape (AC-001, AC-002, AC-002B, AC-019)** — `/Users/gabe/Projects/monokl/crates/monokl/src/error.rs` carries 13 variants in the spec's exact declared order with exact field shapes, exactly the three required attribute lines, no 15th variant, no Parse/Query. All 13 Display literals byte-match the spec, including AC-020's and AC-011's corrected text and the em-dashes in AC-012's reason literal and AC-018's message. Zero `#[diagnostic` attributes anywhere in error.rs or the corpus. The `Result&lt;T&gt;` alias follows the enum.
+
+**Tests actually pass, and actually prove something** — I did not take the reported "14 passed" on trust. I copied error.rs byte-identically (`cmp`-verified) into an isolated fixture with a `miette` feature and ran `cargo test`: 14 passed, 0 failed. This matters more than the count: because the 14th test is `#[cfg(feature = "miette")]`-gated and the enum's derive is `#[cfg_attr(feature = "miette", ...)]`, a fixture without that feature would have silently compiled the test out and still reported success — with 13 tests. Getting 14 proves the AC-002B behavioral test genuinely compiled in and ran. I then perturbed the `SymlinkRejected` literal and confirmed its test fails, so the assertions are load-bearing rather than vacuous.
+
+**Corpus grounding claims in the doc comments are true**, checked against `docs/spec/` directly rather than against the prose the implementer wrote: 3 `MonoklError::Walk` sites, 2 `LockPoisoned` sites, all 3 `InvalidGitRef` reason literals verbatim, exactly 2 spelled-out `Git` operation literals (`merge-base`, `show`), all 8 `Json` sites across the 3 stated categories (including the `.map_err(Into::into)` form at 01:1698 and the two `to_value?` sites in 03), `read_to_string_capped` with a definition and zero call sites, and AC-020B's warn text verbatim at `01-core-architecture.md:1573`.
+
+**The deferral is legitimate** — `crates/io-errors` does not exist, and no `.cargo/config.toml` defines `orin-cargo` anywhere in the workspace. AC-001's Io clause and AC-004 are genuinely unimplementable here, and `/Users/gabe/Projects/monokl/.claude/blockers/SPEC-001-io-variant.md` records it accurately.
+
+**No regressions** — the whole changeset is 4 files. T-004B (`bb068be`) touched `01-core-architecture.md` with exactly two line replacements (the AC-011 and AC-020 literals) plus one log bullet; despite being applied by script to a large pre-existing corpus file, it caused no collateral edits.
+
+## Gaps recorded (non-blocking, but they must not be lost)
+
+1. **Mutation testing produced zero signal.** I ran `cargo mutants --list` against the fixture myself: 0 mutants. The structural explanation holds — error.rs has no hand-written function bodies outside `#[cfg(test)]`, and thiserror's Display impls are macro-generated and invisible to cargo-mutants' pre-expansion scan. So lambda-mutator's "pass" is honest, but it is *pass by vacuity*: the test suite was never actually challenged. My perturbation check is the only real evidence of test strength, and it covers one literal.
+
+2. **Nothing has ever compiled inside the real crate.** All green evidence, mine included, comes from an out-of-tree fixture. The byte-identical copy plus matching edition/deps makes this strong, but it is not the same as an in-tree build.
+
+3. **`deferred_criteria` is not a reliable index of what remains.** AC-016 has a "documented-contract half only" entry; **AC-017 is structurally identical** — same sole construction site in the same nonexistent `io_safety.rs` — and has no entry. AC-020B names a `tracing::warn!` line that no code emits and has no entry either. Both criteria's in-scope halves are discharged and their corpus claims verified, so this is bookkeeping inconsistency rather than missing work, but a downstream reader treating that list as complete would be misled.
+
+4. **Correction to the summary I was handed:** it stated AC-017 is among the deferred entries. It is not. The actual list is exactly AC-001, AC-004, AC-002B, AC-013, AC-013B, AC-015, AC-011, AC-016.
+
+5. Minor, outside spec scope: `/Users/gabe/Projects/monokl/.claude/semantic-model/error-taxonomy.md:90` still asserts in present tense that StaleDiskCache's message says ``run `mnkl init --rebuild` `` — now false of both error.rs and `01-core-architecture.md:228`.
+
+## Why pass rather than fail
+
+Two acceptance criteria are literally unsatisfied: AC-001 requires 14 variants and 13 exist, and AC-004 is 0% implemented. I want to be explicit that I am not calling those satisfied. I am calling them **externally blocked, accurately recorded, and unfixable by the implementer** — the spec's own `non_goals` put `FileIoError` out of scope while AC-001 requires a variant of that type, and the crate it lives in is absent from disk. Returning `fail` would hand lambda-implementer blockers it has no available action on, which is precisely the cycling the escalation rule exists to prevent. **The Io variant should go to a human to sequence the io-errors track, not back through another retry.**</result>
+<usage><subagent_tokens>94409</subagent_tokens><tool_uses>21</tool_uses><duration_ms>330588</duration_ms></usage>
+</task-notification>
