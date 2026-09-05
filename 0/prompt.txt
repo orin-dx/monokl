@@ -1,0 +1,3 @@
+I think the first steps are to setup the project right? git, cargo, pnpm, etc
+
+Should we use proto or mise + just?
