@@ -1,0 +1,37 @@
+<task-notification>
+<task-id>ae948e575582f32fd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/a82f4f80-7822-4785-a872-33c66baeee45/tasks/ae948e575582f32fd.output</output-file>
+<status>completed</status>
+<summary>Agent "Research oxc-react-codegen best practices" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have enough to report. Here is the concise findings summary.
+
+## oxc-react-codegen (actual name "oxc-react-docgen") — findings
+
+**What it is**: A Rust reimplementation of `react-docgen-typescript` that uses OXC to extract React component prop tables (types, defaults, JSDoc, HTML-attribute inheritance) from TSX/`.d.ts` — no type-checker, no TS `Program`, fully parallel via rayon. Repo: `/Users/gabe/Projects/oxc-react-codegen` (crates: `core`, `binding` (NAPI), `cli`).
+
+**OXC version pinned** (`Cargo.toml:18-25`): `oxc_allocator`/`oxc_parser`/`oxc_ast`/`oxc_ast_visit`/`oxc_span`/`oxc_syntax` all at `0.135` (moved in lockstep, comment explicitly calls this out), `oxc_module_lexer` at `0.38` separately, `oxc_resolver` at `11`. This matches monokl's spec pattern of independently-versioned `oxc_resolver`.
+
+**Arena containment (directly analogous to monokl's requirement)** — `crates/core/src/extractor/mod.rs:1-8,72-125`: doc comment states "**The Absolute Rule:** No AST references escape `parse_file`." Pattern: `Allocator::default()` created locally inside `parse_file(path, source) -&gt; SourceData`, `Parser::new(&amp;allocator, source, source_type).parse()`, then a `SourceDataCollector` visits the arena-borrowed `Program` and immediately converts every node to owned `String`/`CompactString`/`Vec`/enum data. The function ends with `// allocator drops here — ALL arena memory freed`. This is enforced socially via `CLAUDE.md:21` ("No AST refs escape `parse_file()` — allocator is local per call") and by `parse_file`'s pure `&amp;str -&gt; SourceData` signature (no lifetime parameter can leak out). Even parser comments (arena-backed `Vec&lt;Comment&gt;`) get copied into an `OwnedComment { span_start, span_end, is_block }` before the collector runs (`mod.rs:113-121`) — copy comments out explicitly, don't just reference `ret.program.comments`.
+
+**Visitor pattern**: `oxc_ast_visit::Visit` trait, implemented in `crates/core/src/extractor/visit.rs`. Overrides specific `visit_*` methods (`visit_import_declaration`, `visit_ts_interface_declaration`, `visit_variable_declaration`, `visit_function`, etc.) rather than manual recursive descent over `Statement`/`Expression`. Key idiom: if a visit method fully consumes what it needs, it does **not** call `walk::walk_*` (stops descent, e.g. `visit_ts_interface_declaration` at `visit.rs:114-142`); if children still need visiting, it explicitly calls `walk::walk_variable_declaration(self, node)` / `walk::walk_function(self, func, flags)` at the end. `visit_function` takes a `ScopeFlags` second argument.
+
+**No JSX-element walking exists here** — grep for `visit_jsx`/`JSXElement` found nothing beyond string constants. This tool infers props from type annotations (`FC&lt;ButtonProps&gt;`, `forwardRef&lt;Ref,Props&gt;`, interface `extends`), not from JSX usage sites. Monokl's JSX-element/attribute extraction is new territory relative to this codebase — no prior art to lift directly, but the same "convert `JSXAttribute`/`JSXElementName` to owned data immediately in the visitor" discipline applies.
+
+**Fallback-to-raw-source pattern** (useful gotcha): for AST node types not explicitly handled (e.g. `TSInferType`, unhandled `TSType` variants), the code does `use oxc_span::GetSpan; let span = ty.span(); self.source[span.start as usize..span.end as usize].to_owned()` (`extractor/mod.rs:385-396`) — slicing the original `&amp;str` by byte span rather than trying to re-derive structure. Cheap universal fallback for "opaque"/unsupported constructs.
+
+**Concrete OXC gotchas documented in code/docs**:
+- `oxc_parser` recursive-descent has no depth guard — deeply nested parens/types stack-overflows the parser itself; they pre-scan source with a cheap bracket-depth counter and refuse to parse past 2000 levels (`extractor/mod.rs:34-62`, test at `mod.rs:1170-1185`).
+- `oxc_parser` is error-recovering: `ret.program` is still usable even when `ret.errors` is non-empty — iterate `ret.errors` and emit diagnostics rather than treating any error as fatal (`mod.rs:98-111`).
+- `SourceType::from_path` can fail — always `.unwrap_or_default()` (`mod.rs:91`, also called out in `docs/06-SERIALIZERS-TESTS-GOTCHAS.md`).
+- `readonly T[]` (TSTypeOperatorType::Readonly) should be peeled transparently to its operand rather than captured as raw text (`mod.rs:367-383`, regression test `mod.rs:706-729`).
+- `oxc_resolver::Resolver::resolve()` takes `&amp;std::path::Path`, not `Utf8Path` — convert via `.as_std_path()` (`resolver/import.rs:33`, and `docs/06...:299-318`).
+
+**Error handling**: core crate has no `thiserror`/`anyhow` — it never returns `Result`; failures become `Diagnostic { severity, message, file, line, column, help, code }` pushed onto output (`types/diagnostic.rs`), explicitly to "never fail silently" (`CLAUDE.md:23`). CLI crate uses `miette` (`IntoDiagnostic`, `WrapErr`) for user-facing errors (`crates/cli/src/main.rs`, `commands/*.rs`).
+
+**Testing**: `insta` (with `json`, `redactions` features) for snapshot tests against real-library fixtures (shadcn, MUI, Chakra, Mantine, Radix, React Aria) in `crates/core/tests/snapshots/*.snap`; unit tests colocated in `mod.rs` under `#[cfg(test)]` using inline TSX source strings, each documenting the specific real-world bug it guards against in a comment (great pattern to copy for monokl's TS-analyzer regression tests).
+
+**Data-structure conventions**: `FxHashMap`/`FxHashSet` (rustc-hash) for internal/hot-path maps, `BTreeMap` for anything serialized to JSON output (stable key order for snapshots), `CompactString` for short hot-path names, `camino::Utf8Path`/`Utf8PathBuf` everywhere instead of `std::path::Path`.</result>
+<usage><subagent_tokens>64897</subagent_tokens><tool_uses>18</tool_uses><duration_ms>94368</duration_ms></usage>
+</task-notification>
