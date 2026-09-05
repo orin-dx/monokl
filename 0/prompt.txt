@@ -1,0 +1,3 @@
+Also research and fully understand codegraph: https://colbymchenry.github.io/codegraph/
+
+Consider the codebase and how we can do even better at a similar goal: https://github.com/colbymchenry/codegraph
