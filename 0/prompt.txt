@@ -1,0 +1,1 @@
+What packages and crates should we add? what about tsconfig? tsdown? vitest? clippy, oxlint and oxfmt?
