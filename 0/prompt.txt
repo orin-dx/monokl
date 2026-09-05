@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>a1c56ef5d05ef1a95</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a1c56ef5d05ef1a95.output</output-file>
+<status>completed</status>
+<summary>Agent "Vector-planner for SPEC-003" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The plan has been produced, reviewed, and found to fail adversarial review with 8 concrete, verified issues.
+
+**Plan:** `/Users/gabe/Projects/monokl/.claude/plans/PLAN-003.json` (11 tasks, T-001–T-011, SymbolKind → Visibility → SymbolEntry, all 12 acceptance criteria AC-001–AC-012 nominally covered, spec_hash `sha256:62742b5119...`)
+
+**Challenger verdict: FAIL** (grounded by actually executing the plan's fixture crate, not just reading it). Key findings:
+
+1. **T-003 broken grep gate** — expects Visibility variant count `4`, actually returns `5` (SymbolKind's `Module,` collides with the alternation).
+2. **T-006 broken grep gate** — expects `impl_owner` count `1`, actually returns `4` (doc comment spans 4 lines).
+3. **AC-004 uncovered behaviorally** — no test ever serializes/deserializes with `trait_impl`/`kind_detail` populated; challenger proved this by deleting `rename_all = "camelCase"` from the fixture and all 12 tests still passed.
+4. **AC-006/AC-007 uncovered behaviorally** — T-008's "extra key discarded" test never asserts the field stayed `None`; challenger proved this by aliasing `impl_owner` onto `owner` and all tests still passed.
+5. **AC-010 only 40% covered** — only 2 of the 5 documented Option fields get an explicit-null test.
+6. **AC-011 partial** — "missing-field error naming that field" clause never actually asserted.
+7. **Destructive overwrite pattern** — `cat &gt; file &lt;&lt;EOF` + whole-file diff in T-001/T-003/T-006 would silently clobber work from future SPEC-005–008 tasks targeting the same `types.rs`.
+8. **Fixture fidelity gap** — fixture uses edition 2021 vs workspace's edition 2024/lint table, understating what "green" actually proves.
+
+Each issue includes a concrete suggested fix (exact grep/awk commands, exact test code to add). Since this is a `fail` verdict, the plan should go back through `vector-planner` for a corrected revision before handing to `lambda` for implementation — let me know if you want me to run that fix pass now.</result>
+<usage><subagent_tokens>46693</subagent_tokens><tool_uses>4</tool_uses><duration_ms>960465</duration_ms></usage>
+</task-notification>
