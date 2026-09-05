@@ -1,0 +1,89 @@
+<task-notification>
+<task-id>a6b8617cf6c5d4bfb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gabe-Projects-monokl/57770ee1-28ed-468a-a817-1e154e82efc2/tasks/a6b8617cf6c5d4bfb.output</output-file>
+<status>completed</status>
+<summary>Agent "Axiom-verifier for SPEC-010" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I now have sufficient direct evidence for all 17 criteria. Compiling the final report.
+
+```json
+{
+  "verified": [
+    {
+      "criterion": "AC-001",
+      "evidence": "~/Projects/michi crates/michi-toon/src/escape.rs at pinned commit cb355b8c: escape_value's match arm is `'\\n' | '\\r' =&gt; stripped_count += 1,` in the counting pass and `'\\n' | '\\r' =&gt; {}` (no push) in the build pass -- newline/CR characters are counted then never written to the output buffer, confirming silent deletion, not escaping, for every ToonOptions configuration (max_cell_len is untouched by this function)."
+    },
+    {
+      "criterion": "AC-003",
+      "evidence": "~/Projects/michi crates/michi-toon/src/lib.rs list(): `if fields.is_empty() &amp;&amp; !obj.is_empty() { fields = obj.keys().cloned().collect(); }` followed unconditionally by `rows.push(fields.iter().map(...).collect())` -- a leading empty-object item pushes a genuinely zero-length row before fields is ever set. `opts.validate()` (same file) loops `for (i, row) in self.rows.iter().enumerate() { if row.len() != self.fields.len() { return Err(RowLengthMismatch{...}) } }`, confirming the first mismatched row aborts list() with Err before render_toon() runs, exactly as claimed."
+    },
+    {
+      "criterion": "AC-004",
+      "evidence": "~/Projects/michi crates/michi-toon/src/render.rs: `#[cfg(debug_assertions)] for row in rows { debug_assert!(row.len() == field_count, ...) }` -- a debug-build-only runtime check, confirming render_toon()'s own arity enforcement is not a compile-time guarantee, which is exactly the gap ToonProjection&lt;N&gt;'s array-typed FIELDS/toon_rows is designed to close at compile time via ordinary Rust array-type matching."
+    },
+    {
+      "criterion": "AC-004B",
+      "evidence": "Cross-checked every sub-claim against real michi-core/michi-toon source at the pinned rev: `ToonOptions::new(type_name: impl Into&lt;String&gt;, fields: Vec&lt;String&gt;, rows: Vec&lt;Vec&lt;Value&gt;&gt;)`; `ToonOptions::total_count(mut self, total: Option&lt;usize&gt;)`; `AgentResponse::items(mut self, rows: Vec&lt;Vec&lt;Value&gt;&gt;, fields: &amp;[&amp;str])`; `AgentResponse::hints(mut self, hints: Vec&lt;Hint&gt;)`; `AgentResponse::total_count(mut self, n: usize)` (plain usize, confirming the Option-unwrap step is required, unlike ToonOptions's same-named method); `AgentResponse::render_toon(&amp;self) -&gt; String { self.finish_text(&amp;self.toon_body()) }` where `finish_text` calls `crate::hints::append_hints(&amp;mut out, &amp;self.hints)`, and `toon_body()` builds its own internal ToonOptions with no `.hints(...)` call, confirming the standalone `michi::toon::render_toon(&amp;opts)` free function would never see toon_hints() content, exactly as the criterion states."
+    },
+    {
+      "criterion": "AC-005",
+      "evidence": "SPEC-003.json AC-004 confirms SymbolEntry has exactly 8 fields (name, kind, line, signature, owner, trait_impl, visibility, kind_detail); SPEC-003 AC-002/AC-003 confirm SymbolKind and Visibility have no as_str()/Display and their camelCase serde forms match symbol_kind_str/visibility_str's claimed outputs; SPEC-007.json AC-013 confirms SymbolsResult.files is exactly BTreeMap&lt;Utf8PathBuf, Vec&lt;SymbolEntry&gt;&gt;. The 9-column claim (8 SymbolEntry fields + 1 flattening-introduced file column) is arithmetically and structurally consistent with these three independently-gated shapes."
+    },
+    {
+      "criterion": "AC-006",
+      "evidence": "SPEC-006.json AC-005 confirms RankedBlock's first field is literally named `block: CodeBlock` with `#[serde(flatten)]`, and its own 6 fields are bm25_score, coverage_boost, node_type_boost, final_score, rank, parent_context -- confirming block.block.* vs block.rank/block.final_score access as claimed. SPEC-006 AC-001 confirms CodeBlock's 8 fields (file, line_start, line_end, node_kind, code, symbol_signature, matched_lines, matched_keywords), confirming the claimed exclusion of code/matched_lines/matched_keywords and the 7 included columns exactly. SPEC-007.json AC-011 confirms SearchResponse.results: Vec&lt;RankedBlock&gt;."
+    },
+    {
+      "criterion": "AC-007",
+      "evidence": "SPEC-001.json AC-001 lists MonoklError's 14 variants in exact declaration order: Io, Walk, RegexBuild, NonUtf8Path, TooManyTerms, TokenizerInit, Json, PathOutsideRoot, StaleDiskCache, InvalidGitRef, Git, SymlinkRejected, FileTooLarge, LockPoisoned. AC-007's claimed snake_case string list (\"io\",\"walk\",\"regex_build\",...,\"lock_poisoned\") maps 1:1 onto this order with correct snake_case transliteration for every variant."
+    },
+    {
+      "criterion": "AC-008",
+      "evidence": "~/Projects/michi crates/michi-core/src/error.rs: ErrorCode enum has exactly the 9 named variants (InvalidInput, NotFound, Unauthorized, Forbidden, Conflict, RateLimited, Unavailable, Timeout, ExternalFailure); `default_class_for_all_codes` test confirms Conflict.default_class() == ErrorClass::User, matching AC-008's specific claim that StaleDiskCache-&gt;Conflict still classifies User even under AC-011's retryable(false) override. All 14-&gt;9 mappings in AC-008 land on real ErrorCode variants."
+    },
+    {
+      "criterion": "AC-009",
+      "evidence": "Locally cached ignore-0.4.33 crate (~/.cargo/registry/.../ignore-0.4.33/src/lib.rs): `pub enum Error` has exactly 9 variants (Partial, WithLineNumber, WithPath, WithDepth, Loop, Io, Glob, UnrecognizedFileType, InvalidDefinition), and `impl std::error::Error for Error { fn description(&amp;self)... }` overrides only the deprecated description() method -- no `fn source` appears anywhere in the file, confirming source() returns the trait default (None) unconditionally for every variant, exactly as claimed. docs/spec/01-core-architecture.md:3005-3013 confirms `FileIoError::io_source(&amp;self) -&gt; &amp;io::Error` returning the wrapped io::Error directly, matching AC-009's access-mechanism claim."
+    },
+    {
+      "criterion": "AC-010",
+      "evidence": "~/Projects/michi crates/michi-core/src/error.rs: `impl std::error::Error for DomainError {}` -- an empty body, confirming DomainError never exposes source(). error.rs's render(): `out.push_str(\"\\nmessage: \"); out.push_str(&amp;self.message);` then `crate::hints::append_hints(&amp;mut out, &amp;self.hints)`; hints.rs's append_hints writes `help[{N}]:\\n` then one `  {hint}\\n` line per hint -- confirming the exact COUNTED help[N] block mechanism the criterion describes and the desynchronization risk from an unflattened multi-line hint."
+    },
+    {
+      "criterion": "AC-011",
+      "evidence": "~/Projects/michi crates/michi-core/src/error.rs: `DomainError::new` sets `retryable: code.is_retryable_by_default()`; `is_retryable_by_default()` returns true for RateLimited|Unavailable|Timeout|ExternalFailure. `Error::class()`: `Self::Domain(d) if d.retryable =&gt; ErrorClass::Transient, Self::Domain(d) =&gt; d.code.default_class()` -- confirming retryable is checked before default_class(), exactly as claimed, and that an unoverridden ExternalFailure-coded error would default to Transient."
+    },
+    {
+      "criterion": "AC-012",
+      "evidence": "Internally consistent with the confirmed DomainError builder API (.hint(), .recovery()) shown in error.rs, and with SPEC-001's field shapes for TooManyTerms{count,limit}, FileTooLarge{path,size,cap}, InvalidGitRef{ref_,reason} (cited and matching declaration in SPEC-001 AC-001 as read above). No counter-evidence found; the enrichment calls use real, confirmed builder methods with correctly-typed arguments."
+    },
+    {
+      "criterion": "AC-013",
+      "evidence": "~/Projects/michi crates/michi-toon/src/render.rs (Value's Display impl, adjacent to the escape module): `Self::Str(s) =&gt; f.write_str(s), ... Self::Null =&gt; Ok(())`. escape_value(\"\") returns `Cow::Borrowed(v)` (the `if v.is_empty() { return Cow::Borrowed(v); }` guard) -- an empty Str and Null both render as zero characters, confirming they are indistinguishable in rendered output."
+    },
+    {
+      "criterion": "AC-014",
+      "evidence": "~/Projects/michi crates/michi-core/src/response.rs: `fn toon_body(&amp;self) -&gt; String { ... if let Err(e) = opts.validate() { return format!(\"error: toon_validation_failed\\nmessage: {e}\\n\"); } ... }` -- confirms validate() is called internally but its Err only changes body text. `as_error(mut self) -&gt; Self { self.is_error = true; self }` is the sole setter of is_error, never called from toon_body(); render_json()'s `\"isError\"` and to_call_tool_result()'s `is_error` both read only `self.is_error`. This confirms an internally-failed toon_body() leaves is_error/isError at false, exactly as claimed."
+    },
+    {
+      "criterion": "AC-015",
+      "evidence": "Live /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml currently has no michi dependency line and cli = [\"dep:clap\", \"miette\"] -- consistent baseline for the claimed addition. ~/Projects/michi/Cargo.toml at the pinned commit (confirmed via git log -1 showing commit cb355b8c exists) declares `default = []` in [features], confirming default-features=false is indeed a no-op as the criterion itself states. v0.1.0-stale API claims (miette feature, ToonError, validate(), default_class()) were independently confirmed present in the pinned commit's source by direct reading above (ToonOptions::validate, ErrorCode::default_class, ToonError::RowLengthMismatch all exist in the checked-out files)."
+    },
+    {
+      "criterion": "AC-016",
+      "evidence": "Live crates/monokl/Cargo.toml: `cli = [\"dep:clap\", \"miette\"]` (exact pre-amendment value as claimed). Live crates/monokl/src/lib.rs: `#[cfg(feature = \"cli\")] pub mod output;` already exists, confirming the output module is already gated and this track adds no new #[cfg] gate, matching the criterion's claim about output::agent being a new file inside an already-gated module."
+    }
+  ],
+  "failed": [],
+  "unverifiable": [
+    {
+      "criterion": "AC-002",
+      "reason": "This criterion describes brand-new code (cell/opt_cell) that the spec itself states is not sourced from any existing spec or external library -- it exists only as a design proposition in SPEC-010 with no corresponding implementation file (crates/monokl/src/output/agent.rs does not exist yet; SPEC-010 is a pre-implementation spec). There is no source file to cross-check this function's stated behavior against; it can only be judged internally consistent with AC-001's confirmed escape_value defect (which it is), not independently verified as 'true' the way the empirical AC-001/AC-003/AC-004B claims about michi's real source were."
+    }
+  ],
+  "reasoning": "Verified AC-001, AC-003, AC-004, AC-004B, AC-013, AC-014 by reading the actual pinned-commit michi source (~/Projects/michi via git show at cb355b8c05048e71e7219af8416c475346b6f837) line-by-line and matching every quoted signature/behavior against real code, not the spec's paraphrase. Verified AC-008, AC-011 the same way against michi-core/src/error.rs's real ErrorCode/DomainError/class() implementations. Verified AC-009 by reading the actual locally-cached ignore-0.4.33 crate source and confirming source() is never overridden and the variant count/names are exactly as claimed -- this was the criterion the spec's own revision history flagged as empirically re-compiled during correction; I did not re-run a throwaway crate but did directly inspect the real dependency source, which independently confirms the same underlying fact (no fn source in ignore's lib.rs) the spec's compiled-crate claim rests on. Verified AC-005, AC-006, AC-007 by reading the actual cited SPEC-001/003/006/007 JSON files and confirming field lists, orders, and camelCase forms match what AC-005/006/007 assert. Verified AC-015, AC-016 by reading the real, current crates/monokl/Cargo.toml and src/lib.rs and confirming the claimed pre-amendment baseline is exactly what the spec says it is, and that the described insertion is structurally sound (cli feature currently exactly [dep:clap, miette]; output module already cli-gated). AC-012 has no single external fact to check beyond correctly-typed use of already-confirmed DomainError builder methods and already-confirmed MonoklError field shapes, so it's marked verified on the strength of that structural consistency rather than an isolated empirical fact, but I did not find any contradiction. AC-002 is the one criterion classified unverifiable: it specifies wholly new code with no existing implementation file and no external source to check it against -- the spec's own text acknowledges this ('01-core-architecture.md has no citation for this function... this is new code this track designs'). I did not classify it as verified merely because it is well-formed Rust and consistent with AC-001's confirmed finding, since that would be inferring verification from absence of a counter-example rather than from positive confirming evidence of the function's actual existence and behavior. No criterion was found to be contradicted by evidence -- the eight-round correction history appears to have caught the real defects already; my independent read of the pinned michi commit, the real ignore crate, the real Cargo.toml/lib.rs, and the real SPEC-001/003/006/007 files corroborates rather than contradicts every empirical and structural claim in SPEC-010."
+}
+```</result>
+<usage><subagent_tokens>106454</subagent_tokens><tool_uses>23</tool_uses><duration_ms>181202</duration_ms></usage>
+</task-notification>
