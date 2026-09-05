@@ -1,0 +1,1 @@
+<local-command-stdout>Set output style to [1mConcise[22m</local-command-stdout>
