@@ -1,0 +1,5 @@
+This looks much better right? What should we adjust in our spec to account for these changes?
+
+How can we prepare the architecture for the future daemon work?
+
+Think deeply about the architecture, performance and DX are huge parts of this right?
