@@ -1,4 +1,9 @@
-# monokl
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/hero-dark.png">
+    <img src="assets/brand/hero-light.png" alt="monokl, an Orin DX tool" width="360">
+  </picture>
+</p>
 
 <p align="center">
   <b>AST-aware semantic code search for TypeScript, JavaScript, and Rust.</b><br />
