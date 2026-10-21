@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/orin-axi/monokl/security/policy
+    url: https://github.com/orin-dx/monokl/security/policy
     about: Do not open a public issue for anything exploitable — see SECURITY.md instead.

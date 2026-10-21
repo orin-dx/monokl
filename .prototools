@@ -1,0 +1,8 @@
+rust = "1.98.1"
+moon = "2.4.5"
+
+[plugins]
+moon = "source:https://raw.githubusercontent.com/moonrepo/moon/master/proto-plugin.toml"
+
+[settings]
+auto-install = true

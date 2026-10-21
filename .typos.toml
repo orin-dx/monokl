@@ -1,0 +1,5 @@
+[files]
+# The spec corpus quotes third-party source and research verbatim.
+extend-exclude = ["docs/research/"]
+
+[default.extend-words]

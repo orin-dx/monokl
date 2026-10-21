@@ -1,0 +1,39 @@
+# Grouped weekly updates, with security updates in their own group so an advisory fix is never hidden in a routine
+# bump. The cooldown lets a yanked crate or pulled action release surface before it lands here.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    groups:
+      routine-actions:
+        applies-to: version-updates
+        patterns: ["*"]
+      security-actions:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      # oxc_* minor releases carry breaking API changes and ship in lockstep, so they update together.
+      oxc:
+        applies-to: version-updates
+        patterns: ["oxc_*"]
+      routine-cargo:
+        applies-to: version-updates
+        patterns: ["*"]
+        exclude-patterns: ["oxc_*"]
+      security-cargo:
+        applies-to: security-updates
+        patterns: ["*"]
