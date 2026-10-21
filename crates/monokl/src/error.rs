@@ -11,25 +11,15 @@
 //! only the error contract they must conform to, not their bodies.
 use camino::Utf8PathBuf;
 
+use crate::file_io::FileIoError;
+
 #[derive(Debug, thiserror::Error)]
 #[cfg_attr(feature = "miette", derive(miette::Diagnostic))]
 #[non_exhaustive]
 pub enum MonoklError {
-    // BLOCKED (AC-004, AC-001): the `Io(#[from] FileIoError)` variant this
-    // spec requires cannot be added yet. FileIoError is owned by the
-    // `io-errors` crate, which does not exist on disk at `../io-errors`
-    // even though crates/monokl/Cargo.toml:43 already declares a
-    // mandatory, non-optional dependency on it; that same dependency line
-    // also pins `registry = "orin-cargo"`, and no `.cargo/config.toml`
-    // `[registries.orin-cargo]` entry exists anywhere in this workspace
-    // (the same AC-008B gap SPEC-004/PLAN-004 already documented). Until
-    // both (a) an `io-errors` crate exists at `../io-errors` defining
-    // `FileIoError`, and (b) `.cargo/config.toml` configures the
-    // `orin-cargo` registry (or the dependency is repointed at a
-    // resolvable source), this variant cannot be written without either
-    // inventing an undocumented stub type or leaving the crate permanently
-    // unbuildable. See this plan's blocker task (T-009) for the exact
-    // decision needed.
+    #[error(transparent)]
+    Io(#[from] FileIoError),
+
     /// AC-005: three construction sites in the spec corpus --
     /// `text_search::search_files`, `WorkspaceIndex::build`'s walk, and
     /// `source_scan`'s per-directory walk -- in all three, `path` is the
@@ -219,6 +209,12 @@ mod tests {
     }
 
     #[test]
+    fn io_display_is_transparent() {
+        let err: MonoklError = FileIoError::read("/x", std::io::Error::other("boom")).into();
+        assert_eq!(err.to_string(), "failed to read /x");
+    }
+
+    #[test]
     fn walk_display() {
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: real_ignore_error() };
         assert_eq!(err.to_string(), "walker error at /x");
@@ -316,6 +312,7 @@ mod tests {
     fn all_non_io_variants_have_no_diagnostic_metadata() {
         use miette::Diagnostic;
         let variants: Vec<MonoklError> = vec![
+            FileIoError::read("/x", std::io::Error::other("boom")).into(),
             MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: real_ignore_error() },
             real_grep_regex_error().into(),
             MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/bad") },
@@ -330,7 +327,7 @@ mod tests {
             MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 100, cap: 50 },
             MonoklError::LockPoisoned { context: "ctx" },
         ];
-        assert_eq!(variants.len(), 13);
+        assert_eq!(variants.len(), 14);
         for v in &variants {
             assert!(v.code().is_none());
             assert!(v.help().is_none());

@@ -1419,7 +1419,7 @@ fn code_block_unenforced_invariants_deserialize_successfully() {
 
     let json2 = r#"{"file":"src/foo.rs","lineStart":1,"lineEnd":5,"nodeKind":"function","code":"fn foo() {}","matchedLines":[1,999999]}"#;
     let block2: CodeBlock = serde_json::from_str(json2).unwrap();
-    assert_eq!(block2.matched_lines, vec![1, 999999]);
+    assert_eq!(block2.matched_lines, vec![1, 999_999]);
     assert!(block2.matched_lines.iter().any(|&l| l > block2.line_end));
 }
 
@@ -1905,14 +1905,14 @@ fn language_camel_case_would_diverge_for_ts_and_js_only() {
     // (lowercase-every-char vs lowercase-leading-char-only) against the
     // actual "lowercase" output already pinned above, and against literal
     // strings for what "camelCase" would have produced.
-    let actual_ts = serde_json::to_string(&Language::TypeScript).unwrap();
-    let actual_js = serde_json::to_string(&Language::JavaScript).unwrap();
-    assert_eq!(actual_ts, "\"typescript\"");
-    assert_eq!(actual_js, "\"javascript\"");
-    let hypothetical_camel_case_ts = "typeScript";
-    let hypothetical_camel_case_js = "javaScript";
-    assert_ne!(actual_ts, format!("\"{hypothetical_camel_case_ts}\""));
-    assert_ne!(actual_js, format!("\"{hypothetical_camel_case_js}\""));
+    let typescript_json = serde_json::to_string(&Language::TypeScript).unwrap();
+    let javascript_json = serde_json::to_string(&Language::JavaScript).unwrap();
+    assert_eq!(typescript_json, "\"typescript\"");
+    assert_eq!(javascript_json, "\"javascript\"");
+    let camel_typescript = "typeScript";
+    let camel_javascript = "javaScript";
+    assert_ne!(typescript_json, format!("\"{camel_typescript}\""));
+    assert_ne!(javascript_json, format!("\"{camel_javascript}\""));
 
     let actual_rust = serde_json::to_string(&Language::Rust).unwrap();
     let actual_python = serde_json::to_string(&Language::Python).unwrap();

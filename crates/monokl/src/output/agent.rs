@@ -577,15 +577,20 @@ fn innermost_walk_error(e: &ignore::Error) -> &ignore::Error {
 // AC-009 locks `unreachable!()` as the correct body for the WithLineNumber/WithPath/WithDepth
 // wrapper arms below -- `innermost_walk_error` provably strips them before `leaf` can hold one.
 #[allow(clippy::unreachable)]
+fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {
+    use michi::ErrorCode;
+    match kind {
+        std::io::ErrorKind::NotFound => ErrorCode::NotFound,
+        std::io::ErrorKind::PermissionDenied => ErrorCode::Forbidden,
+        _ => ErrorCode::ExternalFailure,
+    }
+}
+
 fn walk_error_code(source: &ignore::Error) -> michi::ErrorCode {
     use michi::ErrorCode;
     let leaf = innermost_walk_error(source);
     match leaf {
-        ignore::Error::Io(io_err) => match io_err.kind() {
-            std::io::ErrorKind::NotFound => ErrorCode::NotFound,
-            std::io::ErrorKind::PermissionDenied => ErrorCode::Forbidden,
-            _ => ErrorCode::ExternalFailure,
-        },
+        ignore::Error::Io(io_err) => io_error_code(io_err.kind()),
         ignore::Error::Glob { .. } => ErrorCode::InvalidInput,
         ignore::Error::Loop { .. } => ErrorCode::ExternalFailure,
         ignore::Error::UnrecognizedFileType(_) => ErrorCode::InvalidInput,
@@ -681,14 +686,10 @@ pub trait ToDomainError {
 }
 
 impl ToDomainError for MonoklError {
-    /// AC-007: one distinct `snake_case` string per variant. The `Io` variant
-    /// (SPEC-001's own 14th, first-declared variant) is not yet a member of
-    /// this enum -- see this plan's blocker note -- so this covers exactly
-    /// the 13 variants that currently exist. `monokl_code()` never returns
-    /// `"io"` today; that arm is added in the same follow-up that adds the
-    /// `Io` variant itself.
+    /// One distinct `snake_case` string per variant.
     fn monokl_code(&self) -> &'static str {
         match self {
+            MonoklError::Io(_) => "io",
             MonoklError::Walk { .. } => "walk",
             MonoklError::RegexBuild(_) => "regex_build",
             MonoklError::NonUtf8Path { .. } => "non_utf8_path",
@@ -720,6 +721,7 @@ impl ToDomainError for MonoklError {
             MonoklError::TokenizerInit | MonoklError::Json(_) | MonoklError::Git { .. } | MonoklError::LockPoisoned { .. } => {
                 ErrorCode::ExternalFailure
             }
+            MonoklError::Io(err) => io_error_code(err.io_kind()),
             MonoklError::Walk { source, .. } => walk_error_code(source),
         };
 

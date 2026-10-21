@@ -5,13 +5,21 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
+# MSRV, separate from the toolchain pinned in .prototools. michi needs 1.96.
 rust-version = "1.96"
 license = "FSL-1.1-MIT"
-repository = "https://github.com/orin-axi/monokl"
-authors = ["Orin-Axi Contributors"]
-keywords = ["orin-axi", "developer-tools"]
+repository = "https://github.com/orin-dx/monokl"
+homepage = "https://orin-dx.com"
+authors = ["Orin DX Contributors"]
+keywords = ["orin-dx", "developer-tools"]
 categories = ["development-tools"]
 publish = false
+
+[workspace.lints.rust]
+# deny rather than forbid so the future napi crate can #[allow] it at the FFI boundary.
+unsafe_code = "deny"
+unused_must_use = "deny"
+let_underscore_drop = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -25,43 +33,65 @@ todo = "deny"
 print_stdout = "warn"
 print_stderr = "warn"
 await_holding_lock = "deny"
+let_underscore_must_use = "deny"
+let_underscore_untyped = "deny"
+map_err_ignore = "deny"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-
-[workspace.lints.rust]
-unsafe_code = "deny"
 
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
 
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
+
+# Version catalogue. A crate adds an entry to its own [dependencies] only when code uses it.
 [workspace.dependencies]
+# Errors
 thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-camino = { version = "1", features = ["serde1"] }
-rustc-hash = "2"
-ignore = "0.4"
-oxc_parser = "0.128"
-oxc_ast = "0.128"
-oxc_span = "0.128"
-oxc_allocator = "0.128"
-oxc_resolver = "11"
-rayon = "1"
-regex = "1"
+miette = { version = "7.6", features = ["fancy"] }
+
+# Serde
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+# Core data
+camino = { version = "1.2", features = ["serde1"] }
+rustc-hash = "2.1"
+dashmap = "6.1"
 blake3 = "1"
-dashmap = "5"
-tiktoken-rs = "0.6"
+
+# OXC (released in lockstep; bump together)
+oxc_parser = "0.151"
+oxc_ast = "0.151"
+oxc_span = "0.151"
+oxc_allocator = "0.151"
+oxc_resolver = "11"
+
+# Search
+ignore = "0.4"
+regex = "1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
-clap = { version = "4", features = ["derive", "env"] }
-miette = { version = "7", features = ["fancy"] }
+tiktoken-rs = "0.6"
+rayon = "1.12"
+
+# CLI and output
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+michi = { git = "https://github.com/orin-dx/michi", rev = "cb355b8c05048e71e7219af8416c475346b6f837", default-features = false }
 tracing = "0.1"
-insta = { version = "1.47", features = ["yaml", "json"] }
+
+# Dev
+insta = { version = "1.48", features = ["yaml", "json", "redactions"] }
 pretty_assertions = "1"
 proptest = "1"
-tempfile = "3"
-criterion = { version = "0.7", features = ["html_reports"] }
+rstest = "0.27"
+tempfile = "3.20"
+trycmd = "1.2"
+criterion = { version = "0.8", features = ["html_reports"] }
