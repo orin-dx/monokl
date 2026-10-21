@@ -1,17 +1,18 @@
+//! Agent-facing output: TOON projections of command results and conversion of [`MonoklError`] into michi errors.
 use michi::toon::Value;
 
 use crate::error::MonoklError;
 use crate::types::{SymbolKind, Visibility};
 
-/// Carries the name of the CLI (sub)command currently executing, so
-/// `RecoveryHint::new()` can name the correct tool for an agent to retry.
+/// The CLI command currently executing, so a recovery hint can name the right tool to retry.
 pub struct ErrorContext<'a> {
     pub command: &'a str,
 }
 
-/// The only sanctioned way to convert a `&str` into a `michi::toon::Value`
-/// inside this module. Pre-escapes `\n`/`\r` before handing the string to
-/// michi, since michi-toon's own `escape_value` deletes them silently.
+/// Converts a string into a TOON cell value.
+///
+/// This is the only sanctioned conversion in this module: it escapes `\n` and drops `\r` first, because michi's
+/// [`escape_value`](michi::toon::escape_value) silently deletes both.
 pub fn cell(s: &str) -> Value {
     if s.contains('\n') || s.contains('\r') {
         let mut out = String::with_capacity(s.len());
@@ -28,6 +29,7 @@ pub fn cell(s: &str) -> Value {
     }
 }
 
+/// Like [`cell`], but maps `None` to [`Value::Null`].
 pub fn opt_cell(s: Option<&str>) -> Value {
     match s {
         None => Value::Null,
@@ -73,24 +75,17 @@ mod cell_tests {
         assert_ne!(opt_cell(Some("")), Value::Null);
     }
 
-    /// AC-001: verifies michi-toon's own `escape_value` deletes `\n`/`\r`
-    /// rather than escaping them -- the exact defect `cell()` exists to
-    /// route around. If michi's pinned rev ever fixes this, this test fails
-    /// loudly rather than the workaround silently going stale.
+    // Pins the michi behavior `cell` works around, so a michi fix fails here instead of leaving a stale workaround.
     #[test]
-    fn ac001_michi_escape_value_deletes_newlines() {
+    fn michi_escape_value_deletes_newlines() {
         let raw = "// comment\nfn body() {\n    real_code();\n}";
         let escaped = michi::toon::escape_value(raw);
         assert!(!escaped.contains('\n'), "expected newline deletion, got: {escaped:?}");
         assert_eq!(escaped, "// commentfn body() {    real_code();}");
     }
-
 }
 
-/// `SymbolKind` has no `as_str()`/`Display` of its own (SPEC-003 AC-001);
-/// this returns the same camelCase strings serde's `rename_all = "camelCase"`
-/// already produces for it (SPEC-003 AC-002), via a direct, exhaustive
-/// match with no default arm.
+/// Returns the same `camelCase` name that serde produces for a [`SymbolKind`].
 pub fn symbol_kind_str(k: SymbolKind) -> &'static str {
     match k {
         SymbolKind::Function => "function",
@@ -111,8 +106,7 @@ pub fn symbol_kind_str(k: SymbolKind) -> &'static str {
     }
 }
 
-/// `Visibility` has no `as_str()`/`Display` of its own (SPEC-003 AC-003);
-/// same rationale as `symbol_kind_str`.
+/// Returns the same `camelCase` name that serde produces for a [`Visibility`].
 pub fn visibility_str(v: Visibility) -> &'static str {
     match v {
         Visibility::Public => "public",
@@ -128,7 +122,6 @@ mod kind_str_tests {
 
     #[test]
     fn symbol_kind_str_matches_serde_camel_case_form() {
-        // B-005: all 15 variants pinned, not just 3.
         assert_eq!(symbol_kind_str(SymbolKind::Function), "function");
         assert_eq!(symbol_kind_str(SymbolKind::Method), "method");
         assert_eq!(symbol_kind_str(SymbolKind::Constructor), "constructor");
@@ -148,7 +141,6 @@ mod kind_str_tests {
 
     #[test]
     fn visibility_str_matches_serde_camel_case_form() {
-        // B-005: all 4 variants pinned, not just 2.
         assert_eq!(visibility_str(Visibility::Public), "public");
         assert_eq!(visibility_str(Visibility::Crate), "crate");
         assert_eq!(visibility_str(Visibility::Module), "module");
@@ -156,13 +148,21 @@ mod kind_str_tests {
     }
 }
 
+/// A command result that renders as a TOON table with `N` columns.
+///
+/// The column count is a const generic so a row with the wrong arity cannot be constructed.
 pub trait ToonProjection<const N: usize> {
+    /// The table name.
     const TYPE_NAME: &'static str;
+    /// The column names.
     const FIELDS: [&'static str; N];
+    /// Returns one row per item.
     fn toon_rows(&self) -> Vec<[Value; N]>;
+    /// Returns the total item count to report, if any.
     fn toon_total_count(&self) -> Option<usize> {
         None
     }
+    /// Returns hints rendered after the table.
     fn toon_hints(&self) -> Vec<michi::Hint> {
         Vec::new()
     }
@@ -215,23 +215,24 @@ impl ToonProjection<7> for crate::types::SearchResponse {
     }
 
     fn toon_hints(&self) -> Vec<michi::Hint> {
-        vec![michi::Hint::new(
-            "use extract with file/lineStart/lineEnd to retrieve a row's actual code content",
-        )]
+        vec![michi::Hint::new("use extract with file/lineStart/lineEnd to retrieve a row's actual code content")]
     }
 }
 
-/// Constructs a `DomainError` directly from a `michi::toon::ToonError` --
-/// deliberately not via `ToDomainError`, which is scoped only to
-/// `MonoklError`'s closed `monokl_code()` set. Indicates a bug in this
-/// module's own row/field construction, not a caller input error.
+/// Converts a TOON validation failure into a [`michi::DomainError`].
+///
+/// It bypasses [`ToDomainError`] because this is not a [`MonoklError`]: it means this module built an invalid row or
+/// field, not that the caller supplied bad input.
 pub fn toon_validation_error(e: &michi::toon::ToonError) -> michi::DomainError {
     michi::DomainError::new(michi::ErrorCode::ExternalFailure, format!("toon_render_invalid: {e}")).retryable(false)
 }
 
-/// The sole function that converts a `ToonProjection<N>` implementation into
-/// a rendered TOON string.
-#[allow(clippy::result_large_err)] // AC-004B locks this exact signature verbatim against michi's own DomainError.
+/// Renders a [`ToonProjection`] as a TOON document.
+///
+/// # Errors
+///
+/// Returns a [`toon_validation_error`] if the projection's table fails michi's validation.
+#[expect(clippy::result_large_err, reason = "the error type is michi's DomainError, which agent output is built from")]
 pub fn render_projection<const N: usize, T: ToonProjection<N>>(value: &T) -> Result<String, michi::DomainError> {
     let rows: Vec<Vec<Value>> = value.toon_rows().into_iter().map(|row| row.to_vec()).collect();
     let fields: Vec<String> = T::FIELDS.iter().map(|s| (*s).to_string()).collect();
@@ -253,7 +254,7 @@ mod projection_tests {
     use super::*;
 
     #[test]
-    fn ac004b_render_projection_symbols_result_end_to_end() {
+    fn render_projection_symbols_result_end_to_end() {
         use crate::types::{SymbolEntry, SymbolKind, SymbolsResult};
         use camino::Utf8PathBuf;
         use std::collections::BTreeMap;
@@ -264,26 +265,23 @@ mod projection_tests {
             vec![SymbolEntry {
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
-                // B-008/AC-001: a literal embedded newline in a `cell()`-routed
-                // field must survive as the two-character escape `\n`, not a
-                // raw newline (which would corrupt the row) and not silently
-                // vanish (michi-toon's own `escape_value` deletes it).
                 line: 10,
+                // The newline must render as the two-character escape `\n`, neither breaking the row nor vanishing.
                 signature: Some("fn foo(x)\nsecond line".to_string()),
-                // B-009/AC-005: all three `Option` columns populated with
-                // distinct, recognizable values so a hardcoded `Value::Null`
-                // substitution for any of them cannot survive undetected.
+                // Distinct values in every optional column, so a hardcoded `Value::Null` for any of them shows up.
                 owner: Some("MyOwner".to_string()),
                 trait_impl: Some("MyTrait".to_string()),
                 visibility: Some(crate::types::Visibility::Public),
                 kind_detail: Some("static".to_string()),
             }],
         );
-        let result =
-            SymbolsResult { files, total_symbol_count: 1, truncation_marker: None, diagnostics: Vec::new() };
+        let result = SymbolsResult { files, total_symbol_count: 1, truncation_marker: None, diagnostics: Vec::new() };
 
         let rendered = render_projection(&result).expect("valid projection must render");
-        assert!(rendered.starts_with("symbols[1]{file,name,kind,line,signature,owner,traitImpl,visibility,kindDetail}:\n"), "got: {rendered}");
+        assert!(
+            rendered.starts_with("symbols[1]{file,name,kind,line,signature,owner,traitImpl,visibility,kindDetail}:\n"),
+            "got: {rendered}"
+        );
         assert!(
             rendered.contains("src/lib.rs,foo,function,10,fn foo(x)\\nsecond line,MyOwner,MyTrait,public,static"),
             "got: {rendered}"
@@ -291,7 +289,7 @@ mod projection_tests {
     }
 
     #[test]
-    fn ac004b_render_projection_search_response_includes_extract_hint() {
+    fn render_projection_search_response_includes_extract_hint() {
         use crate::types::{CodeBlock, RankedBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
 
@@ -299,20 +297,11 @@ mod projection_tests {
             results: vec![RankedBlock {
                 block: CodeBlock {
                     file: Utf8PathBuf::from("src/lib.rs"),
-                    // B-010/AC-006: line_start/line_end/rank/final_score are
-                    // all distinct so a column swap between block.block's
-                    // fields (line_start/line_end) and block's own fields
-                    // (rank/final_score) is actually detectable -- with the
-                    // prior degenerate all-1.0/all-1 values, such a swap
-                    // would have rendered an identical row.
+                    // Line numbers, rank, and score are all distinct so a swapped column is detectable.
                     line_start: 5,
                     line_end: 9,
                     node_kind: SymbolKind::Function,
                     code: "fn foo() {}".to_string(),
-                    // B-008/AC-001: a literal embedded newline in an
-                    // `opt_cell()`-routed field must survive as the
-                    // two-character escape `\n`, not corrupt the row and not
-                    // silently vanish.
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
                     matched_lines: vec![1],
                     matched_keywords: vec!["foo".to_string()],
@@ -333,15 +322,12 @@ mod projection_tests {
         };
 
         let rendered = render_projection(&response).expect("valid projection must render");
-        assert!(rendered.contains("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n"), "got: {rendered}");
         assert!(
-            rendered.contains("src/lib.rs,5,9,function,fn foo(x)\\nsecond line,2,0.92"),
+            rendered.contains("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n"),
             "got: {rendered}"
         );
+        assert!(rendered.contains("src/lib.rs,5,9,function,fn foo(x)\\nsecond line,2,0.92"), "got: {rendered}");
         assert!(!rendered.contains("fn foo() {}"), "code field must never appear in TOON output, got: {rendered}");
-        // B-011/AC-006/AC-012: the extract hint's exact literal text, not a
-        // substring -- a mutant altering any word of this prose would
-        // otherwise survive.
         assert!(
             rendered.contains(
                 "help[1]:\n  use extract with file/lineStart/lineEnd to retrieve a row's actual code content\n"
@@ -350,13 +336,9 @@ mod projection_tests {
         );
     }
 
-    /// AC-014: an invalid ToonOptions (deliberately mismatched arity, forced
-    /// via a hand-built ToonOptions rather than a real ToonProjection impl,
-    /// since ToonProjection<N> makes a real mismatch impossible to construct)
-    /// is caught by render_projection's own explicit validate() call and
-    /// converted via toon_validation_error, not silently rendered.
+    // Built by hand because `ToonProjection` cannot express an arity mismatch.
     #[test]
-    fn ac014_toon_validation_error_shape() {
+    fn toon_validation_error_shape() {
         let opts = michi::toon::ToonOptions::new(
             "t".to_string(),
             vec!["a".to_string()],
@@ -369,17 +351,8 @@ mod projection_tests {
         assert!(domain_err.message.starts_with("toon_render_invalid: "), "got: {}", domain_err.message);
     }
 
-    /// B-013/AC-014: `render_projection`'s own explicit `validate()` guard
-    /// (`if let Err(e) = opts.validate() { return Err(toon_validation_error(&e)); }`)
-    /// has zero end-to-end coverage from `ac014_toon_validation_error_shape`
-    /// above -- that test exercises `toon_validation_error()` in isolation via
-    /// a hand-built `ToonOptions`, never through `render_projection` itself,
-    /// so deleting the guard leaves every existing test green. This drives a
-    /// real `ToonProjection<1>` impl with a deliberately invalid `FIELDS`
-    /// entry (a comma, one of michi-toon's own structural chars -- verified
-    /// against `ToonOptions::validate()`'s real source, crates/michi-toon/src/lib.rs,
-    /// which rejects any field name containing a `STRUCTURAL` char via
-    /// `Err(ToonError::InvalidFieldName)`) through `render_projection` itself.
+    // Drives `render_projection`'s own validation guard end to end. A comma is a TOON structural character, so michi
+    // rejects it as a field name.
     struct InvalidFieldNameProjection;
     impl ToonProjection<1> for InvalidFieldNameProjection {
         const TYPE_NAME: &'static str = "invalid";
@@ -390,28 +363,20 @@ mod projection_tests {
     }
 
     #[test]
-    fn ac014_render_projection_end_to_end_validation_error() {
-        let err = render_projection(&InvalidFieldNameProjection).expect_err("invalid FIELDS entry must fail validate()");
+    fn render_projection_reports_validation_error() {
+        let err =
+            render_projection(&InvalidFieldNameProjection).expect_err("invalid FIELDS entry must fail validate()");
         assert_eq!(err.code, michi::ErrorCode::ExternalFailure);
         assert!(!err.retryable);
         assert!(err.message.starts_with("toon_render_invalid: "), "got: {}", err.message);
     }
 
-    /// AC-013: michi::toon::Value::Null and Value::from("") render
-    /// identically in a full TOON document -- there is no way for a reader
-    /// to distinguish an absent field from a present empty-string field.
+    // TOON cannot distinguish an absent field from an empty string.
     #[test]
-    fn ac013_null_and_empty_string_render_identically() {
-        let opts_null = michi::toon::ToonOptions::new(
-            "t".to_string(),
-            vec!["a".to_string()],
-            vec![vec![Value::Null]],
-        );
-        let opts_empty = michi::toon::ToonOptions::new(
-            "t".to_string(),
-            vec!["a".to_string()],
-            vec![vec![Value::from("")]],
-        );
+    fn null_and_empty_string_render_identically() {
+        let opts_null = michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![Value::Null]]);
+        let opts_empty =
+            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![Value::from("")]]);
         assert_eq!(michi::toon::render_toon(&opts_null), michi::toon::render_toon(&opts_empty));
     }
 
@@ -431,13 +396,7 @@ mod projection_tests {
         assert!(d.toon_hints().is_empty());
     }
 
-    /// B-007 (AC-004B step 4): a `ToonProjection` whose `toon_total_count()`
-    /// returns `Some(n)` must have that `n` reach the rendered output as a
-    /// literal `totalCount: {n}` line -- proving `render_projection`'s own
-    /// `if let Some(n) = value.toon_total_count() { resp = resp.total_count(n); }`
-    /// step is actually exercised, not dead code every other test happens to
-    /// never trigger (every other `ToonProjection` impl in this module's own
-    /// tests relies on the trait's `None` default).
+    // Every other projection here uses the `None` default, so this is the only coverage of the total-count path.
     struct DummyProjectionWithTotal;
     impl ToonProjection<1> for DummyProjectionWithTotal {
         const TYPE_NAME: &'static str = "dummy";
@@ -451,18 +410,14 @@ mod projection_tests {
     }
 
     #[test]
-    fn b007_render_projection_wires_toon_total_count_into_output() {
+    fn render_projection_wires_toon_total_count_into_output() {
         let rendered = render_projection(&DummyProjectionWithTotal).expect("valid projection must render");
         assert!(rendered.contains("totalCount: 42"), "got: {rendered}");
     }
 
-    /// B-012/AC-005 + B-014/AC-006: every prior projection test used exactly one
-    /// row, so the multi-row flattening loop itself (`SymbolsResult`'s nested
-    /// `for (file, entries) in &self.files { for e in entries { .. } }`, and
-    /// `SearchResponse`'s `self.results.iter().map(..)`) was unproven -- a
-    /// `.take(1)` on either outer iterator left every existing test green.
+    // The other projection tests render one row each, which would not catch a projection that drops later rows.
     #[test]
-    fn ac005_ac006_multi_row_flattening_symbols_and_search() {
+    fn multi_row_flattening_symbols_and_search() {
         use crate::types::{CodeBlock, RankedBlock, SearchResponse, SymbolEntry, SymbolsResult};
         use camino::Utf8PathBuf;
         use std::collections::BTreeMap;
@@ -502,14 +457,16 @@ mod projection_tests {
         }
 
         let mut files = BTreeMap::new();
-        // Inserted out of key order -- src/z.rs before src/a.rs -- so a passing
-        // test proves BTreeMap's own key-sorted iteration governs render order,
-        // not insertion order.
+        // Inserted out of key order to show that key order, not insertion order, decides row order.
         files.insert(Utf8PathBuf::from("src/z.rs"), vec![entry("z1", 1), entry("z2", 2)]);
         files.insert(Utf8PathBuf::from("src/a.rs"), vec![entry("a1", 3)]);
         let symbols = SymbolsResult { files, total_symbol_count: 3, truncation_marker: None, diagnostics: Vec::new() };
 
-        assert_eq!(symbols.toon_rows().len(), 3, "all (file, entry) pairs across every BTreeMap key must flatten into rows");
+        assert_eq!(
+            symbols.toon_rows().len(),
+            3,
+            "all (file, entry) pairs across every BTreeMap key must flatten into rows"
+        );
 
         let rendered = render_projection(&symbols).expect("valid projection must render");
         assert!(
@@ -554,29 +511,6 @@ mod projection_tests {
         );
     }
 }
-/// AC-009 (Walk half only -- `MonoklError::Walk`'s wrapped `ignore::Error`).
-/// `ignore::Error` never overrides `std::error::Error::source()`, so this
-/// recurses through its own public wrapper variants directly instead. Match
-/// arms are deliberately kept separate (not combined via `|`) to match
-/// AC-009's own verbatim-locked, independently-compiled function text.
-#[allow(clippy::match_same_arms)]
-fn innermost_walk_error(e: &ignore::Error) -> &ignore::Error {
-    match e {
-        ignore::Error::WithLineNumber { err, .. } => innermost_walk_error(err),
-        ignore::Error::WithPath { err, .. } => innermost_walk_error(err),
-        ignore::Error::WithDepth { err, .. } => innermost_walk_error(err),
-        ignore::Error::Partial(errs) if errs.len() == 1 => innermost_walk_error(&errs[0]),
-        other => other,
-    }
-}
-
-/// Match arms kept in AC-009's own verbatim-locked order (not reordered to
-/// merge identical `InvalidInput` bodies) so this function stays a direct,
-/// literal match against the independently-compiled text AC-009 quotes.
-#[allow(clippy::match_same_arms)]
-// AC-009 locks `unreachable!()` as the correct body for the WithLineNumber/WithPath/WithDepth
-// wrapper arms below -- `innermost_walk_error` provably strips them before `leaf` can hold one.
-#[allow(clippy::unreachable)]
 fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {
     use michi::ErrorCode;
     match kind {
@@ -586,22 +520,22 @@ fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {
     }
 }
 
+/// Classifies a walk error by its innermost cause.
+///
+/// `ignore::Error` does not expose its wrapped error through `source()`, so this unwraps the wrapper variants, and a
+/// `Partial` holding exactly one error, by recursing on them.
 fn walk_error_code(source: &ignore::Error) -> michi::ErrorCode {
     use michi::ErrorCode;
-    let leaf = innermost_walk_error(source);
-    match leaf {
+    match source {
+        ignore::Error::WithLineNumber { err, .. }
+        | ignore::Error::WithPath { err, .. }
+        | ignore::Error::WithDepth { err, .. } => walk_error_code(err),
+        ignore::Error::Partial(errs) if errs.len() == 1 => walk_error_code(&errs[0]),
         ignore::Error::Io(io_err) => io_error_code(io_err.kind()),
-        ignore::Error::Glob { .. } => ErrorCode::InvalidInput,
-        ignore::Error::Loop { .. } => ErrorCode::ExternalFailure,
-        ignore::Error::UnrecognizedFileType(_) => ErrorCode::InvalidInput,
-        ignore::Error::InvalidDefinition => ErrorCode::InvalidInput,
-        ignore::Error::Partial(errs) => {
-            let _ = errs;
-            ErrorCode::ExternalFailure
+        ignore::Error::Glob { .. } | ignore::Error::UnrecognizedFileType(_) | ignore::Error::InvalidDefinition => {
+            ErrorCode::InvalidInput
         }
-        ignore::Error::WithLineNumber { .. } => unreachable!("innermost_walk_error strips WithLineNumber"),
-        ignore::Error::WithPath { .. } => unreachable!("innermost_walk_error strips WithPath"),
-        ignore::Error::WithDepth { .. } => unreachable!("innermost_walk_error strips WithDepth"),
+        ignore::Error::Loop { .. } | ignore::Error::Partial(_) => ErrorCode::ExternalFailure,
     }
 }
 
@@ -610,15 +544,16 @@ mod walk_tests {
     use super::*;
 
     #[test]
-    fn ac009_walk_error_code_direct_glob_and_loop() {
+    fn walk_error_code_direct_glob_and_loop() {
         let glob_err = ignore::overrides::OverrideBuilder::new(".").add("[").unwrap_err();
         assert_eq!(walk_error_code(&glob_err), michi::ErrorCode::InvalidInput);
-        let loop_err = ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
+        let loop_err =
+            ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
         assert_eq!(walk_error_code(&loop_err), michi::ErrorCode::ExternalFailure);
     }
 
     #[test]
-    fn ac009_innermost_walk_error_unwraps_nested_wrappers() {
+    fn walk_error_code_unwraps_nested_wrappers() {
         let inner = ignore::Error::InvalidDefinition;
         let wrapped = ignore::Error::WithDepth {
             depth: 2,
@@ -627,8 +562,6 @@ mod walk_tests {
                 err: Box::new(ignore::Error::WithLineNumber { line: 1, err: Box::new(inner) }),
             }),
         };
-        assert!(matches!(innermost_walk_error(&wrapped), ignore::Error::InvalidDefinition));
-        // B-003: also assert the resulting ErrorCode, not just leaf identity.
         assert_eq!(walk_error_code(&wrapped), michi::ErrorCode::InvalidInput);
     }
 
@@ -656,19 +589,20 @@ mod walk_tests {
         assert_eq!(walk_error_code(&io_err), michi::ErrorCode::ExternalFailure);
     }
 
+    // An unrecursed `Partial` would classify as `ExternalFailure`, so `InvalidInput` proves the recursion.
     #[test]
-    fn innermost_walk_error_partial_single_recurses() {
-        let inner = ignore::Error::InvalidDefinition;
-        let partial = ignore::Error::Partial(vec![inner]);
-        assert!(matches!(innermost_walk_error(&partial), ignore::Error::InvalidDefinition));
+    fn walk_error_code_partial_single_recurses() {
+        let partial = ignore::Error::Partial(vec![ignore::Error::InvalidDefinition]);
+        assert_eq!(walk_error_code(&partial), michi::ErrorCode::InvalidInput);
     }
 
     #[test]
-    fn innermost_walk_error_partial_non_single_does_not_recurse() {
-        let partial_empty = ignore::Error::Partial(vec![]);
-        assert!(matches!(innermost_walk_error(&partial_empty), ignore::Error::Partial(v) if v.is_empty()));
-        let partial_two = ignore::Error::Partial(vec![ignore::Error::InvalidDefinition, ignore::Error::InvalidDefinition]);
-        assert!(matches!(innermost_walk_error(&partial_two), ignore::Error::Partial(v) if v.len() == 2));
+    fn walk_error_code_partial_single_recurses_through_wrappers() {
+        let partial = ignore::Error::Partial(vec![ignore::Error::WithPath {
+            path: std::path::PathBuf::from(".gitignore"),
+            err: Box::new(ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"))),
+        }]);
+        assert_eq!(walk_error_code(&partial), michi::ErrorCode::NotFound);
     }
 
     #[test]
@@ -677,16 +611,16 @@ mod walk_tests {
         assert_eq!(walk_error_code(&io_err), michi::ErrorCode::Forbidden);
     }
 }
-/// Converts `Self` into a `michi::DomainError`, preserving classification
-/// via a `monokl_code()` message prefix and the full `std::error::Error`
-/// source chain.
+/// Converts an error into a [`michi::DomainError`] for agent output.
 pub trait ToDomainError {
+    /// Returns a short `snake_case` code that is distinct for each error kind.
     fn monokl_code(&self) -> &'static str;
+    /// Converts the error, prefixing the message with [`monokl_code`](Self::monokl_code) and adding the rest of its
+    /// display text and its whole source chain as hints.
     fn to_domain_error(&self, ctx: ErrorContext<'_>) -> michi::DomainError;
 }
 
 impl ToDomainError for MonoklError {
-    /// One distinct `snake_case` string per variant.
     fn monokl_code(&self) -> &'static str {
         match self {
             MonoklError::Io(_) => "io",
@@ -706,7 +640,7 @@ impl ToDomainError for MonoklError {
         }
     }
 
-    #[allow(clippy::cast_possible_wrap)] // count/limit/size/cap are always small in practice; KvValue::Int requires i64.
+    #[expect(clippy::cast_possible_wrap, reason = "limits and caps are far below i64::MAX; KvValue::Int takes an i64")]
     fn to_domain_error(&self, ctx: ErrorContext<'_>) -> michi::DomainError {
         use michi::ErrorCode;
 
@@ -718,9 +652,10 @@ impl ToDomainError for MonoklError {
             | MonoklError::FileTooLarge { .. } => ErrorCode::InvalidInput,
             MonoklError::PathOutsideRoot { .. } | MonoklError::SymlinkRejected { .. } => ErrorCode::Forbidden,
             MonoklError::StaleDiskCache => ErrorCode::Conflict,
-            MonoklError::TokenizerInit | MonoklError::Json(_) | MonoklError::Git { .. } | MonoklError::LockPoisoned { .. } => {
-                ErrorCode::ExternalFailure
-            }
+            MonoklError::TokenizerInit
+            | MonoklError::Json(_)
+            | MonoklError::Git { .. }
+            | MonoklError::LockPoisoned { .. } => ErrorCode::ExternalFailure,
             MonoklError::Io(err) => io_error_code(err.io_kind()),
             MonoklError::Walk { source, .. } => walk_error_code(source),
         };
@@ -743,20 +678,20 @@ impl ToDomainError for MonoklError {
         }
 
         domain_err = match self {
-            MonoklError::TooManyTerms { count, limit } => domain_err
-                .hint(format!("you supplied {count} terms; the limit is {limit}"))
-                .recovery(
+            MonoklError::TooManyTerms { count, limit } => {
+                domain_err.hint(format!("you supplied {count} terms; the limit is {limit}")).recovery(
                     michi::RecoveryHint::new(ctx.command)
                         .param("maxTerms", michi::KvValue::Int(*limit as i64))
                         .reason("re-run with a shorter query"),
-                ),
-            MonoklError::FileTooLarge { path, size, cap } => domain_err
-                .hint(format!("{path} is {size} bytes; the cap is {cap} bytes"))
-                .recovery(
+                )
+            }
+            MonoklError::FileTooLarge { path, size, cap } => {
+                domain_err.hint(format!("{path} is {size} bytes; the cap is {cap} bytes")).recovery(
                     michi::RecoveryHint::new(ctx.command)
                         .param("maxBytes", michi::KvValue::Int(*cap as i64))
                         .reason("the file exceeds this workspace's size cap"),
-                ),
+                )
+            }
             MonoklError::InvalidGitRef { ref_, reason } => {
                 domain_err.hint(format!("{ref_:?} is not a valid git ref: {reason}"))
             }
@@ -781,7 +716,7 @@ mod error_tests {
     }
 
     #[test]
-    fn ac007_monokl_code_covers_13_distinct_nonempty_codes() {
+    fn monokl_code_is_distinct_and_nonempty_per_variant() {
         let errs: Vec<MonoklError> = vec![
             MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: ignore::Error::InvalidDefinition },
             grep_regex::RegexMatcherBuilder::new().build("(").unwrap_err().into(),
@@ -798,7 +733,7 @@ mod error_tests {
             MonoklError::LockPoisoned { context: "ctx" },
         ];
         assert_eq!(errs.len(), 13);
-        let codes: Vec<&str> = errs.iter().map(|e| e.monokl_code()).collect();
+        let codes: Vec<&str> = errs.iter().map(ToDomainError::monokl_code).collect();
         assert_eq!(
             codes,
             vec![
@@ -827,7 +762,7 @@ mod error_tests {
     }
 
     #[test]
-    fn ac008_error_code_mapping() {
+    fn error_code_mapping() {
         assert_eq!(
             MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/x") }.to_domain_error(ctx()).code,
             michi::ErrorCode::InvalidInput
@@ -843,9 +778,7 @@ mod error_tests {
             michi::ErrorCode::ExternalFailure
         );
 
-        // B-002: the remaining 7 non-Walk variants of the fixed ErrorCode
-        // mapping table (Walk's own fan-out is covered separately by the
-        // walk_error_code/AC-009 tests below).
+        // `Walk` is covered by the walk-specific tests.
         let regex_err: MonoklError = grep_regex::RegexMatcherBuilder::new().build("(").unwrap_err().into();
         assert_eq!(regex_err.to_domain_error(ctx()).code, michi::ErrorCode::InvalidInput);
         assert_eq!(
@@ -873,7 +806,7 @@ mod error_tests {
     }
 
     #[test]
-    fn ac011_retryable_always_false_even_for_external_failure_codes() {
+    fn retryable_always_false_even_for_external_failure_codes() {
         let err = MonoklError::LockPoisoned { context: "ctx" };
         let domain_err = err.to_domain_error(ctx());
         assert_eq!(domain_err.code, michi::ErrorCode::ExternalFailure);
@@ -884,28 +817,17 @@ mod error_tests {
     }
 
     #[test]
-    fn ac010_head_is_selfs_own_display_not_sources() {
-        // Walk's own Display carries `path`, which lives ONLY in Walk's own
-        // Display text, never in the wrapped ignore::Error's Display.
-        let err = MonoklError::Walk {
-            path: Utf8PathBuf::from("/some/root"),
-            source: ignore::Error::InvalidDefinition,
-        };
+    fn head_is_the_variants_own_display_not_its_sources() {
+        // `path` appears only in `Walk`'s own display text, never in the wrapped error's.
+        let err = MonoklError::Walk { path: Utf8PathBuf::from("/some/root"), source: ignore::Error::InvalidDefinition };
         let domain_err = err.to_domain_error(ctx());
         assert!(domain_err.message.contains("/some/root"), "got: {}", domain_err.message);
         assert!(domain_err.message.starts_with("walk: walker error at /some/root"), "got: {}", domain_err.message);
     }
 
-    /// B-001 regression: `head` must be exactly the FIRST LINE of self's own
-    /// Display text -- reproduces the exact corruption case a real
-    /// multi-line `Git { message }` produces before the fix (extra physical
-    /// lines with no `message:`/`help[`/`  ` prefix at all). Before the
-    /// fix, `head` was `self.to_string()` unsplit, so `domain_err.message`
-    /// would contain all three lines joined by raw `\n`; after the fix,
-    /// only the first line is in `message`, and the remaining lines are
-    /// separate `.hint()` entries.
+    // A raw newline in the message would add unprefixed lines to the rendered error.
     #[test]
-    fn ac010_b001_multiline_self_display_head_is_first_line_only() {
+    fn multiline_self_display_head_is_first_line_only() {
         let err = MonoklError::Git { operation: "show", message: "line one\nline two\nline three".to_string() };
         let domain_err = err.to_domain_error(ctx());
 
@@ -915,16 +837,10 @@ mod error_tests {
         assert_eq!(hint_strs, vec!["line two", "line three"]);
     }
 
-    /// B-004: covers both halves of AC-010 in one place -- self's own
-    /// multi-line Display is split with element 0 as `head` and the rest
-    /// pushed as hints (B-001's fix), AND those self-derived hints precede
-    /// the hints produced by the separate source-chain-flattening walk
-    /// (whose own link -- `ignore::Error::Io`'s Display -- is itself
-    /// multi-line here, exercising that no source() call exists on
-    /// `ignore::Error` per AC-009, so the walk terminates after exactly one
-    /// link). Ordering: self's extra lines first, then the source walk's.
+    // The error's own extra lines come before the source chain's. `ignore::Error` has no `source()`, so the chain stops
+    // after one multi-line link.
     #[test]
-    fn ac010_b004_self_and_source_multiline_hints_ordered() {
+    fn self_and_source_multiline_hints_ordered() {
         let inner_io = std::io::Error::other("io line one\nio line two");
         let source = ignore::Error::Io(inner_io);
         let err = MonoklError::Walk { path: Utf8PathBuf::from("root line one\nroot line two"), source };
@@ -936,12 +852,9 @@ mod error_tests {
     }
 
     #[test]
-    fn ac012_too_many_terms_enrichment() {
+    fn too_many_terms_enrichment() {
         let err = MonoklError::TooManyTerms { count: 12, limit: 8 };
         let domain_err = err.to_domain_error(ctx());
-        // B-011/AC-012: the exact `.hint(...)` literal, not a substring --
-        // a mutant altering the tail text ("; the limit is {limit}") would
-        // otherwise survive.
         assert!(
             domain_err.hints.iter().any(|h| h.as_str() == "you supplied 12 terms; the limit is 8"),
             "got: {:?}",
@@ -950,39 +863,29 @@ mod error_tests {
         let recovery = domain_err.recovery.expect("recovery must be set");
         assert_eq!(recovery.tool, "search");
         assert_eq!(recovery.params, vec![("maxTerms".to_string(), michi::KvValue::Int(8))]);
-        // B-005/AC-012: the exact `.reason(...)` literal is locked verbatim.
         assert_eq!(recovery.reason.as_deref(), Some("re-run with a shorter query"));
     }
 
     #[test]
-    fn ac012_file_too_large_enrichment() {
+    fn file_too_large_enrichment() {
         let err = MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 100, cap: 50 };
         let domain_err = err.to_domain_error(ctx());
-        // B-011/AC-012: the exact `.hint(...)` literal, not a substring --
-        // a mutant altering the tail text ("; the cap is {cap} bytes")
-        // would otherwise survive.
         assert!(
             domain_err.hints.iter().any(|h| h.as_str() == "/big is 100 bytes; the cap is 50 bytes"),
             "got: {:?}",
             domain_err.hints
         );
         let recovery = domain_err.recovery.expect("recovery must be set");
-        // B-005: sibling of ac012_too_many_terms_enrichment's own .tool check.
         assert_eq!(recovery.tool, "search");
         assert_eq!(recovery.params, vec![("maxBytes".to_string(), michi::KvValue::Int(50))]);
-        // B-005/AC-012: the exact `.reason(...)` literal is locked verbatim.
         assert_eq!(recovery.reason.as_deref(), Some("the file exceeds this workspace's size cap"));
     }
 
     #[test]
-    fn ac012_invalid_git_ref_enrichment_has_no_recovery() {
+    fn invalid_git_ref_enrichment_has_no_recovery() {
         let err = MonoklError::InvalidGitRef { ref_: "-x".to_string(), reason: "bad ref" };
         let domain_err = err.to_domain_error(ctx());
-        // B-011/AC-012: the exact `.hint(...)` literal, not a substring --
-        // this pins the `{ref_:?}` debug-quoting specifically (a mutant
-        // dropping the `:?` to plain `{ref_}` would drop the surrounding
-        // quotes and would have survived a mere `.contains("bad ref")`
-        // check, since "bad ref" appears either way).
+        // An exact match pins the quotes that `{ref_:?}` adds.
         assert!(
             domain_err.hints.iter().any(|h| h.as_str() == "\"-x\" is not a valid git ref: bad ref"),
             "got: {:?}",
@@ -992,7 +895,7 @@ mod error_tests {
     }
 
     #[test]
-    fn ac012_remaining_variants_get_no_enrichment_beyond_head() {
+    fn remaining_variants_get_no_enrichment_beyond_head() {
         let err = MonoklError::LockPoisoned { context: "ctx" };
         let domain_err = err.to_domain_error(ctx());
         assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
@@ -1000,7 +903,7 @@ mod error_tests {
     }
 
     #[test]
-    fn ac009_walk_glob_maps_to_invalid_input() {
+    fn walk_glob_maps_to_invalid_input() {
         let glob_err = ignore::overrides::OverrideBuilder::new(".").add("[").unwrap_err();
         assert!(matches!(glob_err, ignore::Error::Glob { .. }), "expected a bare Glob error, got: {glob_err:?}");
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: glob_err };
@@ -1008,16 +911,15 @@ mod error_tests {
     }
 
     #[test]
-    fn ac009_walk_io_not_found_maps_to_not_found() {
+    fn walk_io_not_found_maps_to_not_found() {
         let io_err = ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: io_err };
         assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::NotFound);
     }
 
     #[test]
-    fn ac009_walk_nested_glob_inside_with_path_inside_with_line_number() {
-        // The real shape a malformed .gitignore line produces per AC-009's
-        // own finding: a Glob wrapped in WithPath wrapped in WithLineNumber.
+    fn walk_nested_glob_inside_with_path_inside_with_line_number() {
+        // The shape a malformed `.gitignore` line produces.
         let nested = ignore::Error::WithLineNumber {
             line: 3,
             err: Box::new(ignore::Error::WithPath {
@@ -1030,8 +932,9 @@ mod error_tests {
     }
 
     #[test]
-    fn ac009_walk_loop_maps_to_external_failure() {
-        let loop_err = ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
+    fn walk_loop_maps_to_external_failure() {
+        let loop_err =
+            ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: loop_err };
         assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::ExternalFailure);
     }

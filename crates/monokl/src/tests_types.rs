@@ -109,7 +109,8 @@ fn trait_impl_kind_detail_camel_case_keys() {
 
 #[test]
 fn extra_unknown_key_silently_discarded() {
-    let json = r#"{"name":"foo","kind":"function","line":1,"owner":"RealOwner","impl_owner":"FakeOwner","bogusKey":123}"#;
+    let json =
+        r#"{"name":"foo","kind":"function","line":1,"owner":"RealOwner","impl_owner":"FakeOwner","bogusKey":123}"#;
     let e: SymbolEntry = serde_json::from_str(json).unwrap();
     assert_eq!(e.name, "foo");
     assert_eq!(e.owner.as_deref(), Some("RealOwner"));
@@ -287,11 +288,7 @@ use crate::types::DependencyTarget;
 
 #[test]
 fn dependency_target_internal_tag_snake_case_fields() {
-    let file = DependencyTarget::File {
-        specifier: "./foo".into(),
-        resolved: None,
-        is_relative: true,
-    };
+    let file = DependencyTarget::File { specifier: "./foo".into(), resolved: None, is_relative: true };
     let v = serde_json::to_value(&file).unwrap();
     let obj = v.as_object().unwrap();
     assert_eq!(obj.get("kind"), Some(&serde_json::Value::String("file".into())));
@@ -307,11 +304,7 @@ fn dependency_target_internal_tag_snake_case_fields() {
     let v2 = serde_json::to_value(&rust_path).unwrap();
     assert_eq!(v2.get("kind"), Some(&serde_json::Value::String("rustPath".into())));
 
-    let ns = DependencyTarget::Namespace {
-        segments: vec!["Foo".into(), "Bar".into()],
-        is_static: true,
-        alias: None,
-    };
+    let ns = DependencyTarget::Namespace { segments: vec!["Foo".into(), "Bar".into()], is_static: true, alias: None };
     let v3 = serde_json::to_value(&ns).unwrap();
     let obj3 = v3.as_object().unwrap();
     assert_eq!(obj3.get("kind"), Some(&serde_json::Value::String("namespace".into())));
@@ -351,8 +344,7 @@ fn dependency_target_option_fields_lenient_on_missing_key() {
     let v3: DependencyTarget = serde_json::from_str(json3).unwrap();
     assert!(matches!(v3, DependencyTarget::RustPath { resolved: None, .. }));
 
-    let err_specifier =
-        serde_json::from_str::<DependencyTarget>(r#"{"kind":"file","is_relative":false}"#).unwrap_err();
+    let err_specifier = serde_json::from_str::<DependencyTarget>(r#"{"kind":"file","is_relative":false}"#).unwrap_err();
     assert!(err_specifier.to_string().contains("missing field `specifier`"));
 
     let err_rust_path_segments =
@@ -468,8 +460,7 @@ fn jsx_element_entry_attributes_required_no_default_leniency() {
     let parsed: JsxElementEntry = serde_json::from_str(json).unwrap();
     assert_eq!(parsed.attributes.len(), 0);
 
-    let err_name =
-        serde_json::from_str::<JsxElementEntry>(r#"{"isHtml":true,"line":1,"attributes":[]}"#).unwrap_err();
+    let err_name = serde_json::from_str::<JsxElementEntry>(r#"{"isHtml":true,"line":1,"attributes":[]}"#).unwrap_err();
     assert!(err_name.to_string().contains("missing field `name`"));
 
     let err_is_html =
@@ -485,6 +476,8 @@ use crate::types::{GoData, JavaData, PythonData, RustData};
 
 #[test]
 fn empty_lang_data_structs_serialize_as_empty_object() {
+    fn assert_default<T: Default>() {}
+
     assert_eq!(serde_json::to_string(&RustData {}).unwrap(), "{}");
     assert_eq!(serde_json::to_string(&PythonData {}).unwrap(), "{}");
     assert_eq!(serde_json::to_string(&GoData {}).unwrap(), "{}");
@@ -495,7 +488,6 @@ fn empty_lang_data_structs_serialize_as_empty_object() {
     let _: GoData = serde_json::from_str("{}").unwrap();
     let _: JavaData = serde_json::from_str("{}").unwrap();
 
-    fn assert_default<T: Default>() {}
     assert_default::<RustData>();
     assert_default::<PythonData>();
     assert_default::<GoData>();
@@ -597,7 +589,6 @@ fn lang_data_ts_and_jsx_elements_methods() {
     }
 }
 
-
 #[test]
 fn extra_unknown_key_silently_discarded_across_cluster() {
     let json = r#"{"name":"foo","line":1,"reExport":false,"bogusKey":123}"#;
@@ -615,7 +606,6 @@ fn extra_unknown_key_silently_discarded_across_cluster() {
     let ld: LangData = serde_json::from_str(json4).unwrap();
     assert!(matches!(ld, LangData::Rust(_)));
 }
-
 
 #[test]
 fn binding_kind_external_tagging_shapes() {
@@ -681,7 +671,8 @@ fn rust_path_anchor_unknown_variant_and_second_key_rejected() {
 
 #[test]
 fn extra_unknown_key_silently_discarded_remaining_cluster_types() {
-    let json = r#"{"line":1,"target":{"kind":"file","specifier":"x","resolved":null,"is_relative":false},"bogusKey":123}"#;
+    let json =
+        r#"{"line":1,"target":{"kind":"file","specifier":"x","resolved":null,"is_relative":false},"bogusKey":123}"#;
     let rec: DependencyRecord = serde_json::from_str(json).unwrap();
     assert_eq!(rec.line, 1);
 
@@ -778,7 +769,8 @@ fn jsx_element_entry_full_round_trip_exact_shape() {
 
 #[test]
 fn ts_data_full_round_trip_exact_shape() {
-    let json = r#"{"jsxElements":[{"name":"Foo","isHtml":false,"line":3,"attributes":[]}],"typeOnlyImports":["TypeA"]}"#;
+    let json =
+        r#"{"jsxElements":[{"name":"Foo","isHtml":false,"line":3,"attributes":[]}],"typeOnlyImports":["TypeA"]}"#;
     let data: TsData = serde_json::from_str(json).unwrap();
     assert_eq!(data.jsx_elements.len(), 1);
     assert_eq!(data.jsx_elements[0].name, "Foo");
@@ -842,23 +834,14 @@ fn jsx_element_entry_line_negative_errors() {
 }
 
 #[test]
-fn spec_005_derive_lists_pinned() {
+fn dependency_types_derive_lists_pinned() {
     fn assert_copy_eq_derives<T: std::fmt::Debug + Clone + Copy + PartialEq + Eq>() {}
     fn assert_clone_derives<T: std::fmt::Debug + Clone>() {}
     fn assert_clone_default_derives<T: std::fmt::Debug + Clone + Default>() {}
 
-    // AC-003: BindingKind is a fieldless enum -- Copy/PartialEq/Eq required,
-    // matching SymbolKind's and Visibility's pattern.
     assert_copy_eq_derives::<BindingKind>();
 
-    // AC-008, AC-005, AC-002, AC-001, AC-009, AC-010, AC-011, AC-012: none of
-    // these carry Copy/PartialEq/Eq. A generic bound check can only prove a
-    // trait IS implemented, not that it is absent, so this pins Debug+Clone
-    // only -- it does not (and cannot, on stable Rust) prove the absence of
-    // Copy/PartialEq/Eq on any of these types. In particular, AC-002 states
-    // DependencyBinding must NOT derive PartialEq/Eq/Copy; that specific
-    // absence is not covered by this check and would need a different
-    // technique to pin.
+    // These bounds prove only presence; the absence of `Copy`, `PartialEq`, and `Eq` is not checked here.
     assert_clone_derives::<RustPathAnchor>();
     assert_clone_derives::<DependencyTarget>();
     assert_clone_derives::<DependencyBinding>();
@@ -868,18 +851,13 @@ fn spec_005_derive_lists_pinned() {
     assert_clone_derives::<JsxElementEntry>();
     assert_clone_derives::<LangData>();
 
-    // AC-017, AC-018: TsData and the four empty per-language data structs
-    // additionally derive Default.
     assert_clone_default_derives::<TsData>();
     assert_clone_default_derives::<RustData>();
     assert_clone_default_derives::<PythonData>();
     assert_clone_default_derives::<GoData>();
     assert_clone_default_derives::<JavaData>();
 
-    // AC-001, AC-009, AC-011: line:usize pinned exactly (not i64/u32) on
-    // DependencyRecord, ExportRecord, and JsxElementEntry, mirroring
-    // field_types_and_derives_pinned's compile-time binding for
-    // SymbolEntry.line (SPEC-003).
+    // Typed bindings pin `line` to exactly `usize`, which serde cannot distinguish from other integer types.
     let dep_json = r#"{"line":10,"target":{"kind":"file","specifier":"x","resolved":null,"is_relative":false}}"#;
     let dep: DependencyRecord = serde_json::from_str(dep_json).unwrap();
     let dep_line: usize = dep.line;
@@ -915,14 +893,10 @@ fn enum_declaration_block<'a>(src: &'a str, decl: &str) -> &'a str {
     panic!("no matching closing brace found for `{decl}`");
 }
 
-/// `as usize` discriminant casts (used elsewhere in this file to pin
-/// declaration order for the fieldless SymbolKind/Visibility/BindingKind
-/// enums) only apply to C-like enums with no data-carrying variants --
-/// RustPathAnchor, DependencyTarget, and LangData all have at least one
-/// variant that carries data, so that technique doesn't apply to them.
-/// Declaration order is instead pinned by checking that each variant name
-/// appears at a strictly increasing text position within the enum's own
-/// source declaration block, read directly from types.rs via `include_str!`.
+/// Asserts that each name appears in `block` after the previous one.
+///
+/// Enums with data-carrying variants cannot be cast to a discriminant, so their declaration order is checked in the
+/// source text instead.
 fn assert_declaration_order(block: &str, variants_in_order: &[&str]) {
     let mut last_end = 0usize;
     for name in variants_in_order {
@@ -935,17 +909,13 @@ fn assert_declaration_order(block: &str, variants_in_order: &[&str]) {
 
 #[test]
 fn rust_path_anchor_variant_set_and_declaration_order_pinned() {
-    // Exhaustive match with no wildcard arm: adding, removing, or renaming a
-    // variant is a compile error, pinning the variant SET.
-    fn assert_shape(v: RustPathAnchor) {
+    // With no wildcard arm, adding, removing, or renaming a variant fails to compile.
+    fn assert_shape(v: &RustPathAnchor) {
         match v {
-            RustPathAnchor::Crate => {}
-            RustPathAnchor::Super => {}
-            RustPathAnchor::Selff => {}
-            RustPathAnchor::Extern(_) => {}
+            RustPathAnchor::Crate | RustPathAnchor::Super | RustPathAnchor::Selff | RustPathAnchor::Extern(_) => {}
         }
     }
-    assert_shape(RustPathAnchor::Crate);
+    assert_shape(&RustPathAnchor::Crate);
 
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub enum RustPathAnchor");
@@ -954,14 +924,12 @@ fn rust_path_anchor_variant_set_and_declaration_order_pinned() {
 
 #[test]
 fn dependency_target_variant_set_and_declaration_order_pinned() {
-    fn assert_shape(v: DependencyTarget) {
+    fn assert_shape(v: &DependencyTarget) {
         match v {
-            DependencyTarget::File { .. } => {}
-            DependencyTarget::RustPath { .. } => {}
-            DependencyTarget::Namespace { .. } => {}
+            DependencyTarget::File { .. } | DependencyTarget::RustPath { .. } | DependencyTarget::Namespace { .. } => {}
         }
     }
-    assert_shape(DependencyTarget::Namespace { segments: vec![], is_static: false, alias: None });
+    assert_shape(&DependencyTarget::Namespace { segments: vec![], is_static: false, alias: None });
 
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub enum DependencyTarget");
@@ -970,16 +938,12 @@ fn dependency_target_variant_set_and_declaration_order_pinned() {
 
 #[test]
 fn lang_data_variant_set_and_declaration_order_pinned() {
-    fn assert_shape(v: LangData) {
+    fn assert_shape(v: &LangData) {
         match v {
-            LangData::Ts(_) => {}
-            LangData::Rust(_) => {}
-            LangData::Python(_) => {}
-            LangData::Go(_) => {}
-            LangData::Java(_) => {}
+            LangData::Ts(_) | LangData::Rust(_) | LangData::Python(_) | LangData::Go(_) | LangData::Java(_) => {}
         }
     }
-    assert_shape(LangData::Rust(RustData {}));
+    assert_shape(&LangData::Rust(RustData {}));
 
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub enum LangData");
@@ -1006,11 +970,7 @@ fn dependency_target_option_fields_key_present_and_typed_when_none() {
     assert!(obj3.contains_key("alias"));
     assert_eq!(obj3.get("alias"), Some(&serde_json::Value::Null));
 
-    // Compile-time type pins (AC-005): File.resolved and RustPath.resolved are
-    // exactly Option<Utf8PathBuf>, not Option<String> -- both serialize as a
-    // JSON string or null identically either way, so only a compile-time
-    // binding distinguishes them (same technique as field_types_and_derives_pinned
-    // and spec_005_derive_lists_pinned's `usize` pins).
+    // `Option<Utf8PathBuf>` and `Option<String>` serialize identically, so only a typed binding tells them apart.
     if let DependencyTarget::File { resolved, .. } = file {
         let pinned: Option<camino::Utf8PathBuf> = resolved;
         assert_eq!(pinned, None);
@@ -1023,10 +983,9 @@ fn dependency_target_option_fields_key_present_and_typed_when_none() {
 
 #[test]
 fn dependency_target_rust_path_anchor_required_field_errors() {
-    let err = serde_json::from_str::<DependencyTarget>(
-        r#"{"kind":"rustPath","segments":["crate","foo"],"resolved":null}"#,
-    )
-    .unwrap_err();
+    let err =
+        serde_json::from_str::<DependencyTarget>(r#"{"kind":"rustPath","segments":["crate","foo"],"resolved":null}"#)
+            .unwrap_err();
     assert!(err.to_string().contains("missing field `anchor`"));
 }
 
@@ -1044,10 +1003,7 @@ fn ts_data_unresolved_aliases_populated_full_round_trip() {
     let round: TsData = serde_json::from_str(json).unwrap();
     assert_eq!(round.unresolved_aliases, vec!["Foo".to_string(), "Bar".to_string()]);
 
-    // Compile-time type pin (AC-017): unresolved_aliases is exactly
-    // Vec<String>, not e.g. Vec<Utf8PathBuf> -- both serialize identically as
-    // a JSON array of strings, so only a compile-time binding distinguishes
-    // them.
+    // `Vec<String>` and `Vec<Utf8PathBuf>` serialize identically, so only a typed binding tells them apart.
     let pinned: Vec<String> = round.unresolved_aliases;
     assert_eq!(pinned, vec!["Foo".to_string(), "Bar".to_string()]);
 }
@@ -1067,63 +1023,11 @@ fn lang_data_jsx_elements_returns_full_slice_not_truncated() {
     assert_eq!(ts.jsx_elements()[2].name, "span");
 }
 
-/// Exhaustive compile-time field-type pinning for every field of every
-/// SPEC-005 type. serde treats several distinct Rust types identically on
-/// the wire (`String` vs `camino::Utf8PathBuf`, `Vec<String>` vs
-/// `Vec<Utf8PathBuf>`, a struct field vs its boxed equivalent, etc.), so a
-/// runtime assertion on a deserialized value can never distinguish the
-/// declared field type from a serde-equivalent sibling -- only a
-/// compile-time `let x: ExactType = value.field` binding can. Five prior
-/// fix rounds each pinned only the specific fields a gate pass happened to
-/// name; this test instead inventories and pins EVERY field/payload of all
-/// 14 SPEC-005 types in one place, so completeness is self-evident without
-/// cross-referencing types.rs by hand.
-///
-/// Full inventory (35 fields/payloads total; 6 already had a typed pin
-/// before this test -- DependencyRecord.line, ExportRecord.line,
-/// JsxElementEntry.line, DependencyTarget::File.resolved,
-/// DependencyTarget::RustPath.resolved, TsData.unresolved_aliases, see
-/// `spec_005_derive_lists_pinned` and
-/// `dependency_target_option_fields_key_present_and_typed_when_none` above
-/// -- this test does not duplicate those 6, only the remaining 29):
-///
-/// - BindingKind: fieldless (5 variants) -- nothing to pin.
-/// - RustPathAnchor: Crate/Super/Selff fieldless; Extern(String) payload --
-///   pinned below.
-/// - DependencyTarget::File: specifier: String, resolved: Option<Utf8PathBuf>
-///   (already pinned), is_relative: bool -- specifier and is_relative
-///   pinned below.
-/// - DependencyTarget::RustPath: segments: Vec<String>, anchor:
-///   RustPathAnchor, resolved: Option<Utf8PathBuf> (already pinned) --
-///   segments and anchor pinned below.
-/// - DependencyTarget::Namespace: segments: Vec<String>, is_static: bool,
-///   alias: Option<String> -- all 3 pinned below.
-/// - DependencyBinding: imported: String, local: String, kind: BindingKind
-///   -- all 3 pinned below.
-/// - DependencyRecord: line: usize (already pinned), bindings:
-///   Vec<DependencyBinding>, target: DependencyTarget -- bindings and
-///   target pinned below.
-/// - ExportRecord: name: String, line: usize (already pinned), re_export:
-///   bool -- name and re_export pinned below.
-/// - JsxAttribute: name: String, string_value: Option<String>,
-///   is_expression: bool, is_spread: bool -- all 4 pinned below.
-/// - JsxElementEntry: name: String, is_html: bool, line: usize (already
-///   pinned), attributes: Vec<JsxAttribute> -- name, is_html, attributes
-///   pinned below.
-/// - RustData, PythonData, GoData, JavaData: fieldless -- nothing to pin.
-/// - TsData: jsx_elements: Vec<JsxElementEntry>, type_only_imports:
-///   Vec<String>, unresolved_aliases: Vec<String> (already pinned) --
-///   jsx_elements and type_only_imports pinned below.
-/// - LangData: Ts(TsData), Rust(RustData), Python(PythonData), Go(GoData),
-///   Java(JavaData) -- all 5 wrapped payload types pinned below (each
-///   variant's own inner fields are covered by that type's own entry
-///   above, not repeated here).
-///
-/// Every `match`/`if let` below has no wildcard arm on the field-bearing
-/// side, so a variant rename or a field being added/removed is a compile
-/// error here too, not just a silent miss.
+// Serde treats types such as `String` and `Utf8PathBuf` identically on the wire, so only a typed binding can pin a
+// field's declared type. These two tests bind every field and payload of the dependency and per-language types not
+// already pinned above, and match without wildcards so an added or renamed field or variant fails to compile.
 #[test]
-fn spec_005_all_field_types_pinned() {
+fn dependency_types_all_field_types_pinned() {
     // -- RustPathAnchor::Extern(String) --
     match RustPathAnchor::Extern("foo".into()) {
         RustPathAnchor::Extern(payload) => {
@@ -1136,7 +1040,6 @@ fn spec_005_all_field_types_pinned() {
     }
 
     // -- DependencyTarget::File { specifier, is_relative, .. } --
-    // (resolved already pinned in dependency_target_option_fields_key_present_and_typed_when_none)
     let file = DependencyTarget::File { specifier: "spec".into(), resolved: None, is_relative: true };
     if let DependencyTarget::File { specifier, is_relative, .. } = file {
         let pinned_specifier: String = specifier;
@@ -1148,9 +1051,11 @@ fn spec_005_all_field_types_pinned() {
     }
 
     // -- DependencyTarget::RustPath { segments, anchor, .. } --
-    // (resolved already pinned in dependency_target_option_fields_key_present_and_typed_when_none)
-    let rust_path =
-        DependencyTarget::RustPath { segments: vec!["crate".into(), "foo".into()], anchor: RustPathAnchor::Crate, resolved: None };
+    let rust_path = DependencyTarget::RustPath {
+        segments: vec!["crate".into(), "foo".into()],
+        anchor: RustPathAnchor::Crate,
+        resolved: None,
+    };
     if let DependencyTarget::RustPath { segments, anchor, .. } = rust_path {
         let pinned_segments: Vec<String> = segments;
         let pinned_anchor: RustPathAnchor = anchor;
@@ -1184,7 +1089,6 @@ fn spec_005_all_field_types_pinned() {
     assert!(matches!(pinned_kind, BindingKind::Named));
 
     // -- DependencyRecord { bindings, target, .. } --
-    // (line already pinned in spec_005_derive_lists_pinned)
     let rec = DependencyRecord {
         line: 1,
         bindings: vec![DependencyBinding { imported: "a".into(), local: "b".into(), kind: BindingKind::Glob }],
@@ -1197,14 +1101,16 @@ fn spec_005_all_field_types_pinned() {
     assert!(matches!(pinned_target, DependencyTarget::File { .. }));
 
     // -- ExportRecord { name, re_export, .. } --
-    // (line already pinned in spec_005_derive_lists_pinned)
     let export_rec = ExportRecord { name: "n".into(), line: 1, re_export: true };
     let ExportRecord { name, re_export, .. } = export_rec;
     let pinned_name: String = name;
     let pinned_re_export: bool = re_export;
     assert_eq!(pinned_name, "n");
     assert!(pinned_re_export);
+}
 
+#[test]
+fn jsx_and_lang_data_all_field_types_pinned() {
     // -- JsxAttribute { name, string_value, is_expression, is_spread } --
     let attr = JsxAttribute { name: "n".into(), string_value: Some("v".into()), is_expression: true, is_spread: false };
     let JsxAttribute { name, string_value, is_expression, is_spread } = attr;
@@ -1218,7 +1124,6 @@ fn spec_005_all_field_types_pinned() {
     assert!(!pinned_is_spread);
 
     // -- JsxElementEntry { name, is_html, attributes, .. } --
-    // (line already pinned in spec_005_derive_lists_pinned)
     let elem = JsxElementEntry {
         name: "n".into(),
         is_html: true,
@@ -1234,7 +1139,6 @@ fn spec_005_all_field_types_pinned() {
     assert_eq!(pinned_attributes.len(), 1);
 
     // -- TsData { jsx_elements, type_only_imports, .. } --
-    // (unresolved_aliases already pinned in ts_data_unresolved_aliases_populated_full_round_trip)
     let ts_data = TsData {
         jsx_elements: vec![JsxElementEntry { name: "d".into(), is_html: true, line: 1, attributes: vec![] }],
         type_only_imports: vec!["T".into()],
@@ -1258,8 +1162,7 @@ fn spec_005_all_field_types_pinned() {
     }
     match LangData::Rust(RustData {}) {
         LangData::Rust(inner) => {
-            let pinned: RustData = inner;
-            let _ = pinned;
+            let _: RustData = inner;
         }
         LangData::Ts(_) | LangData::Python(_) | LangData::Go(_) | LangData::Java(_) => {
             panic!("expected Rust variant")
@@ -1267,8 +1170,7 @@ fn spec_005_all_field_types_pinned() {
     }
     match LangData::Python(PythonData {}) {
         LangData::Python(inner) => {
-            let pinned: PythonData = inner;
-            let _ = pinned;
+            let _: PythonData = inner;
         }
         LangData::Ts(_) | LangData::Rust(_) | LangData::Go(_) | LangData::Java(_) => {
             panic!("expected Python variant")
@@ -1276,8 +1178,7 @@ fn spec_005_all_field_types_pinned() {
     }
     match LangData::Go(GoData {}) {
         LangData::Go(inner) => {
-            let pinned: GoData = inner;
-            let _ = pinned;
+            let _: GoData = inner;
         }
         LangData::Ts(_) | LangData::Rust(_) | LangData::Python(_) | LangData::Java(_) => {
             panic!("expected Go variant")
@@ -1285,8 +1186,7 @@ fn spec_005_all_field_types_pinned() {
     }
     match LangData::Java(JavaData {}) {
         LangData::Java(inner) => {
-            let pinned: JavaData = inner;
-            let _ = pinned;
+            let _: JavaData = inner;
         }
         LangData::Ts(_) | LangData::Rust(_) | LangData::Python(_) | LangData::Go(_) => {
             panic!("expected Java variant")
@@ -1343,10 +1243,9 @@ fn code_block_symbol_signature_null_present_and_matched_vecs_skip_when_empty() {
 
 #[test]
 fn code_block_missing_required_field_errors() {
-    let err_file = serde_json::from_str::<CodeBlock>(
-        r#"{"lineStart":1,"lineEnd":5,"nodeKind":"function","code":"fn foo() {}"}"#,
-    )
-    .unwrap_err();
+    let err_file =
+        serde_json::from_str::<CodeBlock>(r#"{"lineStart":1,"lineEnd":5,"nodeKind":"function","code":"fn foo() {}"}"#)
+            .unwrap_err();
     assert!(err_file.to_string().contains("missing field `file`"));
 
     let err_line_start = serde_json::from_str::<CodeBlock>(
@@ -1361,16 +1260,14 @@ fn code_block_missing_required_field_errors() {
     .unwrap_err();
     assert!(err_line_end.to_string().contains("missing field `lineEnd`"));
 
-    let err_node_kind = serde_json::from_str::<CodeBlock>(
-        r#"{"file":"src/foo.rs","lineStart":1,"lineEnd":5,"code":"fn foo() {}"}"#,
-    )
-    .unwrap_err();
+    let err_node_kind =
+        serde_json::from_str::<CodeBlock>(r#"{"file":"src/foo.rs","lineStart":1,"lineEnd":5,"code":"fn foo() {}"}"#)
+            .unwrap_err();
     assert!(err_node_kind.to_string().contains("missing field `nodeKind`"));
 
-    let err_code = serde_json::from_str::<CodeBlock>(
-        r#"{"file":"src/foo.rs","lineStart":1,"lineEnd":5,"nodeKind":"function"}"#,
-    )
-    .unwrap_err();
+    let err_code =
+        serde_json::from_str::<CodeBlock>(r#"{"file":"src/foo.rs","lineStart":1,"lineEnd":5,"nodeKind":"function"}"#)
+            .unwrap_err();
     assert!(err_code.to_string().contains("missing field `code`"));
 }
 
@@ -1467,11 +1364,10 @@ fn ranked_block_flatten_key_shape_no_collision_and_parent_context_null() {
 
     assert!(!obj.contains_key("block"));
 
-    let code_block_keys: std::collections::BTreeSet<&str> = [
-        "file", "lineStart", "lineEnd", "nodeKind", "code", "symbolSignature", "matchedLines", "matchedKeywords",
-    ]
-    .into_iter()
-    .collect();
+    let code_block_keys: std::collections::BTreeSet<&str> =
+        ["file", "lineStart", "lineEnd", "nodeKind", "code", "symbolSignature", "matchedLines", "matchedKeywords"]
+            .into_iter()
+            .collect();
     let ranked_block_keys: std::collections::BTreeSet<&str> =
         ["bm25Score", "coverageBoost", "nodeTypeBoost", "finalScore", "rank", "parentContext"].into_iter().collect();
     assert!(code_block_keys.is_disjoint(&ranked_block_keys));
@@ -1485,18 +1381,8 @@ fn ranked_block_flatten_key_shape_no_collision_and_parent_context_null() {
     assert_eq!(obj.get("parentContext"), Some(&serde_json::Value::Null));
 }
 
-/// Pins RankedBlock's 7-field declaration order (AC-005) the same way
-/// code_block_symbol_signature_null_present_and_matched_vecs_skip_when_empty,
-/// parent_context_serialize_shape, and
-/// diagnostic_full_round_trip_exact_shape pin CodeBlock/ParentContext/
-/// Diagnostic: an exact `to_string` assertion, not merely a key-set
-/// comparison (which the flatten collision test above already does but
-/// cannot distinguish reordered fields, since BTreeSet is order-insensitive).
-/// matched_lines/matched_keywords are populated (non-empty) so all 8
-/// CodeBlock keys plus RankedBlock's own 6 keys -- 14 total -- appear in
-/// the output; an empty matched_lines/matched_keywords would omit 2 of
-/// them via skip_serializing_if (AC-007) and leave those two fields'
-/// relative position unpinned.
+// An exact string, unlike the key-set comparison above, pins field order. The matched vectors are non-empty so their
+// keys are not skipped and their positions are pinned too.
 #[test]
 fn ranked_block_declaration_order_pinned_via_exact_serialize() {
     let block = CodeBlock {
@@ -1551,7 +1437,6 @@ fn ranked_block_flatten_preserves_skip_serializing_if() {
     assert!(obj.contains_key("symbolSignature"));
     assert_eq!(obj.get("symbolSignature"), Some(&serde_json::Value::Null));
 }
-
 
 #[test]
 fn ranked_block_non_finite_scores_serialize_as_null() {
@@ -1677,8 +1562,8 @@ fn diagnostic_full_round_trip_exact_shape_and_field_count() {
 
     let Diagnostic { kind, path, message } = diag;
     let _: DiagnosticKind = kind;
-    let _: Option<camino::Utf8PathBuf> = path;
-    let _: String = message;
+    drop::<Option<camino::Utf8PathBuf>>(path);
+    drop::<String>(message);
 }
 
 #[test]
@@ -1705,53 +1590,22 @@ fn line_hit_field_types_and_derives_pinned() {
     assert_eq!(pinned_line_number, 42);
     assert_eq!(pinned_text, "fn foo() {}");
 
-    // LineHit has no serde derive (AC-015), so field order is unobservable
-    // on the wire and the destructure above binds by name, not position --
-    // neither can pin declaration order. Reusing the include_str!-based
-    // technique enum_declaration_block/assert_declaration_order already
-    // established for RustPathAnchor/DependencyTarget/LangData (data-carrying
-    // enums where `as usize` discriminant casts don't apply): read LineHit's
-    // own source block directly from types.rs and check each field name
-    // appears at a strictly increasing text position. enum_declaration_block
-    // is purely a brace-matched text search keyed off the leading
-    // declaration string, so it works unchanged for a `pub struct` block too.
+    // `LineHit` has no serde derive and destructuring binds by name, so field order is checked in the source.
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub struct LineHit");
     assert_declaration_order(block, &["line_number", "text"]);
 }
 
-/// Exhaustive compile-time field-type and derive-list pinning for every
-/// SPEC-006 type, mirroring `spec_005_all_field_types_pinned`'s rationale:
-/// serde treats several distinct Rust types identically on the wire
-/// (`String` vs `camino::Utf8PathBuf`, `f64` vs another float width,
-/// `usize` vs another integer width), so only a compile-time `let x:
-/// ExactType = value.field` binding -- not a runtime assertion -- can
-/// distinguish the declared field type from a serde-equivalent sibling.
-/// This test pins every field independently of whatever incidental typed
-/// bindings earlier tests in this file may already exercise (deliberately
-/// not deduplicated against them), so this test alone is a complete,
-/// self-contained inventory:
-///
-/// - CodeBlock: file: Utf8PathBuf, line_start: usize, line_end: usize,
-///   node_kind: SymbolKind, code: String, symbol_signature:
-///   Option<String>, matched_lines: Vec<usize>, matched_keywords:
-///   Vec<String> -- 8 fields, all pinned below.
-/// - ParentContext: kind: SymbolKind, name: String, line: usize -- 3
-///   fields, all pinned below.
-/// - RankedBlock: block: CodeBlock, bm25_score: f64, coverage_boost: f64,
-///   node_type_boost: f64, final_score: f64, rank: usize, parent_context:
-///   Option<ParentContext> -- 7 fields, all pinned below.
-/// - Diagnostic: kind: DiagnosticKind, path: Option<Utf8PathBuf>, message:
-///   String -- 3 fields, all pinned below.
-/// - DiagnosticKind: fieldless (3 variants) -- nothing to pin.
-/// - LineHit: line_number: usize, text: String -- 2 fields, already
-///   pinned in `line_hit_field_types_and_derives_pinned`; not repeated
-///   here since that test is this file's dedicated LineHit coverage.
+// Binds every field of the search result types to its exact type, since serde cannot tell `String` from
+// `Utf8PathBuf` or one numeric width from another. `LineHit` is covered by its own test above.
 #[test]
-fn spec_006_all_field_types_and_derives_pinned() {
+fn search_result_types_all_field_types_and_derives_pinned() {
     fn assert_full_derives<T: std::fmt::Debug + Clone + serde::Serialize + serde::de::DeserializeOwned>() {}
     fn assert_serialize_only_derives<T: std::fmt::Debug + Clone + serde::Serialize>() {}
-    fn assert_enum_derives<T: std::fmt::Debug + Clone + Copy + PartialEq + Eq + serde::Serialize + serde::de::DeserializeOwned>() {}
+    fn assert_enum_derives<
+        T: std::fmt::Debug + Clone + Copy + PartialEq + Eq + serde::Serialize + serde::de::DeserializeOwned,
+    >() {
+    }
 
     assert_full_derives::<CodeBlock>();
     assert_serialize_only_derives::<ParentContext>();
@@ -1811,8 +1665,15 @@ fn spec_006_all_field_types_and_derives_pinned() {
         rank: 5,
         parent_context: Some(ParentContext { kind: SymbolKind::Module, name: "m".into(), line: 1 }),
     };
-    let RankedBlock { block: inner_block, bm25_score, coverage_boost, node_type_boost, final_score, rank, parent_context } =
-        ranked;
+    let RankedBlock {
+        block: inner_block,
+        bm25_score,
+        coverage_boost,
+        node_type_boost,
+        final_score,
+        rank,
+        parent_context,
+    } = ranked;
     let pinned_inner_block: CodeBlock = inner_block;
     let pinned_bm25_score: f64 = bm25_score;
     let pinned_coverage_boost: f64 = coverage_boost;
@@ -1821,10 +1682,10 @@ fn spec_006_all_field_types_and_derives_pinned() {
     let pinned_rank: usize = rank;
     let pinned_parent_context: Option<ParentContext> = parent_context;
     assert_eq!(pinned_inner_block.code, "fn foo() {}");
-    assert_eq!(pinned_bm25_score, 1.0);
-    assert_eq!(pinned_coverage_boost, 2.0);
-    assert_eq!(pinned_node_type_boost, 3.0);
-    assert_eq!(pinned_final_score, 4.0);
+    assert_eq!(pinned_bm25_score.to_bits(), 1.0_f64.to_bits());
+    assert_eq!(pinned_coverage_boost.to_bits(), 2.0_f64.to_bits());
+    assert_eq!(pinned_node_type_boost.to_bits(), 3.0_f64.to_bits());
+    assert_eq!(pinned_final_score.to_bits(), 4.0_f64.to_bits());
     assert_eq!(pinned_rank, 5);
     assert!(pinned_parent_context.is_some());
 
@@ -1839,27 +1700,37 @@ fn spec_006_all_field_types_and_derives_pinned() {
     assert_eq!(pinned_diag_message, "m");
 }
 
+// A generic bound can only prove a trait is implemented. These probes also prove absence: the inherent `IS` shadows
+// the trait default only when the bound holds. Tests that use them include a positive control.
 struct SerProbe<T>(std::marker::PhantomData<T>);
-trait NotSer { const IS: bool = false; }
+trait NotSer {
+    const IS: bool = false;
+}
 impl<T> NotSer for SerProbe<T> {}
-impl<T: serde::Serialize> SerProbe<T> { const IS: bool = true; }
+impl<T: serde::Serialize> SerProbe<T> {
+    const IS: bool = true;
+}
 
 struct DeProbe<T>(std::marker::PhantomData<T>);
-trait NotDe { const IS: bool = false; }
+trait NotDe {
+    const IS: bool = false;
+}
 impl<T> NotDe for DeProbe<T> {}
-impl<'de, T: serde::de::DeserializeOwned> DeProbe<T> { const IS: bool = true; }
+impl<T: serde::de::DeserializeOwned> DeProbe<T> {
+    const IS: bool = true;
+}
 
 #[test]
 fn serde_asymmetric_types_absence_pinned() {
-    // Negative claims (the actual point of this test):
-    assert!(!SerProbe::<LineHit>::IS);
-    assert!(!DeProbe::<LineHit>::IS);
-    assert!(!DeProbe::<RankedBlock>::IS);
-    assert!(!DeProbe::<ParentContext>::IS);
-    // Positive controls (prove the probe itself isn't just always false):
-    assert!(SerProbe::<RankedBlock>::IS);
-    assert!(DeProbe::<CodeBlock>::IS);
-    assert!(DeProbe::<Diagnostic>::IS);
+    const {
+        assert!(!SerProbe::<LineHit>::IS);
+        assert!(!DeProbe::<LineHit>::IS);
+        assert!(!DeProbe::<RankedBlock>::IS);
+        assert!(!DeProbe::<ParentContext>::IS);
+        assert!(SerProbe::<RankedBlock>::IS);
+        assert!(DeProbe::<CodeBlock>::IS);
+        assert!(DeProbe::<Diagnostic>::IS);
+    }
 }
 
 use crate::types::Language;
@@ -1895,16 +1766,8 @@ fn language_variant_count_and_order_pinned() {
 
 #[test]
 fn language_camel_case_would_diverge_for_ts_and_js_only() {
-    // AC-008: "lowercase" lowercases every character uniformly with no
-    // word-boundary handling, unlike "camelCase" which lowercases only the
-    // leading character. For TypeScript/JavaScript specifically, the two
-    // rules would produce different wire strings; Rust/Python are single
-    // words so both rules agree. This test doesn't apply a real
-    // #[serde(rename_all = "camelCase")] to Language (it doesn't carry
-    // one) -- it fixes the two rules' well-known transform behavior
-    // (lowercase-every-char vs lowercase-leading-char-only) against the
-    // actual "lowercase" output already pinned above, and against literal
-    // strings for what "camelCase" would have produced.
+    // `lowercase` and `camelCase` agree on single-word variants but differ for `TypeScript` and `JavaScript`, so
+    // the multi-word names are compared against what `camelCase` would have produced.
     let typescript_json = serde_json::to_string(&Language::TypeScript).unwrap();
     let javascript_json = serde_json::to_string(&Language::JavaScript).unwrap();
     assert_eq!(typescript_json, "\"typescript\"");
@@ -1924,9 +1787,7 @@ fn language_camel_case_would_diverge_for_ts_and_js_only() {
 fn language_unknown_variant_errors_including_camel_case_form() {
     let err = serde_json::from_str::<Language>("\"typeScript\"").unwrap_err();
     assert!(err.to_string().contains("unknown variant"));
-    assert!(
-        err.to_string().contains("expected one of `typescript`, `javascript`, `rust`, `python`")
-    );
+    assert!(err.to_string().contains("expected one of `typescript`, `javascript`, `rust`, `python`"));
 
     let err2 = serde_json::from_str::<Language>("\"bogus\"").unwrap_err();
     assert!(err2.to_string().contains("unknown variant"));
@@ -1966,9 +1827,7 @@ fn search_limits_declaration_order_pinned_via_full_round_trip() {
     let reserialized = serde_json::to_string(&limits).unwrap();
     assert_eq!(reserialized, json);
 
-    // AC-004: no field carries any field-level serde attribute -- confirmed
-    // here for max_results/max_tokens by proving that skip_serializing_if
-    // is absent, not merely that a Some(_) value round-trips.
+    // `None` still emits its key, so there is no `skip_serializing_if`.
     let none_limits = SearchLimits { max_results: None, max_bytes: 100, max_tokens: None, max_candidates: 5 };
     let v = serde_json::to_value(&none_limits).unwrap();
     let obj = v.as_object().unwrap();
@@ -1976,15 +1835,12 @@ fn search_limits_declaration_order_pinned_via_full_round_trip() {
     assert_eq!(obj.get("maxTokens"), Some(&serde_json::Value::Null));
 }
 
-
 #[test]
 fn search_limits_required_fields_missing_errors() {
-    let err_max_bytes =
-        serde_json::from_str::<SearchLimits>(r#"{"maxCandidates":5}"#).unwrap_err();
+    let err_max_bytes = serde_json::from_str::<SearchLimits>(r#"{"maxCandidates":5}"#).unwrap_err();
     assert!(err_max_bytes.to_string().contains("missing field `maxBytes`"));
 
-    let err_max_candidates =
-        serde_json::from_str::<SearchLimits>(r#"{"maxBytes":100}"#).unwrap_err();
+    let err_max_candidates = serde_json::from_str::<SearchLimits>(r#"{"maxBytes":100}"#).unwrap_err();
     assert!(err_max_candidates.to_string().contains("missing field `maxCandidates`"));
 }
 
@@ -1997,9 +1853,7 @@ fn search_limits_extra_unknown_key_silently_discarded() {
 
 #[test]
 fn search_limits_option_fields_default_to_none_not_default_impl_values() {
-    // AC-005's central divergence: JSON-omission yields None, NOT
-    // Some(50)/Some(20_000) -- the values SearchLimits::default() would
-    // supply for the identical "caller didn't specify" intent.
+    // An omitted key becomes `None`, not the value `SearchLimits::default()` would supply.
     let json = r#"{"maxBytes":100,"maxCandidates":5}"#;
     let parsed: SearchLimits = serde_json::from_str(json).unwrap();
     assert_eq!(parsed.max_results, None);
@@ -2012,7 +1866,6 @@ fn search_limits_option_fields_default_to_none_not_default_impl_values() {
     assert_eq!(parsed_null.max_results, None);
     assert_eq!(parsed_null.max_tokens, None);
 }
-
 
 #[test]
 fn search_limits_negative_and_out_of_range_field_values_error() {
@@ -2114,7 +1967,6 @@ fn search_options_extra_unknown_key_silently_discarded() {
     assert_eq!(parsed.query, "q");
 }
 
-
 #[test]
 fn search_options_language_missing_or_null_deserializes_to_none() {
     let parsed: SearchOptions = serde_json::from_str(valid_search_options_json()).unwrap();
@@ -2124,9 +1976,7 @@ fn search_options_language_missing_or_null_deserializes_to_none() {
     let parsed2: SearchOptions = serde_json::from_str(json_null).unwrap();
     assert_eq!(parsed2.language, None);
 
-    // AC-001: no field carries any field-level serde attribute -- confirmed
-    // for language by proving skip_serializing_if is absent on the
-    // serialize direction too, not just that deserialize tolerates None.
+    // `None` still emits its key, so there is no `skip_serializing_if`.
     let v = serde_json::to_value(&parsed2).unwrap();
     let obj = v.as_object().unwrap();
     assert_eq!(obj.get("language"), Some(&serde_json::Value::Null));
@@ -2134,10 +1984,7 @@ fn search_options_language_missing_or_null_deserializes_to_none() {
 
 #[test]
 fn search_options_omission_diverges_from_default_impl_for_limits() {
-    // AC-002/AC-005: JSON-omission of maxResults/maxTokens inside "limits"
-    // yields None, never Some(50)/Some(20_000) -- SearchOptions' own
-    // Default impl (which delegates to SearchLimits::default()) is never
-    // consulted during deserialize.
+    // Deserializing never consults the `Default` impl, so omitted limits become `None`.
     let parsed: SearchOptions = serde_json::from_str(valid_search_options_json()).unwrap();
     assert_eq!(parsed.limits.max_results, None);
     assert_eq!(parsed.limits.max_tokens, None);
@@ -2154,11 +2001,8 @@ fn search_options_with_limits_json(limits_json_value: &str) -> String {
 
 #[test]
 fn search_options_limits_whole_value_type_mismatches() {
-    // AC-003 WHOLE-VALUE TYPE-MISMATCH CONTRACT: every non-object,
-    // non-array JSON value for "limits" fails with "invalid type: <found>,
-    // expected struct SearchLimits", except a magnitude-out-of-range number
-    // literal, which fails at parse time with "number out of range"
-    // instead (no "expected struct SearchLimits" text).
+    // Every non-object, non-array `limits` value is an "invalid type" error, except a number too large for `f64`,
+    // which fails earlier while parsing.
     for (limits_value, expected_snippet) in [
         (r#""default""#, "invalid type: string \"default\", expected struct SearchLimits"),
         ("50", "invalid type: integer `50`, expected struct SearchLimits"),
@@ -2166,14 +2010,8 @@ fn search_options_limits_whole_value_type_mismatches() {
         ("1.5", "invalid type: floating point `1.5`, expected struct SearchLimits"),
         ("5e2", "invalid type: floating point `500.0`, expected struct SearchLimits"),
         ("50.0", "invalid type: floating point `50.0`, expected struct SearchLimits"),
-        (
-            "18446744073709551616",
-            "invalid type: floating point `1.8446744073709552e+19`, expected struct SearchLimits",
-        ),
-        (
-            "-9223372036854775809",
-            "invalid type: floating point `-9.223372036854776e+18`, expected struct SearchLimits",
-        ),
+        ("18446744073709551616", "invalid type: floating point `1.8446744073709552e+19`, expected struct SearchLimits"),
+        ("-9223372036854775809", "invalid type: floating point `-9.223372036854776e+18`, expected struct SearchLimits"),
         ("true", "invalid type: boolean `true`, expected struct SearchLimits"),
         ("null", "invalid type: null, expected struct SearchLimits"),
     ] {
@@ -2199,14 +2037,8 @@ fn search_options_limits_array_form_contract() {
         ("[true]", "invalid type: boolean `true`, expected usize"),
         (r#"["a",1,2,3,4]"#, "invalid type: string \"a\", expected usize"),
         ("[1,-2,3,4,5]", "invalid value: integer `-2`, expected usize"),
-        (
-            r#"["a",1e309,3,4]"#,
-            "invalid type: string \"a\", expected usize",
-        ),
-        (
-            "[1,18446744073709551616,3,4]",
-            "invalid type: floating point `1.8446744073709552e+19`, expected usize",
-        ),
+        (r#"["a",1e309,3,4]"#, "invalid type: string \"a\", expected usize"),
+        ("[1,18446744073709551616,3,4]", "invalid type: floating point `1.8446744073709552e+19`, expected usize"),
     ] {
         let json = search_options_with_limits_json(limits_value);
         let err = serde_json::from_str::<SearchOptions>(&json).unwrap_err();
@@ -2273,7 +2105,15 @@ fn sample_ranked_block() -> RankedBlock {
         matched_lines: vec![2, 3],
         matched_keywords: vec!["Bar".into()],
     };
-    RankedBlock { block, bm25_score: 1.5, coverage_boost: 0.5, node_type_boost: 0.25, final_score: 2.25, rank: 1, parent_context: None }
+    RankedBlock {
+        block,
+        bm25_score: 1.5,
+        coverage_boost: 0.5,
+        node_type_boost: 0.25,
+        final_score: 2.25,
+        rank: 1,
+        parent_context: None,
+    }
 }
 
 fn sample_diagnostic() -> Diagnostic {
@@ -2299,7 +2139,7 @@ fn search_response_declaration_order_pinned_via_exact_serialize() {
 fn search_response_serialize_only_no_deserialize() {
     fn assert_serialize_only<T: std::fmt::Debug + Clone + serde::Serialize>() {}
     assert_serialize_only::<SearchResponse>();
-    assert!(!DeProbe::<SearchResponse>::IS);
+    const { assert!(!DeProbe::<SearchResponse>::IS) };
 }
 
 #[test]
@@ -2324,7 +2164,16 @@ use crate::types::SymbolsResult;
 use std::collections::BTreeMap;
 
 fn sample_symbol_entry(name: &str) -> SymbolEntry {
-    SymbolEntry { name: name.into(), kind: SymbolKind::Function, line: 1, signature: None, owner: None, trait_impl: None, visibility: None, kind_detail: None }
+    SymbolEntry {
+        name: name.into(),
+        kind: SymbolKind::Function,
+        line: 1,
+        signature: None,
+        owner: None,
+        trait_impl: None,
+        visibility: None,
+        kind_detail: None,
+    }
 }
 
 #[test]
@@ -2333,7 +2182,8 @@ fn symbols_result_declaration_order_pinned_via_exact_serialize() {
     files.insert("z/last.ts".into(), vec![sample_symbol_entry("foo")]);
     files.insert("a/first.ts".into(), vec![]);
     let diag = Diagnostic { kind: DiagnosticKind::Degraded, path: None, message: "x".into() };
-    let sym = SymbolsResult { files, total_symbol_count: 1, truncation_marker: Some("t".into()), diagnostics: vec![diag] };
+    let sym =
+        SymbolsResult { files, total_symbol_count: 1, truncation_marker: Some("t".into()), diagnostics: vec![diag] };
     let expected = r#"{"files":{"a/first.ts":[],"z/last.ts":[{"name":"foo","kind":"function","line":1,"signature":null}]},"totalSymbolCount":1,"truncationMarker":"t","diagnostics":[{"kind":"degraded","path":null,"message":"x"}]}"#;
     assert_eq!(serde_json::to_string(&sym).unwrap(), expected);
 }
@@ -2342,7 +2192,7 @@ fn symbols_result_declaration_order_pinned_via_exact_serialize() {
 fn symbols_result_serialize_only_no_deserialize() {
     fn assert_serialize_only<T: std::fmt::Debug + Clone + serde::Serialize>() {}
     assert_serialize_only::<SymbolsResult>();
-    assert!(!DeProbe::<SymbolsResult>::IS);
+    const { assert!(!DeProbe::<SymbolsResult>::IS) };
 }
 
 #[test]
@@ -2351,13 +2201,18 @@ fn symbols_result_files_deterministic_btreemap_key_order() {
     files.insert("z/last.ts".into(), vec![]);
     files.insert("a/first.ts".into(), vec![]);
     files.insert("m/mid.ts".into(), vec![]);
-    let sym = SymbolsResult { files: files.clone(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
+    let sym =
+        SymbolsResult { files: files.clone(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
 
-    // Determinism: re-serializing the identical input always produces the
-    // identical key order (AC-013) -- checked twice, and also checked that
-    // insertion order (z, a, m) does not determine output order.
+    // Serializing twice gives the same key order, and insertion order does not determine it.
     let v1 = serde_json::to_value(&sym).unwrap();
-    let v2 = serde_json::to_value(&SymbolsResult { files, total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] }).unwrap();
+    let v2 = serde_json::to_value(&SymbolsResult {
+        files,
+        total_symbol_count: 0,
+        truncation_marker: None,
+        diagnostics: vec![],
+    })
+    .unwrap();
     let keys1: Vec<&String> = v1.get("files").unwrap().as_object().unwrap().keys().collect();
     let keys2: Vec<&String> = v2.get("files").unwrap().as_object().unwrap().keys().collect();
     assert_eq!(keys1, keys2);
@@ -2369,7 +2224,8 @@ fn symbols_result_files_deterministic_btreemap_key_order() {
 
 #[test]
 fn symbols_result_empty_files_and_diagnostics_still_emit_keys() {
-    let sym = SymbolsResult { files: BTreeMap::new(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
+    let sym =
+        SymbolsResult { files: BTreeMap::new(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
     let v = serde_json::to_value(&sym).unwrap();
     let obj = v.as_object().unwrap();
     assert_eq!(obj.get("files"), Some(&serde_json::Value::Object(serde_json::Map::new())));
@@ -2379,21 +2235,10 @@ fn symbols_result_empty_files_and_diagnostics_still_emit_keys() {
 
 #[test]
 fn symbols_result_total_symbol_count_invariant_mandated_but_not_type_enforced() {
-    // AC-014: docs/spec/01-core-architecture.md:2546 mandates a test
-    // (symbols_total_count_is_accurate) asserting total_symbol_count ==
-    // sum(file.values().map(Vec::len)). Nothing in SymbolsResult's own
-    // declaration enforces this -- files and total_symbol_count are two
-    // independently-populated fields, so a value violating the invariant
-    // is constructible directly (SymbolsResult has no Deserialize impl, so
-    // this can only happen via direct construction, per finding #13's
-    // duplicate-path-collapse scenario, not JSON input).
+    // `total_symbol_count` should equal the number of entries in `files`, but the type does not enforce it. A
+    // duplicate input path, for example, collapses two map entries into one while the count still includes both.
     let mut files: BTreeMap<camino::Utf8PathBuf, Vec<SymbolEntry>> = BTreeMap::new();
     files.insert("a.ts".into(), vec![sample_symbol_entry("only-survivor")]);
-    // finding #13: a duplicate input path causes a later occurrence to
-    // overwrite an earlier one in the files BTreeMap, collapsing two
-    // per-file symbol counts into one map entry, while total_symbol_count
-    // (computed independently, e.g. as if both occurrences' counts were
-    // summed) does not correct for the collapse.
     let violating = SymbolsResult { files, total_symbol_count: 2, truncation_marker: None, diagnostics: vec![] };
 
     let actual_sum: usize = violating.files.values().map(Vec::len).sum();
@@ -2401,9 +2246,7 @@ fn symbols_result_total_symbol_count_invariant_mandated_but_not_type_enforced() 
     assert_eq!(actual_sum, 1);
     assert_eq!(violating.total_symbol_count, 2);
 
-    // Constructing this violating value did not fail or panic -- no
-    // type-level mechanism rejected it.
-    let _ = serde_json::to_string(&violating).unwrap();
+    assert!(serde_json::to_string(&violating).is_ok());
 }
 
 use crate::types::DependentsResult;
@@ -2428,7 +2271,7 @@ fn dependents_result_declaration_order_pinned_via_exact_serialize() {
 fn dependents_result_serialize_only_no_deserialize() {
     fn assert_serialize_only<T: std::fmt::Debug + Clone + serde::Serialize>() {}
     assert_serialize_only::<DependentsResult>();
-    assert!(!DeProbe::<DependentsResult>::IS);
+    const { assert!(!DeProbe::<DependentsResult>::IS) };
 }
 
 #[test]
@@ -2451,17 +2294,17 @@ fn dependents_result_empty_vecs_still_emit_key_and_null_truncation_marker() {
 }
 
 #[test]
-fn dependents_result_diagnostics_field_shape_matches_finding_1_context() {
-    // AC-016: DependentsResult declares diagnostics: Vec<Diagnostic> (this
-    // struct's own shape claim) -- finding #1 documents that no code path
-    // currently populates it, since WorkspaceIndex has no diagnostics field
-    // of its own to route a dropped-file signal through. This test locks
-    // only the declared shape: constructing a DependentsResult with a
-    // non-empty diagnostics vec compiles and serializes normally.
+fn dependents_result_diagnostics_field_shape_pinned() {
+    // Nothing populates `diagnostics` yet; this pins only its declared type.
     let diag = Diagnostic { kind: DiagnosticKind::Warning, path: None, message: "unrouted signal".into() };
     let dep = DependentsResult {
-        file: "src/foo.ts".into(), dependents: vec![], imports: vec![], total_dependent_count: 0,
-        total_import_count: 0, truncation_marker: None, diagnostics: vec![diag],
+        file: "src/foo.ts".into(),
+        dependents: vec![],
+        imports: vec![],
+        total_dependent_count: 0,
+        total_import_count: 0,
+        truncation_marker: None,
+        diagnostics: vec![diag],
     };
     let DependentsResult { diagnostics, .. } = dep;
     let pinned: Vec<Diagnostic> = diagnostics;
@@ -2469,29 +2312,36 @@ fn dependents_result_diagnostics_field_shape_matches_finding_1_context() {
 }
 
 #[test]
-fn spec_007_no_skip_serializing_if_on_any_result_vec_field() {
-    // AC-012: all 6 Vec fields across SearchResponse, SymbolsResult, and
-    // DependentsResult always emit their key even when empty -- a direct,
-    // verifiable contrast to CodeBlock.matched_lines/matched_keywords
-    // (SPEC-006 AC-002), which DO carry skip_serializing_if and omit their
-    // key when empty.
+fn no_skip_serializing_if_on_any_result_vec_field() {
+    // Every vector field of the result types emits its key even when empty, unlike `CodeBlock`'s matched vectors.
     let resp = SearchResponse {
-        results: vec![], total_blocks_before_truncation: 0, truncated: false,
-        truncation_marker: None, total_bytes: 0, total_tokens: 0, diagnostics: vec![],
+        results: vec![],
+        total_blocks_before_truncation: 0,
+        truncated: false,
+        truncation_marker: None,
+        total_bytes: 0,
+        total_tokens: 0,
+        diagnostics: vec![],
     };
     let resp_obj = serde_json::to_value(&resp).unwrap();
     let resp_obj = resp_obj.as_object().unwrap();
     assert!(resp_obj.contains_key("results"));
     assert!(resp_obj.contains_key("diagnostics"));
 
-    let sym = SymbolsResult { files: BTreeMap::new(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
+    let sym =
+        SymbolsResult { files: BTreeMap::new(), total_symbol_count: 0, truncation_marker: None, diagnostics: vec![] };
     let sym_obj = serde_json::to_value(&sym).unwrap();
     let sym_obj = sym_obj.as_object().unwrap();
     assert!(sym_obj.contains_key("diagnostics"));
 
     let dep = DependentsResult {
-        file: "f".into(), dependents: vec![], imports: vec![], total_dependent_count: 0,
-        total_import_count: 0, truncation_marker: None, diagnostics: vec![],
+        file: "f".into(),
+        dependents: vec![],
+        imports: vec![],
+        total_dependent_count: 0,
+        total_import_count: 0,
+        truncation_marker: None,
+        diagnostics: vec![],
     };
     let dep_obj = serde_json::to_value(&dep).unwrap();
     let dep_obj = dep_obj.as_object().unwrap();
@@ -2499,11 +2349,16 @@ fn spec_007_no_skip_serializing_if_on_any_result_vec_field() {
     assert!(dep_obj.contains_key("imports"));
     assert!(dep_obj.contains_key("diagnostics"));
 
-    // Contrast: CodeBlock's matched_lines/matched_keywords DO carry
-    // skip_serializing_if and omit their key when empty.
+    // Control: `CodeBlock` does skip its empty matched vectors.
     let block = CodeBlock {
-        file: "x".into(), line_start: 1, line_end: 2, node_kind: SymbolKind::Function,
-        code: "x".into(), symbol_signature: None, matched_lines: vec![], matched_keywords: vec![],
+        file: "x".into(),
+        line_start: 1,
+        line_end: 2,
+        node_kind: SymbolKind::Function,
+        code: "x".into(),
+        symbol_signature: None,
+        matched_lines: vec![],
+        matched_keywords: vec![],
     };
     let block_obj = serde_json::to_value(&block).unwrap();
     let block_obj = block_obj.as_object().unwrap();
@@ -2511,40 +2366,16 @@ fn spec_007_no_skip_serializing_if_on_any_result_vec_field() {
     assert!(!block_obj.contains_key("matchedKeywords"));
 }
 
-/// Exhaustive compile-time field-type and derive-list pinning for every
-/// SPEC-007 type, mirroring `spec_005_all_field_types_pinned` and
-/// `spec_006_all_field_types_and_derives_pinned`'s rationale: serde treats
-/// several distinct Rust types identically on the wire (`String` vs
-/// `camino::Utf8PathBuf`, `usize` vs another integer width), so only a
-/// compile-time `let x: ExactType = value.field` binding -- not a
-/// runtime assertion -- can distinguish the declared field type from a
-/// serde-equivalent sibling. This test pins every field of all 6 SPEC-007
-/// types independently of any incidental typed binding earlier tests in
-/// this file may already exercise, so it alone is a complete inventory:
-///
-/// - SearchOptions: query: String, path: Utf8PathBuf, allow_tests: bool,
-///   no_gitignore: bool, limits: SearchLimits, exact: bool, language:
-///   Option<Language> -- 7 fields, all pinned below.
-/// - SearchLimits: max_results: Option<usize>, max_bytes: usize,
-///   max_tokens: Option<usize>, max_candidates: usize -- 4 fields, all
-///   pinned below.
-/// - Language: fieldless (4 variants) -- nothing to pin.
-/// - SearchResponse: results: Vec<RankedBlock>,
-///   total_blocks_before_truncation: usize, truncated: bool,
-///   truncation_marker: Option<String>, total_bytes: usize, total_tokens:
-///   usize, diagnostics: Vec<Diagnostic> -- 7 fields, all pinned below.
-/// - SymbolsResult: files: BTreeMap<Utf8PathBuf, Vec<SymbolEntry>>,
-///   total_symbol_count: usize, truncation_marker: Option<String>,
-///   diagnostics: Vec<Diagnostic> -- 4 fields, all pinned below.
-/// - DependentsResult: file: Utf8PathBuf, dependents: Vec<Utf8PathBuf>,
-///   imports: Vec<Utf8PathBuf>, total_dependent_count: usize,
-///   total_import_count: usize, truncation_marker: Option<String>,
-///   diagnostics: Vec<Diagnostic> -- 7 fields, all pinned below.
+// Binds every field of the search command's option and result types to its exact type, since serde cannot tell
+// `String` from `Utf8PathBuf` or one integer width from another.
 #[test]
-fn spec_007_all_field_types_and_derives_pinned() {
+fn search_command_types_all_field_types_and_derives_pinned() {
     fn assert_full_derives<T: std::fmt::Debug + Clone + serde::Serialize + serde::de::DeserializeOwned>() {}
     fn assert_serialize_only_derives<T: std::fmt::Debug + Clone + serde::Serialize>() {}
-    fn assert_enum_derives<T: std::fmt::Debug + Clone + Copy + PartialEq + Eq + serde::Serialize + serde::de::DeserializeOwned>() {}
+    fn assert_enum_derives<
+        T: std::fmt::Debug + Clone + Copy + PartialEq + Eq + serde::Serialize + serde::de::DeserializeOwned,
+    >() {
+    }
 
     assert_full_derives::<SearchOptions>();
     assert_full_derives::<SearchLimits>();
@@ -2602,7 +2433,15 @@ fn spec_007_all_field_types_and_derives_pinned() {
         total_tokens: 3,
         diagnostics: vec![sample_diagnostic()],
     };
-    let SearchResponse { results, total_blocks_before_truncation, truncated, truncation_marker, total_bytes, total_tokens, diagnostics } = resp;
+    let SearchResponse {
+        results,
+        total_blocks_before_truncation,
+        truncated,
+        truncation_marker,
+        total_bytes,
+        total_tokens,
+        diagnostics,
+    } = resp;
     let pinned_results: Vec<RankedBlock> = results;
     let pinned_total_blocks: usize = total_blocks_before_truncation;
     let pinned_truncated: bool = truncated;
@@ -2621,7 +2460,12 @@ fn spec_007_all_field_types_and_derives_pinned() {
     // -- SymbolsResult { files, total_symbol_count, truncation_marker, diagnostics } --
     let mut files: BTreeMap<camino::Utf8PathBuf, Vec<SymbolEntry>> = BTreeMap::new();
     files.insert("a.ts".into(), vec![sample_symbol_entry("s")]);
-    let sym = SymbolsResult { files, total_symbol_count: 1, truncation_marker: Some("m".into()), diagnostics: vec![sample_diagnostic()] };
+    let sym = SymbolsResult {
+        files,
+        total_symbol_count: 1,
+        truncation_marker: Some("m".into()),
+        diagnostics: vec![sample_diagnostic()],
+    };
     let SymbolsResult { files, total_symbol_count, truncation_marker, diagnostics } = sym;
     let pinned_files: BTreeMap<camino::Utf8PathBuf, Vec<SymbolEntry>> = files;
     let pinned_total_symbol_count: usize = total_symbol_count;
@@ -2643,7 +2487,15 @@ fn spec_007_all_field_types_and_derives_pinned() {
         truncation_marker: Some("m".into()),
         diagnostics: vec![sample_diagnostic()],
     };
-    let DependentsResult { file, dependents, imports, total_dependent_count, total_import_count, truncation_marker, diagnostics } = dep;
+    let DependentsResult {
+        file,
+        dependents,
+        imports,
+        total_dependent_count,
+        total_import_count,
+        truncation_marker,
+        diagnostics,
+    } = dep;
     let pinned_dep_file: camino::Utf8PathBuf = file;
     let pinned_dependents: Vec<camino::Utf8PathBuf> = dependents;
     let pinned_imports: Vec<camino::Utf8PathBuf> = imports;
@@ -2660,15 +2512,10 @@ fn spec_007_all_field_types_and_derives_pinned() {
     assert_eq!(pinned_dep_diagnostics.len(), 1);
 }
 
-/// For each field name in `fields_in_order`, finds that field's `pub
-/// <name>:` declaration in `block` (which must occur strictly after the
-/// previous field's own declaration, enforcing declaration order the same
-/// way `assert_declaration_order` does) and asserts that the source text
-/// between the previous field's match and this field's match contains no
-/// `#[serde(` attribute line. This is a structural, source-level check --
-/// not a runtime behavioral proxy -- so it catches ANY field-level serde
-/// attribute (`skip_serializing_if`, `default`, `rename`, `flatten`, or any
-/// other), regardless of which specific attribute a future edit adds.
+/// Asserts that the fields appear in order in `block` and that no `#[serde(` attribute precedes any of them.
+///
+/// Checking the source catches every kind of field-level serde attribute, where a behavioral test can only rule out
+/// the one attribute it exercises.
 fn assert_no_field_level_serde_attribute(block: &str, fields_in_order: &[&str]) {
     let mut cursor = 0usize;
     for field in fields_in_order {
@@ -2680,53 +2527,15 @@ fn assert_no_field_level_serde_attribute(block: &str, fields_in_order: &[&str]) 
         let preceding = &block[cursor..field_start];
         assert!(
             !preceding.contains("#[serde("),
-            "field `{field}` is preceded by a `#[serde(` attribute -- expected none per this field's \"no field-level serde attribute\" spec claim, found in: {preceding:?}"
+            "field `{field}` is preceded by a `#[serde(` attribute -- expected none, found in: {preceding:?}"
         );
         cursor = field_start + needle.len();
     }
 }
 
-/// Closes the field-level-serde-attribute-absence defect class structurally
-/// (SPEC-007 fix round 3), replacing the per-attribute-type behavioral
-/// proxies added in rounds 1 (`skip_serializing_if` absence via
-/// `to_value`/`contains_key`, e.g. `spec_007_no_skip_serializing_if_on_any_result_vec_field`
-/// above) and 2 (`#[serde(default)]` absence, found missing for
-/// `SearchLimits.max_tokens`/`SearchOptions.language` by the round-2 gate).
-/// Each of those proxies could only ever prove the absence of the one
-/// attribute type it happened to check for -- a future edit adding a
-/// *different* field-level attribute (e.g. `rename`, `flatten`, or any
-/// attribute not yet tested for) to any of these fields would pass both
-/// prior tests undetected. This test instead reads each of the 5 struct
-/// types' own source declaration directly from `types.rs` via
-/// `include_str!` and `enum_declaration_block` (already used for
-/// declaration-order pinning throughout this file, and confirmed to work
-/// unchanged on `pub struct` blocks by `line_hit_field_types_and_derives_pinned`),
-/// then asserts -- for every field each type's own spec criterion claims
-/// carries "no field-level serde attribute" -- that no `#[serde(` line
-/// appears anywhere between that field and the previous one. This makes it
-/// structurally impossible for ANY field-level serde attribute, of any
-/// kind, to be added to any of these 29 fields without breaking this test.
-///
-/// Field inventory, one-to-one with each type's own acceptance criterion:
-/// - SearchOptions (AC-001, 7 fields): query, path, allow_tests,
-///   no_gitignore, limits, exact, language.
-/// - SearchLimits (AC-004, 4 fields): max_results, max_bytes, max_tokens,
-///   max_candidates.
-/// - SearchResponse (AC-011, 7 fields): results,
-///   total_blocks_before_truncation, truncated, truncation_marker,
-///   total_bytes, total_tokens, diagnostics.
-/// - SymbolsResult (AC-013, 4 fields): files, total_symbol_count,
-///   truncation_marker, diagnostics.
-/// - DependentsResult (AC-015, 7 fields): file, dependents, imports,
-///   total_dependent_count, total_import_count, truncation_marker,
-///   diagnostics.
-///
-/// Language (AC-007) is deliberately excluded: it is a fieldless enum whose
-/// criterion claims the OPPOSITE for its variants (each carries an explicit
-/// `#[cfg_attr(feature = "cli", value(name = "..."))]`), not an absence
-/// claim -- there is nothing for this test's absence check to assert there.
+// `Language` is excluded: its variants deliberately carry `cfg_attr` attributes for clap.
 #[test]
-fn spec_007_field_level_attribute_absence_pinned_via_source_inspection() {
+fn search_command_types_have_no_field_level_serde_attributes() {
     let src = include_str!("types.rs");
 
     let search_options_block = enum_declaration_block(src, "pub struct SearchOptions");
@@ -2780,31 +2589,25 @@ use crate::types::TsconfigMode;
 
 #[test]
 fn tsconfig_mode_variant_set_and_declaration_order_pinned() {
-    // Exhaustive match with no wildcard arm: adding, removing, or renaming a
-    // variant is a compile error, pinning the variant SET.
-    fn assert_shape(v: TsconfigMode) {
+    // With no wildcard arm, adding, removing, or renaming a variant fails to compile.
+    fn assert_shape(v: &TsconfigMode) {
         match v {
-            TsconfigMode::Auto => {}
-            TsconfigMode::Manual(_) => {}
-            TsconfigMode::Skip => {}
+            TsconfigMode::Auto | TsconfigMode::Manual(_) | TsconfigMode::Skip => {}
         }
     }
-    assert_shape(TsconfigMode::Auto);
+    assert_shape(&TsconfigMode::Auto);
 
-    // Manual carries data, so `as usize` discriminant casts don't apply --
-    // same technique as RustPathAnchor/DependencyTarget/LangData.
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub enum TsconfigMode");
     assert_declaration_order(block, &["Auto", "Manual", "Skip"]);
 }
 #[test]
 fn tsconfig_mode_no_serde_and_manual_payload_type_pinned() {
-    // AC-002: no Serialize/Deserialize of any kind, at the enum level,
-    // regardless of which variant carries data.
-    assert!(!SerProbe::<TsconfigMode>::IS);
-    assert!(!DeProbe::<TsconfigMode>::IS);
-    // Positive control (proves the probe itself isn't just always false).
-    assert!(DeProbe::<CodeBlock>::IS);
+    const {
+        assert!(!SerProbe::<TsconfigMode>::IS);
+        assert!(!DeProbe::<TsconfigMode>::IS);
+        assert!(DeProbe::<CodeBlock>::IS);
+    }
 
     match TsconfigMode::Manual(camino::Utf8PathBuf::from("tsconfig.json")) {
         TsconfigMode::Manual(payload) => {
@@ -2814,52 +2617,54 @@ fn tsconfig_mode_no_serde_and_manual_payload_type_pinned() {
         TsconfigMode::Auto | TsconfigMode::Skip => panic!("expected Manual variant"),
     }
 }
-/// Trivial generalization of `SerProbe`/`DeProbe` (defined above) to `Default`
-/// -- the same const-specialization technique proving trait-impl ABSENCE
-/// (not just presence, which a plain generic bound-check function can prove)
-/// applies unchanged to any trait, not just Serialize/Deserialize.
 struct DefaultProbe<T>(std::marker::PhantomData<T>);
-trait NotDefault { const IS: bool = false; }
+trait NotDefault {
+    const IS: bool = false;
+}
 impl<T> NotDefault for DefaultProbe<T> {}
-impl<T: Default> DefaultProbe<T> { const IS: bool = true; }
+impl<T: Default> DefaultProbe<T> {
+    const IS: bool = true;
+}
 
-/// Further generalizations of `DefaultProbe` (immediately above) to `Copy`,
-/// `PartialEq`, and `Eq` -- each a direct 4-line copy of the same
-/// const-specialization shape, substituting only the probed trait. Exercised
-/// in T-019's consolidated derive-list sweep against TsconfigMode and
-/// WorkspaceOptions, with SymbolKind (already known to derive Copy,
-/// PartialEq, Eq) as positive control.
 struct CopyProbe<T>(std::marker::PhantomData<T>);
-trait NotCopy { const IS: bool = false; }
+trait NotCopy {
+    const IS: bool = false;
+}
 impl<T> NotCopy for CopyProbe<T> {}
-impl<T: Copy> CopyProbe<T> { const IS: bool = true; }
+impl<T: Copy> CopyProbe<T> {
+    const IS: bool = true;
+}
 
 struct PartialEqProbe<T>(std::marker::PhantomData<T>);
-trait NotPartialEq { const IS: bool = false; }
+trait NotPartialEq {
+    const IS: bool = false;
+}
 impl<T> NotPartialEq for PartialEqProbe<T> {}
-impl<T: PartialEq> PartialEqProbe<T> { const IS: bool = true; }
+impl<T: PartialEq> PartialEqProbe<T> {
+    const IS: bool = true;
+}
 
 struct EqProbe<T>(std::marker::PhantomData<T>);
-trait NotEq { const IS: bool = false; }
+trait NotEq {
+    const IS: bool = false;
+}
 impl<T> NotEq for EqProbe<T> {}
-impl<T: Eq> EqProbe<T> { const IS: bool = true; }
+impl<T: Eq> EqProbe<T> {
+    const IS: bool = true;
+}
 
 #[test]
 fn tsconfig_mode_no_default_impl_pinned() {
-    // AC-006: no #[derive(Default)] and no hand-written impl Default anywhere
-    // -- a categorically different absence from SPEC-007's inert-but-present
-    // Default impls on SearchOptions/SearchLimits.
-    assert!(!DefaultProbe::<TsconfigMode>::IS);
-    // Positive control (proves the probe itself isn't just always false).
-    assert!(DefaultProbe::<TsData>::IS);
+    const {
+        assert!(!DefaultProbe::<TsconfigMode>::IS);
+        assert!(DefaultProbe::<TsData>::IS);
+    }
 }
 use crate::types::WorkspaceOptions;
 
 #[test]
 fn workspace_options_field_declaration_order_and_types_pinned() {
-    // WorkspaceOptions has no serde derive (AC-003), so field order is
-    // unobservable on the wire -- same situation as LineHit (SPEC-006
-    // AC-015). Reuse the include_str! technique.
+    // `WorkspaceOptions` has no serde derive, so field order is checked in the source.
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub struct WorkspaceOptions");
     assert_declaration_order(block, &["root", "tsconfig"]);
@@ -2873,18 +2678,14 @@ fn workspace_options_field_declaration_order_and_types_pinned() {
 }
 #[test]
 fn workspace_options_no_serde_impl_pinned() {
-    // AC-003: no Serialize/Deserialize whatsoever -- doubly true given
-    // tsconfig's own type (TsconfigMode) also lacks a serde derive.
-    assert!(!SerProbe::<WorkspaceOptions>::IS);
-    assert!(!DeProbe::<WorkspaceOptions>::IS);
-    // Positive control (proves the probe itself isn't just always false).
-    assert!(SerProbe::<CodeBlock>::IS);
+    const {
+        assert!(!SerProbe::<WorkspaceOptions>::IS);
+        assert!(!DeProbe::<WorkspaceOptions>::IS);
+        assert!(SerProbe::<CodeBlock>::IS);
+    }
 }
 #[test]
 fn workspace_options_new_sets_auto_and_accepts_into_utf8pathbuf() {
-    // AC-004: root accepts &str, String, and Utf8PathBuf alike via impl
-    // Into<Utf8PathBuf>; new() sets tsconfig to TsconfigMode::Auto
-    // unconditionally.
     let from_str = WorkspaceOptions::new("src");
     assert_eq!(from_str.root.as_str(), "src");
     assert!(matches!(from_str.tsconfig, TsconfigMode::Auto));
@@ -2900,8 +2701,6 @@ fn workspace_options_new_sets_auto_and_accepts_into_utf8pathbuf() {
 
 #[test]
 fn workspace_options_with_tsconfig_mutates_tsconfig_leaves_root_and_chains() {
-    // AC-005: mut self by value, sets tsconfig to the given mode, leaves
-    // root untouched, returns Self for chaining.
     let opts = WorkspaceOptions::new("src").with_tsconfig(TsconfigMode::Manual("tsconfig.custom.json".into()));
     assert_eq!(opts.root.as_str(), "src");
     match opts.tsconfig {
@@ -2913,29 +2712,16 @@ fn workspace_options_with_tsconfig_mutates_tsconfig_leaves_root_and_chains() {
     assert_eq!(skipped.root.as_str(), "root2");
     assert!(matches!(skipped.tsconfig, TsconfigMode::Skip));
 }
-/// Structural, source-level check of whether a given attribute (e.g.
-/// `#[must_use]`) appears anywhere in a given item's attribute run -- the
-/// contiguous block of `#[...]`-prefixed lines between the nearest
-/// preceding `}` and the item itself -- within a block of source text.
-/// Scans the WHOLE run, not just the single line immediately above the
-/// item: attributes and doc comments are order-independent on a Rust item,
-/// so an attribute placed above the item's own doc comment still applies
-/// and must still be detected. The same include_str! technique
-/// `assert_no_field_level_serde_attribute` established for field-level
-/// serde attributes, generalized here to an item-level attribute whose
-/// violation is otherwise only a compile-time WARNING (or, for
-/// #[non_exhaustive] in T-019, no runtime effect at all), not a
-/// runtime-observable difference, so it cannot be proven any other way.
+
+/// Asserts whether `attr` appears among the `#[...]` lines between the previous `}` and `item_signature`.
+///
+/// The whole attribute run is scanned because an attribute may sit above the item's doc comment. Only attribute lines
+/// are checked, so prose mentioning the attribute in a doc comment does not count.
 fn assert_attr_in_item_attribute_run(block: &str, attr: &str, item_signature: &str, expect_present: bool) {
-    let item_pos = block
-        .find(item_signature)
-        .unwrap_or_else(|| panic!("item signature `{item_signature}` not found"));
+    let item_pos = block.find(item_signature).unwrap_or_else(|| panic!("item signature `{item_signature}` not found"));
     let run_start = block[..item_pos].rfind('}').map_or(0, |i| i + 1);
-    let has_attr = block[run_start..item_pos]
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("#["))
-        .any(|l| l.contains(attr));
+    let has_attr =
+        block[run_start..item_pos].lines().map(str::trim).filter(|l| l.starts_with("#[")).any(|l| l.contains(attr));
     assert_eq!(
         has_attr, expect_present,
         "attribute `{attr}` in the attribute run preceding `{item_signature}`: expected present={expect_present}, found={has_attr}"
@@ -2944,18 +2730,16 @@ fn assert_attr_in_item_attribute_run(block: &str, attr: &str, item_signature: &s
 
 #[test]
 fn workspace_options_must_use_asymmetry_pinned() {
-    // AC-004/AC-005: with_tsconfig carries #[must_use]; new does not -- a
-    // deliberate asymmetry, not a uniform rule across both methods.
+    // Only the builder step is `#[must_use]`; the asymmetry is deliberate.
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "impl WorkspaceOptions");
     assert_attr_in_item_attribute_run(block, "#[must_use]", "pub fn new(", false);
     assert_attr_in_item_attribute_run(block, "#[must_use]", "pub fn with_tsconfig(", true);
 }
 
-/// AC-004 witness: implements `Into<Utf8PathBuf>` but not `AsRef<str>`, so
-/// it only compiles as an argument to `WorkspaceOptions::new` if `new`'s
-/// parameter bound is genuinely `impl Into<Utf8PathBuf>` -- a narrower bound
-/// of `impl AsRef<str>` would reject this type at the call site with E0277.
+/// Converts into `Utf8PathBuf` but does not implement `AsRef<str>`.
+///
+/// It is accepted by `WorkspaceOptions::new` only if the parameter bound is `impl Into<Utf8PathBuf>`.
 struct OnlyInto;
 impl From<OnlyInto> for camino::Utf8PathBuf {
     fn from(_: OnlyInto) -> Self {
@@ -2965,15 +2749,10 @@ impl From<OnlyInto> for camino::Utf8PathBuf {
 
 #[test]
 fn workspace_options_new_into_bound_and_with_tsconfig_by_value_receiver_pinned() {
-    // AC-004: root's bound is genuinely `impl Into<Utf8PathBuf>`, not just
-    // `impl AsRef<str>` -- every existing test input (&str, String,
-    // Utf8PathBuf) happens to satisfy both bounds, so OnlyInto (which
-    // satisfies only Into<Utf8PathBuf>) is needed to distinguish them.
+    // `&str`, `String`, and `Utf8PathBuf` satisfy both bounds, so only `OnlyInto` tells them apart.
     assert_eq!(WorkspaceOptions::new(OnlyInto).root.as_str(), "only-into");
 
-    // AC-005: with_tsconfig takes self by value (mut self), not &mut self
-    // or &self -- pinned via fn-pointer coercion, which only compiles if
-    // the receiver's exact type is `WorkspaceOptions` (by value).
+    // The fn-pointer coercion compiles only if `with_tsconfig` takes `self` by value.
     let f: fn(WorkspaceOptions, TsconfigMode) -> WorkspaceOptions = WorkspaceOptions::with_tsconfig;
     let opts = f(WorkspaceOptions::new("src"), TsconfigMode::Skip);
     assert_eq!(opts.root.as_str(), "src");
@@ -2994,7 +2773,6 @@ fn extract_request_full_round_trip_exact_shape_pins_declaration_order() {
 }
 #[test]
 fn extract_request_required_file_and_option_leniency() {
-    // AC-008: file is required on deserialize.
     let err = serde_json::from_str::<ExtractRequest>(r#"{"lineStart":1}"#).unwrap_err();
     assert!(err.to_string().contains("missing field `file`"));
 
@@ -3016,11 +2794,8 @@ fn extract_request_required_file_and_option_leniency() {
 
 #[test]
 fn extract_request_line_start_and_line_end_numeric_three_way_rule() {
-    // AC-009, class 1 (valid): u64::MAX and 0 both succeed as Some(N) --
-    // usize's own range includes 0, mirroring SearchLimits' three-way rule
-    // (SPEC-007 AC-006) applied here to line_start/line_end.
-    let max: ExtractRequest =
-        serde_json::from_str(r#"{"file":"a.ts","lineStart":18446744073709551615}"#).unwrap();
+    // Class 1 (valid): the whole `usize` range, including 0 and `u64::MAX`.
+    let max: ExtractRequest = serde_json::from_str(r#"{"file":"a.ts","lineStart":18446744073709551615}"#).unwrap();
     assert_eq!(max.line_start, Some(usize::MAX));
     let zero: ExtractRequest = serde_json::from_str(r#"{"file":"a.ts","lineStart":0}"#).unwrap();
     assert_eq!(zero.line_start, Some(0));
@@ -3068,33 +2843,19 @@ fn extract_request_line_start_and_line_end_numeric_three_way_rule() {
 
 #[test]
 fn extract_request_swapped_range_and_zero_start_unenforced() {
-    // AC-010: no cross-field constraint enforces line_start <= line_end --
-    // docs/spec/07-edge-cases-and-failure-modes.md Part 1 finding #15
-    // documents the extract command's own consequence (a silent empty
-    // result, not an error); this test locks only that the swapped range
-    // deserializes successfully, per this track's own scope.
-    let swapped: ExtractRequest =
-        serde_json::from_str(r#"{"file":"a.ts","lineStart":100,"lineEnd":5}"#).unwrap();
+    // Nothing enforces `line_start <= line_end`; the extract command returns an empty result for a swapped range.
+    let swapped: ExtractRequest = serde_json::from_str(r#"{"file":"a.ts","lineStart":100,"lineEnd":5}"#).unwrap();
     assert_eq!(swapped.line_start, Some(100));
     assert_eq!(swapped.line_end, Some(5));
     assert!(swapped.line_start > swapped.line_end);
 
-    // AC-011: no lower bound on line_start/line_end -- finding #23 documents
-    // that extract --line-start 0 isn't rejected despite the codebase's
-    // 1-indexed convention elsewhere; this test locks only that 0
-    // deserializes to Some(0), like any other valid usize.
-    let zero_start: ExtractRequest =
-        serde_json::from_str(r#"{"file":"a.ts","lineStart":0,"lineEnd":10}"#).unwrap();
+    // Line numbers are 1-indexed elsewhere, but 0 is still accepted here.
+    let zero_start: ExtractRequest = serde_json::from_str(r#"{"file":"a.ts","lineStart":0,"lineEnd":10}"#).unwrap();
     assert_eq!(zero_start.line_start, Some(0));
 }
 #[test]
 fn extract_request_file_wrong_type_errors() {
-    // AC-012: camino's own custom Deserialize impl for Utf8PathBuf, not a
-    // generic serde_json string-type mismatch -- "expected a UTF-8 path
-    // string", not "expected a string". serde renders a JSON array as
-    // "sequence" and a JSON object as "map", not "array"/"object". file has
-    // no Option wrapper, so an explicit null is a type-mismatch failure, not
-    // a tolerated missing-equivalent.
+    // The messages come from camino's `Deserialize` impl. `file` is not an `Option`, so `null` is a type error.
     for (bad_json, expected_snippet) in [
         (r#"{"file":5}"#, "invalid type: integer `5`, expected a UTF-8 path string"),
         (r#"{"file":true}"#, "invalid type: boolean `true`, expected a UTF-8 path string"),
@@ -3109,10 +2870,7 @@ fn extract_request_file_wrong_type_errors() {
 }
 #[test]
 fn extract_request_line_start_and_line_end_wrong_type_errors() {
-    // AC-013: a present (non-null) lineStart/lineEnd of a non-numeric JSON
-    // type fails with an invalid-type error naming the found type. The
-    // Option<usize> leniency AC-008 establishes extends only to a missing
-    // key or explicit null, not to any other non-numeric JSON type.
+    // `Option` tolerates only a missing key or `null`, not other non-numeric values.
     for (bad_json, expected_snippet) in [
         (r#"{"file":"a.ts","lineStart":"5"}"#, "invalid type: string \"5\", expected usize"),
         (r#"{"file":"a.ts","lineStart":true}"#, "invalid type: boolean `true`, expected usize"),
@@ -3129,49 +2887,13 @@ fn extract_request_line_start_and_line_end_wrong_type_errors() {
 }
 #[test]
 fn extract_request_field_level_attribute_absence_pinned_via_source_inspection() {
-    // AC-007: no field carries any field-level serde attribute -- reuses the
-    // structural source-inspection technique established in SPEC-007's fix
-    // round 3 (assert_no_field_level_serde_attribute), which catches ANY
-    // field-level attribute, not just one specific type.
     let src = include_str!("types.rs");
     let block = enum_declaration_block(src, "pub struct ExtractRequest");
     assert_no_field_level_serde_attribute(block, &["file", "line_start", "line_end"]);
 }
-/// Exhaustive compile-time field-type and derive-list pinning for all three
-/// SPEC-008 types, mirroring `spec_005_all_field_types_pinned` /
-/// `spec_006_all_field_types_and_derives_pinned` /
-/// `spec_007_all_field_types_and_derives_pinned`'s rationale: serde treats
-/// several distinct Rust types identically on the wire, so only a
-/// compile-time `let x: ExactType = value.field` binding -- not a runtime
-/// assertion -- can distinguish the declared type from a serde-equivalent
-/// sibling. This is a self-contained inventory, deliberately not
-/// deduplicated against earlier per-type tests in this file:
-///
-/// - TsconfigMode: fieldless Auto/Skip; Manual(Utf8PathBuf) payload pinned
-///   below.
-/// - WorkspaceOptions: root: Utf8PathBuf, tsconfig: TsconfigMode -- both
-///   pinned below.
-/// - ExtractRequest: file: Utf8PathBuf, line_start: Option<usize>,
-///   line_end: Option<usize> -- all 3 pinned below.
-///
-/// Derive-list note: the bound-check functions below only PROVE presence of
-/// Debug+Clone (TsconfigMode/WorkspaceOptions) and
-/// Debug+Clone+Serialize+DeserializeOwned (ExtractRequest) -- a bound-check
-/// function can never prove absence. AC-001's and AC-003's Copy/PartialEq/
-/// Eq absence claims are proven below via CopyProbe/PartialEqProbe/EqProbe
-/// (T-004's const-specialization generalization of SerProbe/DeProbe/
-/// DefaultProbe, which -- unlike a bound-check function -- CAN prove
-/// absence), with SymbolKind as positive control. AC-001's #[non_exhaustive]
-/// absence claim is proven separately, structurally, via
-/// `assert_attr_in_item_attribute_run` (T-010) reused directly against
-/// types.rs source below -- the one genuine exception to the probe
-/// technique, since #[non_exhaustive] has no effect on matching within the
-/// defining crate and so produces no runtime-observable difference for any
-/// probe to detect. Serialize/Deserialize absence (TsconfigMode/
-/// WorkspaceOptions) and Default absence (TsconfigMode) are proven
-/// separately via SerProbe/DeProbe/DefaultProbe in T-003/T-004/T-007.
+// Binds every field of the workspace and extract types to its exact type, and checks the derives they must not have.
 #[test]
-fn spec_008_all_field_types_and_derives_pinned() {
+fn workspace_and_extract_types_all_field_types_and_derives_pinned() {
     fn assert_debug_clone_derives<T: std::fmt::Debug + Clone>() {}
     fn assert_full_derives<T: std::fmt::Debug + Clone + serde::Serialize + serde::de::DeserializeOwned>() {}
 
@@ -3206,25 +2928,19 @@ fn spec_008_all_field_types_and_derives_pinned() {
     assert_eq!(pinned_line_start, Some(1));
     assert_eq!(pinned_line_end, Some(2));
 
-    // -- AC-001/AC-003: Copy/PartialEq/Eq absence, via const-specialization
-    // probes (T-004) that -- unlike a bound-check function -- CAN prove
-    // absence. SymbolKind (SPEC-003, derives Copy/PartialEq/Eq) is the
-    // positive control for all three.
-    assert!(CopyProbe::<SymbolKind>::IS);
-    assert!(PartialEqProbe::<SymbolKind>::IS);
-    assert!(EqProbe::<SymbolKind>::IS);
-    assert!(!CopyProbe::<TsconfigMode>::IS);
-    assert!(!PartialEqProbe::<TsconfigMode>::IS);
-    assert!(!EqProbe::<TsconfigMode>::IS);
-    assert!(!CopyProbe::<WorkspaceOptions>::IS);
-    assert!(!PartialEqProbe::<WorkspaceOptions>::IS);
+    // `SymbolKind` is the positive control.
+    const {
+        assert!(CopyProbe::<SymbolKind>::IS);
+        assert!(PartialEqProbe::<SymbolKind>::IS);
+        assert!(EqProbe::<SymbolKind>::IS);
+        assert!(!CopyProbe::<TsconfigMode>::IS);
+        assert!(!PartialEqProbe::<TsconfigMode>::IS);
+        assert!(!EqProbe::<TsconfigMode>::IS);
+        assert!(!CopyProbe::<WorkspaceOptions>::IS);
+        assert!(!PartialEqProbe::<WorkspaceOptions>::IS);
+    }
 
-    // -- AC-001: #[non_exhaustive] absence, via structural source
-    // inspection (T-010's helper) -- a probe can't observe this, since
-    // #[non_exhaustive] has no effect on matching within the defining
-    // crate. The attribute-line-only filter avoids a false positive against
-    // TsconfigMode's own doc comment (T-001), which literally contains the
-    // string "#[non_exhaustive]" in prose describing its absence.
+    // `#[non_exhaustive]` has no effect inside the defining crate, so only the source can show its absence.
     let src = include_str!("types.rs");
     assert_attr_in_item_attribute_run(src, "#[non_exhaustive]", "pub enum TsconfigMode", false);
     assert_attr_in_item_attribute_run(src, "#[non_exhaustive]", "pub struct WorkspaceOptions", false);
