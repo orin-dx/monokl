@@ -1,43 +1,27 @@
-# Semantic Model — Load Index
+# Architecture
 
-Read this first. Load only the files your task requires — never load all files at once.
+Topic docs for monokl's subsystems. Read the one your task touches, not all of them. Each distills the `docs/spec/` sections it cites and the edge-case findings that change what an implementer must do; where code exists, the code and its tests are authoritative and the doc should be kept in step with them.
 
-monokl is spec-stage: no crate exists yet. Every file below cites the `docs/spec/` section
-it distills rather than a source path — treat the cited spec section as authoritative until
-the corresponding code exists, at which point these files should be re-pointed at the source
-and kept in sync via `canon/drift`.
+## Task to file
 
-## Task → Files to Load
+| You are working on | Read |
+| --- | --- |
+| `error.rs`, `file_io.rs`, `MonoklError`, any `Result<T>` return | [error-taxonomy.md](error-taxonomy.md) |
+| `types.rs`, `SymbolEntry`, `Visibility`, `LanguageId`, `CodeBlock` | [core-types.md](core-types.md) |
+| `query/`, ranking, BM25, tie-breaking, determinism | [query-and-ranking.md](query-and-ranking.md) |
+| The in-memory and disk cache, content hash vs. mtime | [cache-architecture.md](cache-architecture.md) |
+| `LanguageAnalyzer`, `AnalyzerRegistry`, capability and precision gating | [language-analyzer-contract.md](language-analyzer-contract.md) |
+| Daemon and session mode, `PrecisionUpgrader`, `PrecisionLedger` (not v0.1.0) | [daemon-lifetimes.md](daemon-lifetimes.md) |
 
-| You are working on... | Load these files |
-|---|---|
-| `error.rs`, `MonoklError`, any `Result<T>` return | `error-taxonomy.md` |
-| `types.rs`, `SymbolEntry`, `Visibility`, `LanguageId`, `CodeBlock` | `core-types.md` |
-| `query/`, `rank/`, BM25, tie-breaking, determinism | `query-and-ranking.md` |
-| `analysis/cache.rs`, `analysis/persist.rs`, content-hash vs. mtime | `cache-architecture.md` |
-| `analysis/lang.rs`, `AnalyzerRegistry`, capability/precision, `--kind`/`--format` gating | `language-analyzer-contract.md` |
-| Daemon/session-mode work, `PrecisionUpgrader`, `PrecisionLedger` | `daemon-lifetimes.md` |
-| Implementing a specific track | `.claude/specs/<track>.json` only |
-| Starting fresh, no task assigned | `.claude/plans/ACTIVE.md` |
+## Cross-cutting invariants
 
-Do NOT load semantic-model files when implementing a track unless the spec explicitly
-references them. The spec@1 is the authority; these files are the reference layer beneath it.
+- One `thiserror` error enum for the crate, `MonoklError`; file I/O failures are `FileIoError` wrapped transparently.
+- `camino::Utf8Path` everywhere a path appears, except where the path is by definition not UTF-8.
+- `FxHashMap`/`FxHashSet` for internal hot-path maps; `BTreeMap` for anything serialized, because output order must be deterministic.
+- Analyzers return fully owned data. No arena-borrowed AST node outlives the parse.
 
-## File Map
+## Elsewhere
 
-| File | Covers |
-|---|---|
-| `error-taxonomy.md` | `MonoklError` variants, when each fires, five known error-handling contract gaps from the edge-case audit |
-| `core-types.md` | `SymbolEntry`, `Visibility`, `LanguageId`, `CodeBlock`, and the Part 4 naming mismatches (`owner`/`impl_owner`, missing `Visibility::Super`) that must be resolved, not ported as-is |
-| `query-and-ranking.md` | Query grammar, `QueryPlan`, `rank_blocks`, the determinism gaps found in the audit (candidate-set ordering, missing tie-break) |
-| `cache-architecture.md` | Two-tier cache, `ContentHash` authority vs. mtime/size fast path, the Tier-1 gap found in Part 3 |
-| `language-analyzer-contract.md` | `LanguageAnalyzer` trait (post-fix `languages()`/`language_for()`/`capabilities(language)`), `AnalyzerRegistry` dispatch, `CapabilityPrecision` |
-| `daemon-lifetimes.md` | `PrecisionUpgrader`, `ResourceLifetime`/`SessionOwnership`, `PrecisionLedger` — Part 6, not required for v0.1.0 |
-
-## What Does NOT Live Here
-
-- Source code — none exists yet; read `docs/spec/` directly
-- Spec@1 artifacts — live in `.claude/specs/`
-- Active task tracking — lives in `.claude/plans/ACTIVE.md`
-- The full research/decision history — lives in `docs/spec/05-research-and-decisions.md`, treat as human reference, not invariant source
-- The edge-case audit itself — lives in `docs/spec/07-edge-cases-and-failure-modes.md`; these files distill only the audit findings that change what an implementer must do differently from the original spec text
+- Decisions with a credible alternative: [`docs/adr/`](../adr/README.md).
+- The full spec and its decision log: [`docs/spec/`](../spec/README.md), [`05-research-and-decisions.md`](../spec/05-research-and-decisions.md).
+- The edge-case audit these docs draw on: [`07-edge-cases-and-failure-modes.md`](../spec/07-edge-cases-and-failure-modes.md).

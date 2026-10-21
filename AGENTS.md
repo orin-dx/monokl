@@ -1,31 +1,66 @@
-# Agent guidance
+# monokl
 
-Guidance for AI coding agents working in this repo. Vendor-neutral — see [CLAUDE.md](CLAUDE.md) for Claude Code-specific additions.
+AST-aware code search for TypeScript, JavaScript and Rust, built for coding agents. Part of [Orin DX](https://orin-dx.com) (github.com/orin-dx). Agent-facing output goes through [michi](https://github.com/orin-dx/michi); don't hand-roll TOON lists, structured errors or hints that michi provides.
 
-## Read this first
+Vendor-neutral guidance. [CLAUDE.md](CLAUDE.md) adds Claude Code specifics.
 
-1. [`docs/spec/README.md`](docs/spec/README.md) — index of the full spec, tells you which file covers what.
-2. [`docs/spec/05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md) — the changelog. If something in files 01-04 looks inconsistent, check here before "fixing" it; it's probably already addressed, and the reasoning is recorded.
-3. [PRINCIPLES.md](PRINCIPLES.md) — non-goals in particular. Don't propose an embedding-based reranker, a persistent trigram index, or a tree-sitter TS/JS parser — all three were considered and explicitly rejected, with reasons on record.
+## Read first
+
+1. [`docs/spec/README.md`](docs/spec/README.md): which spec file covers what. The spec is the reconstruction source for unbuilt modules.
+2. [`docs/architecture/README.md`](docs/architecture/README.md): which topic doc to read for the area you're changing.
+3. [`docs/adr/README.md`](docs/adr/README.md) and [`docs/spec/05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md): decisions already made. If something looks inconsistent, check here before "fixing" it.
+4. [PRINCIPLES.md](PRINCIPLES.md): non-goals. No embedding reranker, no persistent trigram index, no tree-sitter TS/JS parser.
+
+## Commands
+
+```bash
+just setup      # proto toolchain + moon git hooks
+just ci         # everything CI runs
+just test       # nextest + doctests
+just lint       # fmt check + clippy, all features and no default features
+```
+
+Run one cargo command at a time; parallel cargo processes serialize on the `target/` lock. Never `git checkout Cargo.lock`.
 
 ## Current state
 
-No code exists yet — this is spec-stage. There's no `Cargo.toml`, no build, no test suite to run. If you're asked to implement something, you're implementing _from_ the spec, not extending existing code. Don't invent APIs, types, or command flags that aren't in the spec without flagging that you're doing so — the spec is meant to be reconstructed verbatim, and silent deviation defeats that.
+One crate, `crates/monokl`, with the error types, core data types, query language and michi output adapter. Modules are declared in `lib.rs` as they are implemented, not ahead of time, and a dependency is listed only once code uses it. [`.claude/plans/ACTIVE.md`](.claude/plans/ACTIVE.md) tracks what's next.
 
-## Code conventions (apply from the first line of code)
+## Non-negotiables
 
-- No `unwrap()`/`expect()`/`panic!()`/`unreachable!()`/`unimplemented!()` outside `#[cfg(test)]` — denied by the workspace's own clippy lint table.
-- One `thiserror` error enum per crate. Compose new failure modes via `#[from]`/`#[source]`, don't add a `String`-message variant when a structured one is possible.
-- `LanguageAnalyzer` implementations must return fully owned data — no arena-borrowed AST nodes, no lifetimes tied to the parser's `Allocator`, ever, in any field of `FileAnalysis`.
-- `camino::Utf8Path`/`Utf8PathBuf` everywhere paths appear — not `std::path::Path`.
-- `rustc-hash`'s `FxHashMap`/`FxHashSet` for hot-path internal maps; `BTreeMap` for anything that gets serialized to JSON output (stable key order is load-bearing for determinism, see [PRINCIPLES.md](PRINCIPLES.md)).
-- `monokl-core` result types are not `Serialize`; wire shapes live in `monokl-agent` and `wisp-contracts`. Never add `#[derive(Serialize)]` to a core result type — see [`docs/spec/08-library-session-api.md`](docs/spec/08-library-session-api.md#9-plumbing-and-porcelain-two-crates).
-- No caps or pre-rendered truncation strings in `monokl-core`; counts only (`items_returned`/`items_total`), porcelain renders the marker.
+- No `unwrap()`/`expect()`/`panic!()`/`unreachable!()`/`unimplemented!()` outside `#[cfg(test)]`. The workspace lint table denies them.
+- One `thiserror` error enum, `MonoklError`. Compose failure modes with `#[from]`/`#[source]`; no `String`-message variant when a structured one is possible. File I/O failures are `FileIoError` ([ADR 0001](docs/adr/0001-file-io-error-lives-in-monokl.md)).
+- `LanguageAnalyzer` implementations return fully owned data. No arena-borrowed AST node or parser-allocator lifetime in any field of `FileAnalysis`.
+- `camino::Utf8Path`/`Utf8PathBuf` wherever a path appears.
+- `FxHashMap`/`FxHashSet` for internal hot-path maps; `BTreeMap` for anything serialized, because output order must be deterministic.
+- Core result types are not `Serialize`; wire shapes live in the output layer. See [`08-library-session-api.md`](docs/spec/08-library-session-api.md#9-plumbing-and-porcelain-two-crates).
+- No caps or pre-rendered truncation strings in core. Counts only (`items_returned`/`items_total`); the output layer renders the marker.
+- `unsafe_code` is denied workspace-wide.
 
-## When you find a real bug in the spec
+## Rust style
 
-Fix it in the spec file, and add an entry to [`docs/spec/05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md) explaining what was wrong and why the fix is correct — the same pattern already used for the two compile-breaking gaps found there. Don't fix it only in code without updating the spec; the spec is the reconstruction source, and a silent divergence between the two is worse than either one being wrong on its own.
+Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (control flow, matching, naming), `rust-types` (public type checklist, "wire or don't define"), `rustdoc` (doc comment format), `adr`.
+
+- `pub(crate)` for implementation modules; `pub` only for the consumer API.
+- No wildcard `_` arm on enums this crate owns; a compile error on a new variant is the point.
+- Code never cites spec, criterion or plan IDs (`SPEC-001`, `AC-007`, `T-009`). Specs change; the code says what it guarantees in its own words, and tests name the behavior they prove.
 
 ## Testing
 
-`cargo nextest` once tests exist. `insta` for snapshots — accept a snapshot change only after confirming the new output is actually correct, not just different.
+- `cargo nextest` plus `cargo test --doc`. `insta` for snapshots: accept a snapshot change only after confirming the new output is correct, not just different.
+- Assert content, not presence: `assert_eq!` on the exact value over `contains`/`is_some`.
+- Sibling-path parity: a function that mirrors an already-tested one gets a test asserting the same contract.
+- CI gates line coverage at 90%.
+
+## Fixing bugs
+
+Look for structurally identical siblings and fix them in the same change. If one is deliberately left, say where and why.
+
+When the spec itself is wrong, fix the spec file and add an entry to [`05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md) explaining what was wrong and why the fix is right. A decision that departs from the spec with a credible alternative gets an ADR.
+
+## Writing and commits
+
+- Succinct: short sentences, bullets, tables. No backstory, hedging or filler. Banned words are in [`docs/adr/README.md`](docs/adr/README.md).
+- Never hard-wrap Markdown, commit messages or PR descriptions.
+- Comments explain only the non-obvious why, carry no history (the commit records it), and fill to 120 columns.
+- Commits: Conventional Commits, imperative subject, at most one or two sentences of why. Skip the body when the subject says it all.
