@@ -1,6 +1,6 @@
 # monokl
 
-AST-aware code search for TypeScript, JavaScript and Rust, built for coding agents. Part of [Orin DX](https://orin-dx.com) (github.com/orin-dx). Agent-facing output goes through [michi](https://github.com/orin-dx/michi); don't hand-roll TOON lists, structured errors or hints that michi provides.
+AST-aware code search for TypeScript, JavaScript and Rust, built for coding agents. Part of [Orin DX](https://orin-dx.com) (github.com/orin-dx). Agent-facing output goes through [michi](https://github.com/orin-dx/michi) (`michi-core` on crates.io); don't hand-roll TOON lists, structured errors or hints that michi provides.
 
 Vendor-neutral guidance. [CLAUDE.md](CLAUDE.md) adds Claude Code specifics.
 

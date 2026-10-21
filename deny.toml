@@ -25,5 +25,3 @@ skip = []
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# michi is consumed by git revision until it is published.
-allow-git = ["https://github.com/orin-dx/michi"]

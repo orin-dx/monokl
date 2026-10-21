@@ -199,7 +199,6 @@ dependencies = [
  "itoa",
  "rustversion",
  "ryu",
- "serde",
  "static_assertions",
 ]
 
@@ -511,46 +510,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "michi"
-version = "0.2.0"
-source = "git+https://github.com/orin-dx/michi?rev=d3fc9a12d695cb18845a5ae5b89595867c0a9769#d3fc9a12d695cb18845a5ae5b89595867c0a9769"
-dependencies = [
- "michi-core",
- "michi-resilience",
- "michi-toon",
- "michi-truncate",
-]
-
-[[package]]
 name = "michi-core"
-version = "0.1.1"
-source = "git+https://github.com/orin-dx/michi?rev=d3fc9a12d695cb18845a5ae5b89595867c0a9769#d3fc9a12d695cb18845a5ae5b89595867c0a9769"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f190f035245fd3d92b92a78535d609fdc783cde499265c0d02065c3d25b8a1c7"
 dependencies = [
- "michi-resilience",
- "michi-toon",
- "michi-truncate",
+ "compact_str",
  "miette",
  "thiserror",
 ]
-
-[[package]]
-name = "michi-resilience"
-version = "0.1.1"
-source = "git+https://github.com/orin-dx/michi?rev=d3fc9a12d695cb18845a5ae5b89595867c0a9769#d3fc9a12d695cb18845a5ae5b89595867c0a9769"
-
-[[package]]
-name = "michi-toon"
-version = "0.2.0"
-source = "git+https://github.com/orin-dx/michi?rev=d3fc9a12d695cb18845a5ae5b89595867c0a9769#d3fc9a12d695cb18845a5ae5b89595867c0a9769"
-dependencies = [
- "compact_str",
- "michi-truncate",
-]
-
-[[package]]
-name = "michi-truncate"
-version = "0.1.0"
-source = "git+https://github.com/orin-dx/michi?rev=d3fc9a12d695cb18845a5ae5b89595867c0a9769#d3fc9a12d695cb18845a5ae5b89595867c0a9769"
 
 [[package]]
 name = "miette"
@@ -599,7 +567,7 @@ dependencies = [
  "clap",
  "grep-regex",
  "ignore",
- "michi",
+ "michi-core",
  "miette",
  "regex",
  "rstest",

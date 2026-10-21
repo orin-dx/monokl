@@ -11,22 +11,10 @@ pub struct ErrorContext<'a> {
 
 /// Converts a string into a TOON cell value.
 ///
-/// This is the only sanctioned conversion in this module: it escapes `\n` and drops `\r` first, because michi's
-/// [`escape_value`](michi::toon::escape_value) silently deletes both.
+/// The string is passed through unchanged: michi quotes and escapes control characters when it renders the row, so
+/// escaping here as well would double-escape them.
 pub fn cell(s: &str) -> Value {
-    if s.contains('\n') || s.contains('\r') {
-        let mut out = String::with_capacity(s.len());
-        for ch in s.chars() {
-            match ch {
-                '\r' => {}
-                '\n' => out.push_str("\\n"),
-                _ => out.push(ch),
-            }
-        }
-        Value::from(out)
-    } else {
-        Value::from(s)
-    }
+    Value::from(s)
 }
 
 /// Like [`cell`], but maps `None` to [`Value::Null`].
@@ -47,21 +35,8 @@ mod cell_tests {
     }
 
     #[test]
-    fn cell_replaces_lf_with_literal_backslash_n() {
-        let v = cell("line1\nline2");
-        assert_eq!(v, Value::from("line1\\nline2"));
-    }
-
-    #[test]
-    fn cell_drops_cr_and_replaces_lf() {
-        let v = cell("line1\r\nline2");
-        assert_eq!(v, Value::from("line1\\nline2"));
-    }
-
-    #[test]
-    fn cell_drops_bare_cr() {
-        let v = cell("line1\rline2");
-        assert_eq!(v, Value::from("line1line2"));
+    fn cell_leaves_line_breaks_for_michi_to_escape() {
+        assert_eq!(cell("line1\r\nline2"), Value::from("line1\r\nline2"));
     }
 
     #[test]
@@ -75,13 +50,11 @@ mod cell_tests {
         assert_ne!(opt_cell(Some("")), Value::Null);
     }
 
-    // Pins the michi behavior `cell` works around, so a michi fix fails here instead of leaving a stale workaround.
+    // `cell` relies on michi escaping line breaks; if michi stops, multi-line code would break TOON rows.
     #[test]
-    fn michi_escape_value_deletes_newlines() {
-        let raw = "// comment\nfn body() {\n    real_code();\n}";
-        let escaped = michi::toon::escape_value(raw);
-        assert!(!escaped.contains('\n'), "expected newline deletion, got: {escaped:?}");
-        assert_eq!(escaped, "// commentfn body() {    real_code();}");
+    fn michi_escape_value_escapes_line_breaks() {
+        let escaped = michi::toon::escape_value("// comment\r\nfn body() {\n}");
+        assert_eq!(escaped, "\"// comment\\r\\nfn body() {\\n}\"");
     }
 }
 
@@ -266,7 +239,7 @@ mod projection_tests {
                 name: "foo".to_string(),
                 kind: SymbolKind::Function,
                 line: 10,
-                // The newline must render as the two-character escape `\n`, neither breaking the row nor vanishing.
+                // The newline must render as the escape `\n` inside a quoted cell, neither breaking the row nor vanishing.
                 signature: Some("fn foo(x)\nsecond line".to_string()),
                 // Distinct values in every optional column, so a hardcoded `Value::Null` for any of them shows up.
                 owner: Some("MyOwner".to_string()),
@@ -283,7 +256,7 @@ mod projection_tests {
             "got: {rendered}"
         );
         assert!(
-            rendered.contains("src/lib.rs,foo,function,10,fn foo(x)\\nsecond line,MyOwner,MyTrait,public,static"),
+            rendered.contains("src/lib.rs,foo,function,10,\"fn foo(x)\\nsecond line\",MyOwner,MyTrait,public,static"),
             "got: {rendered}"
         );
     }
@@ -326,11 +299,11 @@ mod projection_tests {
             rendered.contains("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n"),
             "got: {rendered}"
         );
-        assert!(rendered.contains("src/lib.rs,5,9,function,fn foo(x)\\nsecond line,2,0.92"), "got: {rendered}");
+        assert!(rendered.contains("src/lib.rs,5,9,function,\"fn foo(x)\\nsecond line\",2,0.92"), "got: {rendered}");
         assert!(!rendered.contains("fn foo() {}"), "code field must never appear in TOON output, got: {rendered}");
         assert!(
-            rendered.contains(
-                "help[1]:\n  use extract with file/lineStart/lineEnd to retrieve a row's actual code content\n"
+            rendered.ends_with(
+                "\nhelp[1]: use extract with file/lineStart/lineEnd to retrieve a row's actual code content"
             ),
             "got: {rendered}"
         );
@@ -351,14 +324,14 @@ mod projection_tests {
         assert!(domain_err.message.starts_with("toon_render_invalid: "), "got: {}", domain_err.message);
     }
 
-    // Drives `render_projection`'s own validation guard end to end. A comma is a TOON structural character, so michi
-    // rejects it as a field name.
+    // Drives `render_projection`'s own validation guard end to end. A repeated field name is invalid TOON, so michi
+    // rejects it.
     struct InvalidFieldNameProjection;
-    impl ToonProjection<1> for InvalidFieldNameProjection {
+    impl ToonProjection<2> for InvalidFieldNameProjection {
         const TYPE_NAME: &'static str = "invalid";
-        const FIELDS: [&'static str; 1] = ["a,b"];
-        fn toon_rows(&self) -> Vec<[Value; 1]> {
-            vec![[Value::from("x")]]
+        const FIELDS: [&'static str; 2] = ["a", "a"];
+        fn toon_rows(&self) -> Vec<[Value; 2]> {
+            vec![[Value::from("x"), Value::from("y")]]
         }
     }
 
@@ -371,13 +344,15 @@ mod projection_tests {
         assert!(err.message.starts_with("toon_render_invalid: "), "got: {}", err.message);
     }
 
-    // TOON cannot distinguish an absent field from an empty string.
+    // `opt_cell` maps `None` to `Value::Null` so an agent can tell an absent field from an empty string.
     #[test]
-    fn null_and_empty_string_render_identically() {
-        let opts_null = michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![Value::Null]]);
+    fn null_and_empty_string_render_distinctly() {
+        let opts_null =
+            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![opt_cell(None)]]);
         let opts_empty =
-            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![Value::from("")]]);
-        assert_eq!(michi::toon::render_toon(&opts_null), michi::toon::render_toon(&opts_empty));
+            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![opt_cell(Some(""))]]);
+        assert_eq!(michi::toon::render_toon(&opts_null).unwrap(), "t[1]{a}:\n  null");
+        assert_eq!(michi::toon::render_toon(&opts_empty).unwrap(), "t[1]{a}:\n  \"\"");
     }
 
     struct DummyProjection;

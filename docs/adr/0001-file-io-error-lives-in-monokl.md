@@ -8,7 +8,7 @@ The spec (`01-core-architecture.md` §1 and §27) puts `FileIoError` in a separa
 
 ## Decision
 
-`FileIoError` is the `monokl::file_io` module, with the spec's §27 contents unchanged. `MonoklError::Io` wraps it with `#[error(transparent)]` and `#[from]`. There is no private registry: dependencies come from crates.io, or by pinned git revision from an `orin-dx` repository allowed in `deny.toml`.
+`FileIoError` is the `monokl::file_io` module, with the spec's §27 contents unchanged. `MonoklError::Io` wraps it with `#[error(transparent)]` and `#[from]`. There is no private registry: every dependency, michi included (published as `michi-core`), comes from crates.io, and `deny.toml` denies any other source.
 
 ## Consequences
 

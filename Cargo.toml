@@ -84,7 +84,8 @@ rayon = "1.12"
 
 # CLI and output
 clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
-michi = { git = "https://github.com/orin-dx/michi", rev = "d3fc9a12d695cb18845a5ae5b89595867c0a9769", version = "0.2", default-features = false }
+# Published as michi-core; renamed so code keeps the `michi::` path.
+michi = { package = "michi-core", version = "0.3.1" }
 tracing = "0.1"
 
 # Dev
