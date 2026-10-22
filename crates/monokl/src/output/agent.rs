@@ -590,8 +590,8 @@ mod walk_tests {
 pub trait ToDomainError {
     /// Returns a short `snake_case` code that is distinct for each error kind.
     fn monokl_code(&self) -> &'static str;
-    /// Converts the error, prefixing the message with [`monokl_code`](Self::monokl_code) and adding the rest of its
-    /// display text and its whole source chain as hints.
+    /// Converts the error, prefixing the message with [`monokl_code`](Self::monokl_code) and carrying its source chain
+    /// as causes.
     fn to_domain_error(&self, ctx: ErrorContext<'_>) -> michi::DomainError;
 }
 
@@ -635,22 +635,9 @@ impl ToDomainError for MonoklError {
             MonoklError::Walk { source, .. } => walk_error_code(source),
         };
 
-        let mut self_lines = split_display_lines(&self.to_string()).into_iter();
-        let head = self_lines.next().unwrap_or_default();
-
-        let mut hints: Vec<String> = self_lines.collect();
-        let mut cause: Option<&dyn std::error::Error> = std::error::Error::source(self);
-        while let Some(err) = cause {
-            for line in split_display_lines(&err.to_string()) {
-                hints.push(line);
-            }
-            cause = err.source();
-        }
-
-        let mut domain_err = michi::DomainError::new(code, format!("{}: {head}", self.monokl_code())).retryable(false);
-        for line in hints {
-            domain_err = domain_err.hint(line);
-        }
+        let mut domain_err = michi::DomainError::from_error(code, self).retryable(false);
+        // Prefixed after from_error, which compares each cause against the unprefixed message to skip repeats.
+        domain_err.message = format!("{}: {}", self.monokl_code(), domain_err.message);
 
         domain_err = match self {
             MonoklError::TooManyTerms { count, limit } => {
@@ -675,10 +662,6 @@ impl ToDomainError for MonoklError {
 
         domain_err
     }
-}
-
-fn split_display_lines(s: &str) -> Vec<String> {
-    s.replace("\r\n", "\n").replace('\r', "\n").split('\n').map(ToString::to_string).collect()
 }
 
 #[cfg(test)]
@@ -800,30 +783,38 @@ mod error_tests {
         assert!(domain_err.message.starts_with("walk: walker error at /some/root"), "got: {}", domain_err.message);
     }
 
-    // A raw newline in the message would add unprefixed lines to the rendered error.
+    // michi escapes line breaks when it renders, so a multi-line message stays whole and adds no rendered lines.
     #[test]
-    fn multiline_self_display_head_is_first_line_only() {
-        let err = MonoklError::Git { operation: "show", message: "line one\nline two\nline three".to_string() };
+    fn multiline_message_is_kept_whole_and_renders_on_one_line() {
+        let err = MonoklError::Git { operation: "show", message: "line one\nline two".to_string() };
         let domain_err = err.to_domain_error(ctx());
 
-        assert_eq!(domain_err.message, "git: git show failed: line one");
-        assert!(!domain_err.message.contains('\n'), "got: {:?}", domain_err.message);
-        let hint_strs: Vec<&str> = domain_err.hints.iter().map(michi::Hint::as_str).collect();
-        assert_eq!(hint_strs, vec!["line two", "line three"]);
+        assert_eq!(domain_err.message, "git: git show failed: line one\nline two");
+        assert!(domain_err.causes.is_empty(), "got: {:?}", domain_err.causes);
+        assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
+        assert_eq!(domain_err.render().lines().count(), 3, "got: {}", domain_err.render());
     }
 
-    // The error's own extra lines come before the source chain's. `ignore::Error` has no `source()`, so the chain stops
-    // after one multi-line link.
+    // `ignore::Error` has no `source()`, so the chain is the one wrapped walker error.
     #[test]
-    fn self_and_source_multiline_hints_ordered() {
-        let inner_io = std::io::Error::other("io line one\nio line two");
-        let source = ignore::Error::Io(inner_io);
-        let err = MonoklError::Walk { path: Utf8PathBuf::from("root line one\nroot line two"), source };
+    fn source_chain_becomes_causes_not_hints() {
+        let source = ignore::Error::Io(std::io::Error::other("io line one\nio line two"));
+        let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source };
         let domain_err = err.to_domain_error(ctx());
 
-        assert_eq!(domain_err.message, "walk: walker error at root line one");
-        let hint_strs: Vec<&str> = domain_err.hints.iter().map(michi::Hint::as_str).collect();
-        assert_eq!(hint_strs, vec!["root line two", "io line one", "io line two"]);
+        assert_eq!(domain_err.message, "walk: walker error at /x");
+        assert_eq!(domain_err.causes, vec!["io line one\nio line two"]);
+        assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
+    }
+
+    // `Io` is transparent, so its message already is `FileIoError`'s; the cause is the `io::Error` beneath it, once.
+    #[test]
+    fn io_cause_is_the_wrapped_io_error_once() {
+        let err: MonoklError = crate::file_io::FileIoError::read("/x", std::io::Error::other("boom")).into();
+        let domain_err = err.to_domain_error(ctx());
+
+        assert_eq!(domain_err.message, "io: failed to read /x");
+        assert_eq!(domain_err.causes, vec!["boom"]);
     }
 
     #[test]
@@ -874,6 +865,7 @@ mod error_tests {
         let err = MonoklError::LockPoisoned { context: "ctx" };
         let domain_err = err.to_domain_error(ctx());
         assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
+        assert!(domain_err.causes.is_empty(), "got: {:?}", domain_err.causes);
         assert!(domain_err.recovery.is_none());
     }
 
@@ -912,12 +904,5 @@ mod error_tests {
             ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: loop_err };
         assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::ExternalFailure);
-    }
-
-    #[test]
-    fn split_display_lines_handles_crlf_lf_cr_and_plain() {
-        assert_eq!(split_display_lines("a\r\nb\nc\rd"), vec!["a", "b", "c", "d"]);
-        assert_eq!(split_display_lines("single"), vec!["single"]);
-        assert_eq!(split_display_lines(""), vec![""]);
     }
 }

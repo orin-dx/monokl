@@ -511,9 +511,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "michi-core"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f190f035245fd3d92b92a78535d609fdc783cde499265c0d02065c3d25b8a1c7"
+checksum = "febaf647eef8a9321669546db11e7af1325914fbd8bd63aeef370f369ca2cb12"
 dependencies = [
  "compact_str",
  "miette",
