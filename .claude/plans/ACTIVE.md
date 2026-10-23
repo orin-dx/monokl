@@ -396,7 +396,7 @@ this rigor level, not one sitting.
 | 5c | Workspace/extract config types (`TsconfigMode`, `WorkspaceOptions`, `ExtractRequest`) | §4 (subset) | GATED — `SPEC-008.json` |
 | 6 | Query language (lexer/parser/plan) | §5 | **IMPLEMENTED** — `SPEC-009.json`; resolves query-and-ranking.md's regex/`+`/`-` gaps |
 | 7 | Token counting | §6 | Identifier tokenizing **IMPLEMENTED** (`SPEC-012`, `tokens.rs`); tiktoken counting moves to the output layer (Part 8 §7.5) |
-| 8 | Text search | §7 | **SPECCED** — `SPEC-013.json`; decisions in 05 §18 |
+| 8 | Text search | §7 | **IMPLEMENTED** — `SPEC-013.json`, `text_search.rs`; decisions in 05 §18 |
 | 9 | Ranking (BM25/boost/tokenize) | §8 | **IMPLEMENTED** — `SPEC-012.json`, `rank/`, total-order tie-break |
 | 10 | Dedup | §9 | **IMPLEMENTED** — `SPEC-012.json`, `dedup.rs` |
 | 11 | Budget | §10 | Not started — resolves the uncapped `max_results`/`max_tokens` gap |
