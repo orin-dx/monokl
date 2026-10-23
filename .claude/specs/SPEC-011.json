@@ -1,35 +1,124 @@
 {
   "id": "SPEC-011",
   "spec_file_path": ".claude/specs/SPEC-011.json",
-  "purpose": "Define the complete, compilable shape and observable contract of ContentHash -- monokl's blake3-based content-identity newtype -- per docs/spec/01-core-architecture.md Section 12 (analysis/content_hash.rs, lines 1381-1396), so a developer implementing FileAnalysis (track #14), the in-memory cache (track #16), or disk persistence (track #17) never has to guess ContentHash's derives, its constructor's hashing behavior, its serde wire form, or what it does and does not validate. ContentHash is a small, foundational, standalone type: this spec locks it in isolation from the two real open design questions that already surround its *use* elsewhere in the corpus -- the cache Tier-1 mtime/size-only fast-path gap (`docs/architecture/cache-architecture.md`, ACTIVE.md backlog) and the cache.json disk-persistence format (track #17) -- neither of which changes ContentHash's own shape and both of which remain this spec's non_goals, to be resolved by whichever track owns that behavior.",
-  "scope": "The ContentHash struct itself (01-core-architecture.md:1387), its sole fallible-free constructor `of(content: &[u8]) -> Self`, its sole accessor `as_str(&self) -> &str`, its full derive list (Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize) and the concrete behavioral consequences of each -- including blake3's fixed 64-lowercase-hex-character output shape, serde_json's newtype-forwarding serialize/deserialize form for a single-field tuple struct, and the fact that Deserialize performs no length/hex-charset validation on its input. It locks that ContentHash has exactly these 2 inherent methods and no others (no Display, Default, Ord/PartialOrd, Copy, From/TryFrom, or streaming/incremental hashing API).",
+  "purpose": "Define Digest -- monokl's content-identity type -- per docs/spec/08-library-session-api.md §8.4, which supersedes the bare-hex ContentHash(String) of docs/spec/01-core-architecture.md Section 12. A Digest names its algorithm, so a cache entry written today stays distinguishable from one written after an algorithm or width change. FileAnalysis (track #14), the in-memory cache (track #16) and disk persistence (track #17) key on it.",
+  "scope": "The Digest struct and DigestAlgorithm enum in crates/monokl/src/digest.rs; Digest::blake3(content) as the one hashing constructor; the textual form `algorithm \":\" encoded` produced by Display and accepted by FromStr; the serde wire form, which is that same string; and the parse errors.",
   "non_goals": [
-    "The disk-persisted cache.json format and PersistedFileAnalysis's own shape (01-core-architecture.md:1517-1532, Section 16) -- a separate track (#17 in ACTIVE.md's track decomposition). This spec only notes that PersistedFileAnalysis.content_hash: ContentHash (line 1518) references this type; it does not re-lock PersistedFileAnalysis's own shape.",
-    "FileAnalysis's own shape (01-core-architecture.md:1404-1414, Section 13, track #14) -- likewise only referenced (FileAnalysis.content_hash: ContentHash, line 1407), not re-locked here.",
-    "The cache Tier-1 mtime/size-only fast-path gap documented in `docs/architecture/cache-architecture.md` (\"Known Defect, Not Yet Fixed in the Spec Text\") and named in ACTIVE.md's backlog as the 'Cache Tier-1 content-hash gap.' That gap is about whether `persist::lookup`/`cache_tiers::lookup_or_parse` (Section 15/16, track #16/#17) ever actually reads and compares a ContentHash before returning a cached result -- a behavioral decision in the cache lookup pipeline, not a question about ContentHash's own type shape. This spec's ContentHash is fully sufficient to implement either resolution ((a) or (b) per the semantic model) once that separate track makes its decision; it does not make that decision here.",
-    "A streaming or incremental hashing API (e.g. exposing blake3's own Hasher::update/finalize). §12's verbatim source has exactly one constructor, `of(content: &[u8])`, which always hashes a fully-materialized byte slice in one call -- no incremental variant exists in the source, and none is invented here.",
-    "Adding Deserialize-time validation (length check, hex-charset check, or re-parsing as a blake3 digest) to reject a malformed inner string. §12's verbatim source derives Deserialize with no custom validation; adding any would be a new behavioral decision about this type, not a faithful reconstruction of the source shown (see AC-008, which documents the resulting gap instead of closing it).",
-    "Any From<&str>/TryFrom<&str>/FromStr impl for constructing a ContentHash from a pre-existing hex string outside of Deserialize. No such impl appears in §12's verbatim source."
+    "Computing sha256 digests. DigestAlgorithm::Sha256 exists so a sha256 digest from a third-party harness plugin parses and round-trips (§8.4's boundary table); monokl computes blake3 only, and nothing in monokl needs a sha256 hasher yet.",
+    "sha512 or any other OCI-registered algorithm. DigestAlgorithm is #[non_exhaustive] so one can be added without a breaking change.",
+    "Moving Digest into wisp-contracts. That crate does not exist yet; Digest is shaped to move there unchanged (docs/adr/0002-digest-lives-in-monokl-until-wisp-contracts.md).",
+    "FileAnalysis, the cache, and the cache.json format (tracks #14, #16, #17). They reference Digest; their own shapes are not locked here.",
+    "The cache Tier-1 mtime/size fast-path gap (docs/architecture/cache-architecture.md). It concerns when a digest is compared, not the digest's shape.",
+    "Streaming or incremental hashing. Digest::blake3 hashes one byte slice in one call."
   ],
   "api_surface": [
-    {"name": "ContentHash", "signature": "#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)] pub struct ContentHash(String);", "description": "01-core-architecture.md:1387. A newtype wrapping a private (non-pub) String field holding a hex-encoded blake3 digest. No field-level serde attribute; the tuple field's own privacy means external code cannot construct a ContentHash via ContentHash(some_string) -- the sole public constructor is of() (see AC-009).", "error_conditions": []},
-    {"name": "ContentHash::of", "signature": "pub fn of(content: &[u8]) -> Self", "description": "01-core-architecture.md:1390-1392. Computes blake3::hash(content).to_hex().to_string() and wraps it. Infallible -- returns Self directly, not Result<Self, _>.", "error_conditions": []},
-    {"name": "ContentHash::as_str", "signature": "pub fn as_str(&self) -> &str", "description": "01-core-architecture.md:1393. Returns &self.0, a borrowed view of the inner hex digest string. The only way to read a ContentHash's textual value; no Display, Deref, or into_inner/into_string exists.", "error_conditions": []}
+    {
+      "name": "DigestAlgorithm",
+      "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DigestAlgorithm { Sha256, Blake3 }",
+      "description": "The algorithm half of a digest. Its textual names are `sha256` and `blake3`.",
+      "error_conditions": []
+    },
+    {
+      "name": "Digest",
+      "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct Digest { pub algorithm: DigestAlgorithm, pub bytes: [u8; 32] }",
+      "description": "An algorithm-prefixed 32-byte digest.",
+      "error_conditions": []
+    },
+    {
+      "name": "Digest::blake3",
+      "signature": "#[must_use] pub fn blake3(content: &[u8]) -> Self",
+      "description": "Hashes content with blake3. Infallible.",
+      "error_conditions": []
+    },
+    {
+      "name": "impl Display for Digest",
+      "signature": "impl std::fmt::Display for Digest",
+      "description": "Writes `algorithm:hex`, with 64 lowercase hex characters.",
+      "error_conditions": []
+    },
+    {
+      "name": "impl FromStr for Digest",
+      "signature": "impl std::str::FromStr for Digest { type Err = DigestParseError; }",
+      "description": "Parses `algorithm:hex`. Rejects an unknown algorithm, a missing separator, hex of the wrong length, and any character outside [0-9a-f], uppercase hex included.",
+      "error_conditions": ["DigestParseError::MissingSeparator", "DigestParseError::UnknownAlgorithm", "DigestParseError::InvalidEncoding"]
+    },
+    {
+      "name": "DigestParseError",
+      "signature": "#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)] #[non_exhaustive] pub enum DigestParseError { MissingSeparator, UnknownAlgorithm { algorithm: String }, InvalidEncoding }",
+      "description": "Why a string is not a digest.",
+      "error_conditions": []
+    },
+    {
+      "name": "Serialize / Deserialize for Digest",
+      "signature": "impl Serialize for Digest; impl<'de> Deserialize<'de> for Digest",
+      "description": "Serializes as the Display string; deserializes from a string through FromStr, so an invalid digest fails to deserialize.",
+      "error_conditions": ["any FromStr error, surfaced as a serde custom error", "a non-string value"]
+    }
   ],
   "acceptance_criteria": [
-    {"id": "AC-001", "criterion": "ContentHash (01-core-architecture.md:1387) is a tuple struct wrapping exactly one private (non-pub) field of type String, with exactly one attribute line: #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]. It has exactly 2 inherent methods -- of and as_str (AC-002, AC-003) -- and no others. It derives no Copy, no PartialOrd/Ord, no Default, and implements no Display, Deref, From<&str>/From<String>, or TryFrom of any kind. Because the wrapped field is private, code outside content_hash.rs's own module cannot construct a ContentHash via tuple-struct syntax (ContentHash(some_string)); of() is the sole public construction path (Deserialize is a second, non-validating one -- see AC-008).", "is_error_case": false, "judgment_call": false},
-    {"id": "AC-002", "criterion": "ContentHash::of(content: &[u8]) -> Self (01-core-architecture.md:1390-1392) computes Self(blake3::hash(content).to_hex().to_string()) -- a single, non-incremental hash over the entire byte slice passed in one call. It is infallible: the signature returns Self directly, never Result<Self, _> or Option<Self>, and no input (including an empty slice, &[]) causes it to panic or fail. The blake3 dependency this relies on is pinned to blake3 = \"1\" at the workspace level (root Cargo.toml:55) and pulled into the monokl crate as a non-optional, always-compiled dependency (crates/monokl/Cargo.toml:45; SPEC-004 AC-009/AC-022).", "is_error_case": false, "judgment_call": false},
-    {"id": "AC-003", "criterion": "ContentHash::as_str(&self) -> &str (01-core-architecture.md:1393) returns &self.0 -- a borrowed reference to the inner hex-digest String, with no allocation and no transformation. It is the only method on ContentHash that exposes the digest's textual value; there is no into_inner, into_string, or Display impl anywhere on the type (AC-001).", "is_error_case": false, "judgment_call": false},
-    {"id": "AC-004", "criterion": "blake3::hash produces a fixed-size 32-byte digest, and Hash::to_hex() renders it as exactly 64 characters, all lowercase hexadecimal digits (0-9, a-f) -- never uppercase, never a different length. Consequently, for any input byte slice (including &[] and content of any other length), ContentHash::of(content).as_str() always returns a String of exactly 64 lowercase-hex characters. This is a documented property of the blake3 crate's Hash::to_hex() output, not something ContentHash's own code independently enforces or could deviate from.", "is_error_case": false, "judgment_call": true, "rationale": "Stating blake3's own fixed 64-char lowercase-hex output shape as a testable proposition about ContentHash (rather than re-deriving it from blake3's source) mirrors SPEC-006 AC-008's pattern of citing a documented dependency-library fact as a concrete, monokl-scoped claim a tester can mechanically check without independently auditing the dependency's internals."},
-    {"id": "AC-005", "criterion": "ContentHash::of is deterministic and pure: given byte-for-byte identical content, repeated calls -- within the same process or across separate process invocations -- always produce ContentHash values that compare equal via the derived PartialEq/Eq (i.e. their wrapped hex strings are identical). No salt, random seed, timestamp, filesystem metadata, or process-local state feeds into the computation; the only input is the content: &[u8] argument. This spec does not claim ContentHash provides a type-level uniqueness guarantee across distinct content: two different byte slices are, per blake3's own design goals, cryptographically unlikely to hash to equal digests, but nothing in ContentHash's own type or blake3's API makes a collision structurally impossible -- equal ContentHash values are evidence of (very likely) identical content, not formal proof of it.", "is_error_case": false, "judgment_call": true, "rationale": "Stating the collision caveat explicitly, rather than letting an unqualified 'ContentHash equality implies content equality' claim stand, avoids overclaiming a guarantee neither §12's source nor blake3's own documentation makes -- consistent with this project's general practice (e.g. SPEC-001 AC-002B, SPEC-006 AC-008) of stating a library's actual guarantee precisely rather than a stronger one that sounds cleaner."},
-    {"id": "AC-006", "criterion": "The derived Hash impl is consistent with the derived Eq impl (equal ContentHash values always produce equal hash-code output), since both are derived from the same single wrapped field per Rust's standard #[derive(Hash, Eq)] contract -- so ContentHash can key a std::collections::HashMap/HashSet or a dashmap::DashMap without violating that contract. ContentHash derives no PartialOrd/Ord: it cannot be compared with < / <= / sorted via .sort(), and cannot key a BTreeMap or BTreeSet. (Contrast: CacheFile.entries, a real BTreeMap in this corpus, is keyed by Utf8PathBuf, not ContentHash -- 01-core-architecture.md:1538 -- consistent with ContentHash's own lack of an Ord derive.)", "is_error_case": false, "judgment_call": false},
-    {"id": "AC-007", "criterion": "Because ContentHash is a single-field tuple struct, serde's derive macro implements it as a newtype for serialization purposes: Serialize forwards via serializer.serialize_newtype_struct(\"ContentHash\", &self.0). serde_json's own Serializer implementation of serialize_newtype_struct forwards directly to the inner value's own serialization with no wrapper object or array -- so serde_json::to_string(&ContentHash::of(b\"x\")) produces a bare JSON string literal (e.g. \"2d3add...\", the 64-hex-char digest per AC-004), never a JSON object like {\"0\":\"2d3add...\"}. This is documented serde_json behavior for newtype structs, not logic ContentHash's own code implements.", "is_error_case": false, "judgment_call": true, "rationale": "As with AC-004, stating serde_json's documented newtype-forwarding behavior as a concrete, ContentHash-scoped testable proposition (rather than a general claim about serde) follows the precedent set by SPEC-006 AC-008 for citing dependency-documented serialization behavior precisely."},
-    {"id": "AC-008", "criterion": "Deserialize is the symmetric newtype-forwarding form: deserializing a ContentHash accepts any JSON string value whatsoever as the wrapped field, with no length check, no hex-charset check, and no re-verification that the string could have been produced by blake3's to_hex(). Deserializing the JSON string \"not-a-real-hash\" (16 ASCII characters, not valid hex, not 64 characters long) succeeds without error and produces a ContentHash whose as_str() returns exactly \"not-a-real-hash\" -- a value of() could never itself produce (AC-004 guarantees of()'s output is always exactly 64 lowercase-hex characters). This is a real, currently unresolved gap in ContentHash's own type contract: nothing prevents a deserialized ContentHash from holding a string that is not, and never was, an actual content digest. §12's verbatim source has no custom Deserialize impl or validation attribute that would close this gap, and this spec does not add one -- doing so would be a new validation-behavior decision for this type, not a faithful reconstruction of the source shown (see non_goals).", "is_error_case": true, "judgment_call": true, "rationale": "This mirrors SPEC-006 AC-004's pattern exactly: documenting a real, source-verified gap in a type's own Deserialize contract as a precise, testable proposition, while explicitly declining to invent a fix the source doesn't show. Whether to close this gap (e.g. by validating hex-formedness on deserialize) is left to whichever future track first needs that guarantee -- adding it unilaterally here would be exactly the kind of new design decision this project's CLAUDE.md requires a brainstorming pass for, not a routine type-shape lock."},
-    {"id": "AC-009", "criterion": "ContentHash's only two public construction paths are: (1) ContentHash::of(content), which always yields a value satisfying AC-004's 64-lowercase-hex-character shape, and (2) Deserialize, which per AC-008 enforces no such shape and can yield a ContentHash holding an arbitrary string. There is no third path -- no From<&str>, TryFrom<&str>, FromStr, or public tuple-construction (the field is private, per AC-001) exists anywhere on this type.", "is_error_case": false, "judgment_call": false},
-    {"id": "AC-010", "criterion": "Because ContentHash's derived Deserialize for this single-field tuple struct forwards to the wrapped field's own Deserialize impl (String's, per AC-008's newtype-forwarding form), deserializing a JSON value of any non-string type where a ContentHash is expected -- null, a number, a boolean, an array, or an object -- fails with a serde_json::Error reporting an invalid-type mismatch against an expected string. This never produces Ok(_) and never panics. This is distinct from AC-008's case, where the JSON value IS a string but its contents are malformed (wrong length or non-hex) and deserialization still succeeds. A caller propagating this via `?` into crate::error::Result<_> receives MonoklError::Json wrapping that serde_json::Error.", "is_error_case": true, "judgment_call": false}
+    {
+      "id": "AC-001",
+      "criterion": "Digest::blake3(b\"\") equals Digest { algorithm: DigestAlgorithm::Blake3, bytes: *blake3::hash(b\"\").as_bytes() }, and its Display output is exactly \"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\" (blake3's published digest of empty input).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-002",
+      "criterion": "Digest::blake3 is deterministic: two calls on byte-identical input return equal values, and calls on different inputs b\"a\" and b\"b\" return unequal values.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-003",
+      "criterion": "For every digest d, d.to_string().parse::<Digest>() returns Ok(d), for both DigestAlgorithm::Blake3 and DigestAlgorithm::Sha256 and for bytes of all zeros, all 0xff, and a blake3 output.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-004",
+      "criterion": "Display writes the algorithm name (`blake3` or `sha256`), one `:`, then exactly 64 characters from [0-9a-f]; no uppercase letter ever appears.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-005",
+      "criterion": "Parsing a string with no `:` (e.g. a bare 64-character hex string, the old ContentHash form) returns Err(DigestParseError::MissingSeparator).",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-006",
+      "criterion": "Parsing `md5:` followed by 64 valid hex characters returns Err(DigestParseError::UnknownAlgorithm { algorithm: \"md5\" }). Algorithm names are case-sensitive: `BLAKE3:` followed by valid hex also returns UnknownAlgorithm.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-007",
+      "criterion": "Parsing `blake3:` followed by any of these returns Err(DigestParseError::InvalidEncoding): 63 hex characters, 65 hex characters, an empty string, 64 characters containing one uppercase hex letter (OCI: [A-F] MUST NOT be used), and 64 characters containing a non-hex character such as `g`. A second `:` in the encoded part (`blake3:ab:cd...`) is also InvalidEncoding.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-008",
+      "criterion": "serde_json::to_string(&d) is the JSON string literal of d.to_string() (e.g. \"\\\"blake3:af13...\\\"\"), and serde_json::from_str::<Digest> of that literal returns d.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-009",
+      "criterion": "serde_json::from_str::<Digest> fails (returns Err, never panics) for a JSON string that FromStr rejects (each AC-005..AC-007 case), and for null, a number, a boolean, an array, and an object.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-010",
+      "criterion": "Digest and DigestAlgorithm are Copy and usable as HashMap/HashSet keys; equal digests hash equally. Neither implements PartialOrd/Ord or Default.",
+      "is_error_case": false,
+      "judgment_call": false
+    }
   ],
   "linked_requirement": "REQ-011",
-  "linked_research": "docs/spec/01-core-architecture.md:1381-1396 (Section 12, analysis/content_hash.rs verbatim); ARCHITECTURE.md's caching section; PRINCIPLES.md's content-hash tenet; docs/architecture/cache-architecture.md; .claude/plans/ACTIVE.md track-decomposition and backlog. docs/spec/05-research-and-decisions.md checked, no mention of ContentHash found.",
-  "revision_note": "Post-audit revision (canon:audit-spec, FAIL, 2 findings): (1) fixed AC-002's citation of the blake3 = \"1\" workspace pin from 'SPEC-004 AC-009/AC-023' to the correct 'SPEC-004 AC-009/AC-022' -- AC-023 covers grep-regex/clap/miette/tracing/insta/pretty_assertions/proptest/tempfile/criterion, not blake3. (2) added AC-010 covering deserialization of a non-string JSON value (null, number, boolean, array, object) into ContentHash, which AC-008 did not address -- relevant to track #17's disk-persistence contract.",
-  "reasoning": "ContentHash's own shape is small and unambiguous in the source. AC-004/AC-007 state blake3/serde_json library-documented facts as concrete testable propositions (precedent: SPEC-006 AC-008). AC-008 documents a real validation gap using the same pattern as SPEC-006 AC-004. REQ-011 is a conventional id-pairing per this project's SPEC-NNN sequence, sourced from ACTIVE.md's track table rather than a separate graph:capture-need pass."
+  "linked_research": "docs/spec/08-library-session-api.md §8.4 and §14; OCI image-spec descriptor digest grammar; docs/spec/01-core-architecture.md Section 12 (superseded).",
+  "revision_note": "2026-10-23 correction: replaced ContentHash(String) with Digest per Part 8 §8.4, which supersedes it (§14). An unprefixed hash is unmigratable, and the old spec explicitly declined deserialize-time validation; Digest validates on parse and deserialize. The earlier ContentHash criteria are withdrawn, not carried over.",
+  "reasoning": "Shape, grammar and the lowercase rule come straight from §8.4. Choices this spec makes that §8.4 leaves open: a single blake3 constructor (sha256 is parse-only, non_goals); DigestAlgorithm is #[non_exhaustive] because OCI registers more algorithms; serde goes through the Display/FromStr string so the wire form and the text form cannot drift; a second `:` is InvalidEncoding rather than a separate variant, since the encoded part is what is malformed. Digest lives in monokl until wisp-contracts exists (ADR 0002)."
 }
