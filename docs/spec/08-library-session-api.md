@@ -81,7 +81,7 @@ impl Workspace {
     /// Walk, load the disk cache, analyze, build the index. Fallible I/O, hence `open` not `new`.
     pub fn open(opts: WorkspaceOptions) -> Result<Self>;
 
-    /// O(1): clones three `Arc`s and copies the fingerprint. No lifetime tied to `&self`.
+    /// O(1): clones the immutable index `Arc` and small snapshot metadata. No lifetime tied to `&self`.
     pub fn snapshot(&self) -> Snapshot;
 
     /// Apply one transactional change set. Builds a new `Arc<WorkspaceIndex>` and swaps it in;
@@ -110,7 +110,6 @@ impl Drop for Workspace {
 #[derive(Clone)]
 pub struct Snapshot {
     index: Arc<WorkspaceIndex>,
-    cache: Arc<AnalysisCache>,
     fingerprint: WorkspaceFingerprint,
     scope: Scope,
 }
@@ -142,6 +141,8 @@ impl Snapshot {
     pub fn analyses(&self) -> impl Iterator<Item = (&Utf8Path, &Arc<FileAnalysis>)>;
 }
 ```
+
+`apply_change` is a query-visible publication boundary. It builds the replacement index and fingerprint off to the side and publishes them together only after every fallible file analysis and required I/O step succeeds. `WorkspaceIndex` owns the ordered `Arc<FileAnalysis>` set used to construct it, so `Snapshot::analysis`/`analyses` read that pinned set rather than the workspace's mutable path-keyed parse cache. On failure `apply_change` returns `Err`, leaves the prior index and fingerprint current, and emits no partially advanced `ChangeSummary`; newly computed cache entries may remain queued, but no snapshot consults them. `WorkspaceEnricher::update/finalize` are currently infallible and may attach diagnostics to a successful result, so enrichment is not listed as a rollback trigger unless that trait later becomes fallible. Concurrent queries therefore observe either the last complete index/fingerprint/analysis set or the next complete set, never a mixture. This is the in-memory generation contract; it does not justify a persistent generation database.
 
 `Workspace` gets thin forwarding methods for every query (`ws.search(o)` ≡ `ws.snapshot().search(o)`) so the single-query case isn't a two-step dance. The Part 1 free functions survive as one-shot wrappers:
 
@@ -621,7 +622,7 @@ pub struct ObservedAt(pub i64);
 
 Every field on `Provenance` and its parts serializes camelCase — `configHash`, `normalizedParams`, `observedAt` — because a third-party harness plugin reading the JSON is a first-class consumer, not an afterthought.
 
-`Snapshot::provenance_is_current(&p)` has exactly one definition, and it is Glean's derived-fact rule (a derived fact is visible iff every fact it was derived from is visible): the workspace fingerprint matches (respecting durability — a durable-only provenance survives a volatile bump), `agent.config_hash` matches, and every `inputs[i].content` still matches the cache. **Acceptance criterion: this must answer without rebuilding the index.** It's a hash-map lookup per input, nothing more.
+`Snapshot::provenance_is_current(&p)` has exactly one definition, and it is Glean's derived-fact rule (a derived fact is visible iff every fact it was derived from is visible): the workspace fingerprint matches (respecting durability — a durable-only provenance survives a volatile bump), `agent.config_hash` matches, and every `inputs[i].content` still matches the corresponding analysis pinned in the snapshot's index. **Acceptance criterion: this must answer without rebuilding the index or consulting the live path-keyed cache.** It is one path→`FileIdx` lookup and one vector access per input.
 
 ### 8.3 Per-edge precision
 
@@ -641,6 +642,7 @@ pub enum EdgeTarget {
     Resolved(FileId),
     Ambiguous { candidates: Vec<FileId>, diagnostic: Diagnostic },
     Unresolved { specifier: SmolStr, diagnostic: Diagnostic },
+    External { specifier: SmolStr },
 }
 ```
 
@@ -730,7 +732,7 @@ It is one or two tools over `Snapshot::query`, never six mirroring the subcomman
 
 ## 10. Raw access
 
-`Snapshot::analysis(path) -> Option<Arc<FileAnalysis>>` and `analyses()` exist because a consumer composing its own output (Wisp) should not go through a capped, budgeted, diagnostic-wrapped path to read symbols off an analysis it can already name. Precedent is `AnalysisHost::raw_database()`, which is public. Constraints from the same precedent: it lives on the snapshot next to the curated surface, not on a parallel "raw API"; it is documented as "no token budget, no truncation, no stability guarantee across minor versions"; and it is behind a non-default `raw-api` cargo feature so a downstream dependency on it is visible in `Cargo.toml` rather than discovered at the next semver bump. That last clause is what buys the freedom to reshape `FileAnalysis` without a major version.
+`Snapshot::analysis(path) -> Option<Arc<FileAnalysis>>` and `analyses()` delegate to the immutable analysis vector pinned inside that snapshot's `WorkspaceIndex`; they never look up the live `Workspace::analysis_cache()`. They exist because a consumer composing its own output (Wisp) should not go through a capped, budgeted, diagnostic-wrapped path to read symbols off an analysis it can already name. Precedent is `AnalysisHost::raw_database()`, which is public. Constraints from the same precedent: it lives on the snapshot next to the curated surface, not on a parallel "raw API"; it is documented as "no token budget, no truncation, no stability guarantee across minor versions"; and it is behind a non-default `raw-api` cargo feature so a downstream dependency on it is visible in `Cargo.toml` rather than discovered at the next semver bump. That last clause is what buys the freedom to reshape `FileAnalysis` without a major version.
 
 The generalizable rule from `grep-searcher`/`grep-printer` (already in monokl's dependency tree), from `ide`/`hir`, and from LSP's `completionItem/resolve`: the raw layer must not know the budget exists. Under §7.5 that rule holds more strongly than it did — no layer of core knows. `query()` returns the fully built `Vec<RankedBlock>`, and `apply_budget` is the first thing a *caller* does with it. To stop drift on the caller's side, the budgeted path returns `Budgeted<T> { value: T, report: OpBudget }` so "forgot to record the truncation" is a compile error; that wrapper lives in `monokl-agent` and, independently, in `wisp-context`.
 
@@ -810,6 +812,8 @@ Extend the suite on 5k / 20k / 50k-file fixtures:
 | **Refold vs parse** | Report enricher fold time separately from parse time | The entire 50k-file argument is that fold is cheap relative to parse. Confirms or kills it. |
 | **Stale-snapshot memory** | Hold two snapshots across a change and measure RSS, and report resident bytes **per pinned revision** at each fixture size (§3.2) | Turns the unbounded stale-snapshot cost into a known number, and supplies the per-revision figure an embedder multiplies by its own concurrency bound. The 90–140 MB at 50k files and the ~9–14 MB interpolated at 5k are both estimates until this runs. |
 | **Budget policy** | The same 28-op batch under `Proportional`, `Weighted`, and `Ordered`, reporting `items_returned` per op | No prior art validates any allocation policy; this is where one gets chosen. Belongs to `monokl-agent`'s bench suite, since `BudgetPolicy` lives there (§7.5); a caller with its own allocator benches that separately. |
+
+Correctness gates run beside these performance measurements. For generated sequences of no-op/touch, modify, edit-then-revert, create, delete, rename, configuration change, and analyzer-version change, canonical query results after every `apply_change` must equal a fresh `Workspace::open` over the resulting files and configuration. Repeat sequences across multiple revisions, compare resolved/ambiguous/unresolved/external states and diagnostics as well as returned items, and inject a failed change to prove that the prior snapshot/fingerprint remains published. The generator and the clean-open result are the falsifiable oracle; latency measurements cannot substitute for this parity check.
 
 Report medians with IQR over ≥5 runs. Do not port externally published numbers in as targets — none are methodology-comparable to monokl's own file mix.
 

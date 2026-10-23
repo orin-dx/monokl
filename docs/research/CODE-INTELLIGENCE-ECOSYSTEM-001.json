@@ -1,0 +1,85 @@
+{
+  "question": "Which code-intelligence techniques, patterns, and reusable Rust crates from ProjectAtlas, OpenWiki, Repowise, Serena, sem, and adjacent projects should the Orin projects adopt, evaluate, defer, or reject?",
+  "findings": [
+    {
+      "claim": "Syntax capture and semantic resolution are separate stages; a textual or AST occurrence is not automatically a resolved reference.",
+      "evidence": "https://github.com/repowise-dev/repowise/blob/25c89ab307a02e2a89d548c0a1b46aae8d6d20fe/docs/layers/GRAPH.md and docs/spec/02-inspection-and-analysis.md",
+      "source": "Repowise and Monokl",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Resolution must retain resolved, ambiguous, unresolved, and external outcomes plus candidate sets instead of collapsing them into an optional target.",
+      "evidence": "https://github.com/styler-ai/ProjectAtlas/blob/6e3454ee090997a41c84897110f19caeb26d219c/crates/projectatlas-core/src/graph.rs and docs/spec/08-library-session-api.md",
+      "source": "ProjectAtlas and Monokl",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Language servers add cross-file semantic precision but require capability negotiation, document-version freshness, bounded timeouts and frames, crash supervision, and structural fallback.",
+      "evidence": "https://github.com/oraios/serena/blob/701e7c843f46c6a649203a488cece1bf19f1df90/src/serena/ls_manager.py and docs/spec/06-daemon-architecture.md",
+      "source": "Serena and Monokl",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Incremental state must be tested against a clean rebuild across create, modify, delete, rename, configuration, and analyzer-version changes.",
+      "evidence": "https://github.com/repowise-dev/repowise/blob/25c89ab307a02e2a89d548c0a1b46aae8d6d20fe/docs/CHANGELOG.md and https://docs.rs/sem-core/0.24.0/sem_core/",
+      "source": "Repowise and sem-core",
+      "confidence": "likely"
+    },
+    {
+      "claim": "A complete publication boundary is valuable, but a persistent generation database is unnecessary where an immutable snapshot can be atomically swapped or one SQLite transaction can publish the full result.",
+      "evidence": "https://github.com/styler-ai/ProjectAtlas/blob/6e3454ee090997a41c84897110f19caeb26d219c/docs/projectatlas-3-architecture.md and docs/spec/08-library-session-api.md",
+      "source": "ProjectAtlas and Monokl",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Code-fact evaluation must separate capture recall from resolution precision and recall, retain oracle-unjudged cases, and use an independent compiler or type checker where available.",
+      "evidence": "https://github.com/repowise-dev/repowise/blob/25c89ab307a02e2a89d548c0a1b46aae8d6d20fe/docs/BENCHMARKS.md",
+      "source": "Repowise",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Git co-change and ownership can inform ranking or risk, but they are weak historical signals and must not be treated as dependency proof or structural centrality edges.",
+      "evidence": "https://github.com/repowise-dev/repowise/blob/25c89ab307a02e2a89d548c0a1b46aae8d6d20fe/docs/architecture/graph-algorithms.md",
+      "source": "Repowise",
+      "confidence": "likely"
+    },
+    {
+      "claim": "Observed measurements, deterministic derivations, and modeled counterfactuals need separate labels, bases, and deduplication scopes.",
+      "evidence": "https://github.com/styler-ai/ProjectAtlas/blob/6e3454ee090997a41c84897110f19caeb26d219c/crates/projectatlas-core/src/telemetry.rs",
+      "source": "ProjectAtlas",
+      "confidence": "likely"
+    },
+    {
+      "claim": "OpenWiki overlaps most strongly with Wisp's durable grounded-knowledge and documentation lifecycle, while Atlas overlaps with Monokl's graph and Wisp's context-selection layer.",
+      "evidence": "https://github.com/langchain-ai/openwiki/tree/e92cc11723a852b05b7983ab1a61feab96d75ba9 and https://github.com/styler-ai/ProjectAtlas/tree/6e3454ee090997a41c84897110f19caeb26d219c",
+      "source": "OpenWiki and ProjectAtlas",
+      "confidence": "likely"
+    },
+    {
+      "claim": "lsp-types is a protocol DTO crate rather than a transport; async-lsp is a plausible client transport but needs an MSRV, lifecycle, cancellation, and framing spike before adoption.",
+      "evidence": "https://docs.rs/lsp-types/0.97.0/lsp_types/ and https://docs.rs/async-lsp/0.2.4/async_lsp/",
+      "source": "crate documentation",
+      "confidence": "likely"
+    },
+    {
+      "claim": "sem-core is useful as a dev-only differential oracle with minimal features, but its defaults and OXC version make it unsuitable as a Monokl production dependency today.",
+      "evidence": "https://docs.rs/sem-core/0.24.0/sem_core/ and https://docs.rs/crate/sem-core/0.24.0/source/Cargo.toml and docs/spec/01-core-architecture.md",
+      "source": "sem-core and Monokl",
+      "confidence": "likely"
+    },
+    {
+      "claim": "SCIP is useful for optional interchange and external precision upgrades, but its wire model does not carry Monokl's per-edge precision and is not a query store.",
+      "evidence": "https://docs.rs/scip/0.9.0/scip/ and docs/spec/08-library-session-api.md",
+      "source": "SCIP and Monokl",
+      "confidence": "likely"
+    }
+  ],
+  "recommendation": "Adopt typed resolution outcomes, structured provenance, complete snapshot publication, incremental-versus-clean parity tests, independent compiler oracles, explicit measurement basis, and bounded LSP lifecycle contracts. Spike async-lsp and sem-core only at evaluation boundaries; use lsp-types, SCIP, notify, arc-swap, rusqlite, rmcp, and toon-format only in the scoped roles described in the companion technique matrix. Reject a second code index in Wisp, Git-history edges as dependency truth, Atlas internal crates as dependencies, and production adoption of broad indexing stacks such as Codanna.",
+  "confidence": "medium",
+  "open_questions": [
+    "Whether async-lsp satisfies Monokl's MSRV, frame-bound, shutdown, and cancellation requirements in a minimal client spike.",
+    "Whether Git co-change or ownership provides measurable briefing lift after Prism ablation.",
+    "Whether Michi needs a typed measurement-basis primitive after two real consumers exist, or whether structured provenance labels are sufficient.",
+    "Which TypeScript compiler API and Go RTA fixture generators should be frozen as Prism's first independent code-fact oracles."
+  ]
+}
