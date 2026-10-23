@@ -9,6 +9,7 @@ The spec's own decision log, [`docs/spec/05-research-and-decisions.md`](../spec/
 One line per ADR, with what it guards. Add a line when you add an ADR.
 
 - [1. Keep FileIoError in monokl instead of a shared io-errors crate](0001-file-io-error-lives-in-monokl.md): do not reintroduce a private registry; move `FileIoError` to a shared crate only when a second tool needs it.
+- [2. Define Digest in monokl until wisp-contracts exists](0002-digest-lives-in-monokl-until-wisp-contracts.md): do not change `Digest`'s text or serde form; when `wisp-contracts` ships it, re-export and delete monokl's copy.
 
 Changing any of these needs a new ADR.
 

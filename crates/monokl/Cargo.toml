@@ -26,6 +26,7 @@ cli = ["dep:clap", "dep:michi", "miette"]
 miette = ["dep:miette", "michi?/miette"]
 
 [dependencies]
+blake3.workspace = true
 camino.workspace = true
 grep-regex.workspace = true
 ignore.workspace = true
