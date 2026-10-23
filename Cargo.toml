@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-# MSRV, separate from the toolchain pinned in .prototools. michi needs 1.96.
+# MSRV, separate from the toolchain pinned in .prototools; CI's MSRV job verifies it. Bump it with any OXC upgrade (0.154 needs 1.97).
 rust-version = "1.96"
 license = "FSL-1.1-MIT"
 repository = "https://github.com/orin-dx/monokl"
@@ -30,8 +30,8 @@ unreachable = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 todo = "deny"
-print_stdout = "warn"
-print_stderr = "warn"
+print_stdout = "deny"
+print_stderr = "deny"
 await_holding_lock = "deny"
 let_underscore_must_use = "deny"
 let_underscore_untyped = "deny"
