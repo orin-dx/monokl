@@ -108,10 +108,20 @@ jobs:
           tool: just,cargo-deny,zizmor@1.29.0
       - run: just deny zizmor
 
+  changesets:
+    name: Changesets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: orin-dx/callisto/.github/actions/callisto-validate@3feff402ea4798c4708ec6fa09e402b956596598 # callisto@0.14.0
+
   # The one check to require in branch protection.
   ci:
     name: CI
-    needs: [lint, test, msrv, coverage, audit]
+    needs: [lint, test, msrv, coverage, audit, changesets]
     if: always()
     runs-on: ubuntu-latest
     steps:

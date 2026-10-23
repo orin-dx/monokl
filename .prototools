@@ -1,8 +1,11 @@
 rust = "1.98.1"
 moon = "2.4.5"
+callisto = "0.14.0"
 
 [plugins]
 moon = "source:https://raw.githubusercontent.com/moonrepo/moon/master/proto-plugin.toml"
+# Pinned to the callisto@0.14.0 commit; bump it with the version above.
+callisto = "source:https://raw.githubusercontent.com/orin-dx/callisto/3feff402ea4798c4708ec6fa09e402b956596598/proto/callisto.toml"
 
 [settings]
 auto-install = true

@@ -73,6 +73,15 @@ machete:
 typos:
     typos
 
+# Callisto config, package discovery and pending changesets; the same gate as CI's Changesets job
+changesets:
+    callisto status --check
+    callisto release --dry-run --format text
+
+# Record a pending change for the next release, e.g. `just changeset minor "Add the search command"`
+changeset bump summary:
+    callisto add --package cargo/monokl:{{ bump }} --summary "{{ summary }}"
+
 # Workflow audit for permission, credential and supply-chain issues
 zizmor:
     zizmor --offline --strict-collection .
@@ -98,4 +107,4 @@ pre-commit:
 pre-push: pre-commit lint-affected
 
 # Everything the CI jobs run
-ci: lint test doc-check deny machete typos zizmor (coverage "90")
+ci: lint test doc-check deny machete typos zizmor changesets (coverage "90")

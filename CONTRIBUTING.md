@@ -23,6 +23,8 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just deny` | Licenses, advisories, bans and sources |
 | `just machete` | Unused dependencies |
 | `just mutants` | Mutation testing, on demand only |
+| `just changeset <bump> "<summary>"` | Record a pending change for the next release (Callisto) |
+| `just changesets` | Check Callisto config and pending changesets |
 
 ## Where things stand
 
