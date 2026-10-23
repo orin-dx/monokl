@@ -4,9 +4,11 @@ Source: `docs/spec/01-core-architecture.md` §5 (`query/` — lexer, parser, pla
 §8 (`rank/` — bm25, boost, tokenize_doc, ~L1058-1191). Cross-referenced against the `search`
 pipeline stages (§20, ~L2315-2326) and design tenet #4 (§29, L3093).
 
-No crate exists yet — `query/lexer.rs`, `query/parser.rs`, `query/plan.rs`, `rank/*.rs` below are
-spec-verbatim Rust, not source files. Treat this doc as authoritative until code exists, then
-re-point at source paths.
+`query/` is implemented (SPEC-009); `rank/`, `dedup.rs` and `text_search.rs` follow SPEC-012 and SPEC-013. Where
+this doc and the code disagree, the code and its tests win.
+
+**Resolved (05 §18):** #7 (one fail-fast regex policy), #9 (total-order tie-break), #10 (sorted walk), #11 (`max_files`
+memory ceiling that keeps counting). **Still open:** #8, #16 (query language) and #21 (search pipeline).
 
 ## Lexer (`query/lexer.rs`)
 
