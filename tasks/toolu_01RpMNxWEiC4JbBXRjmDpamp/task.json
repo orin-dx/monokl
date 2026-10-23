@@ -1,0 +1,16 @@
+{
+  "tool_use_id": "toolu_01RpMNxWEiC4JbBXRjmDpamp",
+  "agent_id": "a1742ab57e1f59728",
+  "subagent_type": "general-purpose",
+  "task_description": "Survey callisto conventions",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 84460,
+    "cache_read_tokens": 631266,
+    "output_tokens": 138,
+    "api_call_count": 11
+  },
+  "started_at": "2026-10-21T07:38:42.845561-07:00",
+  "completed_at": "2026-10-21T07:40:38.678418-07:00",
+  "transcript_unavailable_reason": "transcript unreadable"
+}
