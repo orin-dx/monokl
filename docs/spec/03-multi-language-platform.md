@@ -599,7 +599,7 @@ This means a struct with `impl Button { fn click() }` produces three blocks: the
 
 ### Dependency extraction + path resolution
 
-The Rust analyzer's dependency model produces `DependencyTarget::RustPath { segments, anchor, resolved }`. The resolver is workspace-aware:
+The Rust analyzer's dependency model produces `DependencyTarget::RustPath { segments, anchor, resolution }`. The resolver is workspace-aware:
 
 ```rust
 fn extract_dependencies(
@@ -613,14 +613,25 @@ fn extract_dependencies(
         .flat_map(|(line, clause)| {
             expand_use_clause(&clause).into_iter().map(move |leaf| {
                 let (segments, binding) = rust_binding(&leaf);
-                let resolved = resolve_rust_path(path, &segments, workspace_root, package_roots);
+                let anchor = rust_anchor(&segments);
+                let resolution = match resolve_rust_path(path, &segments, workspace_root, package_roots) {
+                    Some(path) => DependencyResolution::Resolved { path },
+                    None if matches!(&anchor, RustPathAnchor::Extern(_)) => DependencyResolution::External,
+                    None => DependencyResolution::Unresolved {
+                        diagnostic: Diagnostic {
+                            kind: DiagnosticKind::Degraded,
+                            path: Some(path.to_owned()),
+                            message: format!("unable to resolve Rust path {}", segments.join("::")),
+                        },
+                    },
+                };
                 DependencyRecord {
                     line,
                     bindings: vec![binding],
                     target: DependencyTarget::RustPath {
-                        anchor: rust_anchor(&segments),
+                        anchor,
                         segments,
-                        resolved,
+                        resolution,
                     },
                 }
             })
@@ -1774,29 +1785,62 @@ pub(crate) fn analyze_with_profile(
     )
 }
 
+pub(crate) enum CanonicalSourceOutcome {
+    Resolved(Utf8PathBuf),
+    Ambiguous { candidates: AmbiguousPaths, diagnostic: Diagnostic },
+    Unresolved { diagnostic: Diagnostic },
+    External,
+    NotImported,
+}
+
 pub(crate) fn resolve_canonical_source(
     analyzer: &dyn LanguageAnalyzer,
     from_file: &Utf8Path,
     symbol: &str,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Utf8PathBuf> {
+) -> CanonicalSourceOutcome {
     let analysis = match analyze_with_profile(analyzer, from_file, AnalysisProfile::Structural) {
         Ok(a) => a,
-        Err(e) => { /* push Skipped diagnostic */ return None; }
+        Err(e) => {
+            let diagnostic = Diagnostic {
+                kind: DiagnosticKind::Skipped,
+                path: Some(from_file.to_owned()),
+                message: e.to_string(),
+            };
+            diagnostics.push(diagnostic.clone());
+            return CanonicalSourceOutcome::Unresolved { diagnostic };
+        }
     };
 
     for dep in &analysis.dependencies {
         let imports_symbol = dep.bindings.iter()
             .any(|binding| binding_matches_symbol(binding, symbol));
         if !imports_symbol { continue; }
-        if let Some(resolved) = dependency_target_resolved(&dep.target) {
-            return match analyzer.language_for(from_file) {
-                Some(LanguageId::Rust) => Some(follow_rust_canonical_source(analyzer, resolved, symbol, diagnostics)),
-                _ => Some(resolved.to_owned()),
-            };
-        }
+        let resolution = match &dep.target {
+            DependencyTarget::File { resolution, .. }
+            | DependencyTarget::RustPath { resolution, .. } => resolution,
+            DependencyTarget::Namespace { .. } => continue,
+        };
+        return match resolution {
+            DependencyResolution::Resolved { path } => match analyzer.language_for(from_file) {
+                Some(LanguageId::Rust) => CanonicalSourceOutcome::Resolved(
+                    follow_rust_canonical_source(analyzer, path, symbol, diagnostics),
+                ),
+                _ => CanonicalSourceOutcome::Resolved(path.clone()),
+            },
+            DependencyResolution::Ambiguous { candidates, diagnostic } => {
+                CanonicalSourceOutcome::Ambiguous {
+                    candidates: candidates.clone(),
+                    diagnostic: diagnostic.clone(),
+                }
+            }
+            DependencyResolution::Unresolved { diagnostic } => {
+                CanonicalSourceOutcome::Unresolved { diagnostic: diagnostic.clone() }
+            }
+            DependencyResolution::External => CanonicalSourceOutcome::External,
+        };
     }
-    None
+    CanonicalSourceOutcome::NotImported
 }
 
 pub(crate) fn add_precision_diagnostic(
@@ -1882,10 +1926,10 @@ pub(crate) fn file_imports_symbol_from(analysis: &FileAnalysis, symbol: &str, ca
 
 pub(crate) fn dependency_target_resolved(target: &DependencyTarget) -> Option<&Utf8Path> {
     match target {
-        DependencyTarget::File { resolved: Some(path), .. }
-        | DependencyTarget::RustPath { resolved: Some(path), .. } => Some(path.as_path()),
-        DependencyTarget::File { resolved: None, .. }
-        | DependencyTarget::RustPath { resolved: None, .. }
+        DependencyTarget::File { resolution: DependencyResolution::Resolved { path }, .. }
+        | DependencyTarget::RustPath { resolution: DependencyResolution::Resolved { path }, .. } => Some(path.as_path()),
+        DependencyTarget::File { .. }
+        | DependencyTarget::RustPath { .. }
         | DependencyTarget::Namespace { .. } => None,
     }
 }
@@ -2425,13 +2469,13 @@ pub enum RustPathAnchor {
 pub enum DependencyTarget {
     File {
         specifier: String,
-        resolved: Option<Utf8PathBuf>,
+        resolution: DependencyResolution,
         is_relative: bool,
     },
     RustPath {
         segments: Vec<String>,
         anchor: RustPathAnchor,
-        resolved: Option<Utf8PathBuf>,
+        resolution: DependencyResolution,
     },
     Namespace {
         segments: Vec<String>,
@@ -2439,6 +2483,9 @@ pub enum DependencyTarget {
         alias: Option<String>,
     },
 }
+
+/// Defined in Part 1. `Ambiguous` retains every candidate; `External` is distinct from a failed
+/// workspace lookup, and `Unresolved` carries the analyzer diagnostic that explains the failure.
 ```
 
 ### `Language` — added `Rust` and `Python`

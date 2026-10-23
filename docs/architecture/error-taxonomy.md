@@ -86,8 +86,8 @@ silently pick one when implementing — spec@1 for this subsystem must state the
    (SPEC-002) gated on `superpowers:brainstorming`, per this project's own process for new
    design decisions — not something a spec@1 judgment call should settle unilaterally.
 
-2. **`StaleDiskCache`'s message promises a CLI subcommand that doesn't exist (07#6).** The
-   `#[error(...)]` text says `run \`mnkl init --rebuild\``, but no `Subcmd` variant — in any of
+2. **`StaleDiskCache`'s message promised a CLI subcommand that doesn't exist (07#6).** The
+   `#[error(...)]` text said `run \`mnkl init --rebuild\``, but no `Subcmd` variant — in any of
    the corpus's three successive enums (the original 5-variant one at §21, an intermediate
    16-variant revision at 02-inspection-and-analysis.md:54-58, or the final 20-variant one at
    03-multi:2212-2342) — has an `init` subcommand. Originally thought to be doubly moot because `init()`'s match arm

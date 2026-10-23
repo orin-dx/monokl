@@ -2,6 +2,64 @@
 
 ## Completed
 
+### SPEC-004 correction: `rust-version`/`license` fixed for michi adoption
+
+Post-gate, post-implementation correction via `canon/correct`, triggered by the michi
+integration research below. Two of AC-020's nine locked `[workspace.package]` values were
+wrong: `license = "MIT"` (the repo's actual `LICENSE` file was already AGPL-3.0 — an
+internal inconsistency in the source doc, unrelated to michi) and `rust-version = "1.85"`
+(michi, now a confirmed dependency, needs 1.96). Corrected to `AGPL-3.0-or-later` / `1.96`,
+an intentional, explicitly-flagged divergence from `docs/spec/01-core-architecture.md`'s
+own literal text — canon-verifier confirmed the source document genuinely still says the
+old values, so this isn't silently drifting from spec, it's a stated, gated exception.
+canon-auditor caught the correction's own blast radius: the `scope` field's blanket "all
+verbatim per Section 28" claim wasn't updated alongside AC-020, so it briefly contradicted
+the criterion it was supposed to summarize — fixed. `vector-planner` amended `PLAN-004`
+(only T-001 owns AC-020) and, checking for incidental damage, found two more:
+`T-006`/`T-023` had hardcoded `rust_version=='1.85'`/`license=='MIT'` assertions baked into
+otherwise-unrelated `cargo metadata` checks — not their own criteria, but would have
+produced false failures on any future re-run. Fixed both. `vector-challenger`'s review of
+the amended T-001 found real shell bugs of its own: the primary "nothing else moved" diff
+was guaranteed to fail (comparing against a 14-line expectation when the real file already
+had 67 lines of later tasks' content committed), its offered fallback was an elided `...`
+wrapped around a `head | diff -` construct that starves `diff` of a second operand, and a
+dangling reference told the implementer to fall back to "T-001's original pre-amendment
+steps" — which no longer existed in the plan at all. All fixed, each fix independently
+executed against the real repo before trusting it. `lambda-implementer` re-ran the
+corrected T-001 clean — commit `414225b`.
+
+### SPEC-004: IMPLEMENTED — the Rust crate now actually exists
+
+First track to move past the spec@1 stage into real code. `vector-planner` produced a 23-task
+plan@1 (`PLAN-004.json`); two independent `vector-challenger` rounds found and fixed 13 issues
+total (three tasks whose "red" phase could never actually be red, which would have halted
+`lambda-implementer` outright; a verification gap where the plan's biggest blocks of transcribed
+content — the 10 later dependency version pins and all of `lib.rs` — were never diffed against
+the source document, only counted; a BSD `wc -l` padding bug in a length guard my own fix
+introduced; a broken backtick-in-markdown assertion; a missing cwd anchor). Third round: clean
+pass.
+
+`lambda-recon` → 23 `lambda-implementer` task dispatches (one per task, strict no-batching) →
+`lambda-mutator` → `lambda-exit-gate`, all in sequence. Root `Cargo.toml`, `crates/monokl/Cargo.toml`,
+and `crates/monokl/src/lib.rs` now exist and are byte-exact against `docs/spec/01-core-architecture.md`,
+confirmed via pattern-anchored diffs (not hardcoded line ranges) with working length guards.
+23 commits (16 file-changing, 7 deliberate `--allow-empty` for behavioral-only verification
+tasks), all 28 acceptance criteria evidenced, `lambda-exit-gate` independently re-ran the
+load-bearing checks against live `cargo 1.96.0` rather than trusting task reports. `lambda-mutator`
+confirmed zero mutable code paths (expected — `lib.rs` is bare module declarations, no function
+bodies; both `Cargo.toml`s are non-code TOML) by isolating `lib.rs` into a synthetic crate and
+running `cargo mutants --list` against it (0 candidates), not by assuming the tool had nothing to do.
+
+**Known, deliberate, already-locked gap (AC-008B): the real workspace cannot `cargo build`/`cargo test` yet.**
+`io-errors` (a dependency `MonoklError` needs) is pinned to a private registry (`registry =
+"orin-cargo"`) with no `.cargo/config.toml` anywhere in the corpus configuring where that registry
+actually is — `cargo metadata` fails at manifest-parse time with `registry index was not found in
+any configuration: \`orin-cargo\``, confirmed and locked as expected behavior by SPEC-004's own
+AC-008B and re-confirmed independently by `lambda-exit-gate`. This was fine for SPEC-004 itself
+(a pure manifest/module-declaration lock, verified via content-exactness diffs and isolated `/tmp`
+fixtures rather than real builds) — it stops being fine the moment real Rust logic needs to
+actually compile and run its own tests, which is every track from here on.
+
 ### SPEC-008: Workspace/extract config types (Track 5c) — GATED after the longest correction sequence of any track so far
 
 Spec: `.claude/specs/SPEC-008.json` (13 acceptance criteria — `TsconfigMode`, `WorkspaceOptions`
@@ -330,7 +388,7 @@ this rigor level, not one sitting.
 | # | Track | Source section(s) | Status |
 |---|---|---|---|
 | 1 | `MonoklError` + `Result<T>` | §3 (error.rs) | **GATED** — `SPEC-001.json` |
-| 2 | Cargo.toml + lib.rs + workspace root Cargo.toml | §1-2, §28 | **GATED** (one post-axiom fix applied, not re-confirmed) — `SPEC-004.json` |
+| 2 | Cargo.toml + lib.rs + workspace root Cargo.toml | §1-2, §28 | **GATED** — `SPEC-004.json` |
 | 3 | Core symbol/visibility types (`SymbolKind`, `Visibility`, `SymbolEntry`) | §4 (subset) | **GATED** — `SPEC-003.json` |
 | 4 | Dependency/export/JSX/`LangData` types | §4 (subset) | **GATED** — `SPEC-005.json` |
 | 5a | Result/diagnostic primitives (`CodeBlock`, `RankedBlock`, `ParentContext`, `Diagnostic`, `DiagnosticKind`, `LineHit`) | §4 (subset) | GATED — `SPEC-006.json` |

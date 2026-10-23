@@ -19,7 +19,7 @@ Since the original spec (which covered `search`, `symbols`, `extract`, `dependen
 - `mnkl inspect` — classify a file into a typed `InspectEntry`
 - `mnkl patterns` — workspace-level frequency analysis
 - `mnkl schema` — emit JSON Schema for inspect/result types
-- `mnkl refs` — symbol-level reference finder
+- `mnkl refs` — symbol-level occurrence/reference finder with capture provenance
 - `mnkl definition` — canonical declaration finder with re-export chain
 - `mnkl diff` — structural git-ref delta
 - `mnkl tokens` — design-token discipline audit
@@ -33,7 +33,7 @@ Since the original spec (which covered `search`, `symbols`, `extract`, `dependen
 - `src/inspection.rs` — classifier producing `InspectEntry`
 - `src/panda.rs` — Panda CSS recipe analyzer
 - `src/schema.rs` — JSON Schema generator
-- `src/refs.rs` — symbol reference finder
+- `src/refs.rs` — symbol occurrence/reference finder
 - `src/definition.rs` — declaration finder + re-export chain walker
 - `src/diff.rs` — git-driven structural diff
 - `src/tokens_analysis.rs` — token compliance audit
@@ -975,11 +975,11 @@ pub fn inspect_schema(kind: Option<&str>) -> Value {
 
 Every schema is built with `serde_json::json!` macros and includes nested helpers like `classified_imports_schema()`, `prop_field_schema()`, `rust_imports_schema()`, `visibility_schema()`, `diagnostics_array_schema()`, `confidence_schema()`, `caller_summary_schema()`, `component_summary_schema()`, `import_summary_schema()`, `recipe_summary_schema()`, `data_source_schema()`, `state_point_schema()`, `data_output_schema()`, `token_violation_schema()`, `file_token_report_schema()`, `ref_site_schema()`, `definition_site_schema()`, `signature_change_schema()`, `structural_changes_schema()`, `file_change_type_schema()`, `file_diff_schema()`, `diff_summary_schema()`, `similar_file_schema()`. Each emits `$schema: "https://json-schema.org/draft/2020-12/schema"`, `type: object`, `title`, `description`, `properties`, and `required`.
 
-## `mnkl refs` — Symbol-level reference finder
+## `mnkl refs` — Symbol-level occurrence and reference finder
 
 ### Purpose
 
-Find every place a named symbol appears across a workspace, classified by `RefKind`.
+Find structural and textual candidate occurrences of a named symbol across a workspace. A capture is evidence that the spelling occurs in a relevant role; it is not proof that the occurrence binds to the requested symbol. Semantic reference resolution is deferred behind the owned-occurrence design gate below.
 
 ### RefsResult type verbatim
 
@@ -1000,7 +1000,17 @@ pub struct RefSite {
     pub file: Utf8PathBuf,
     pub line: usize,
     pub ref_kind: RefKind,
+    pub capture: RefCapture,
     pub snippet: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum RefCapture {
+    /// The parser identified a role, but no binding identity was available.
+    Structural,
+    /// A bounded text sweep found the spelling only. This is a candidate, not a resolved reference.
+    Textual,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
@@ -1020,7 +1030,7 @@ pub enum RefKind {
 `find_refs(symbol, opts, include_tests, max_refs, from_file) -> Result<RefsResult>`:
 
 1. Empty symbol or `max_refs == 0` → empty result.
-2. If `from_file` is set, resolve canonical source: analyze `from_file` and find the import target file for `symbol` (named or default). If none, return empty result.
+2. If `from_file` is set, call `resolve_canonical_source` and handle every terminal outcome: `Resolved(path)` continues with narrowing; `Ambiguous { candidates, diagnostic }` and `Unresolved { diagnostic }` return no sites and preserve the supplied diagnostic; `External` returns no workspace sites and adds a `Skipped` diagnostic stating that the target is outside the indexed scope; `NotImported` returns no sites without manufacturing an error.
 3. Build per-line classifier regexes (all `\b`-bounded, case-sensitive):
    - `mention_re = \b{escaped}\b`
    - `call_re = (?:^|[^A-Za-z0-9_$])(?:new\s+)?{escaped}\s*\(`
@@ -1030,11 +1040,10 @@ pub enum RefKind {
 6. Pre-filter each file with `grep-searcher` — bail early when symbol not mentioned at all.
 7. Analyze the file. When `from_file` narrowing is active, skip files that don't import `symbol` from `canonical_source` (with path canonicalization to handle symlinks). The canonical_source file itself is always included.
 8. Read file source for snippet extraction (no snippets on read failure, but degraded refs still emitted).
-9. Emit refs in three phases:
-   - **Imports**: iterate `analysis.dependencies` — match bindings where `imported == symbol` and kind is `Named` or `Default`, push `RefKind::Import` at `dep.line`.
-   - **Re-exports**: iterate `analysis.exports` for `name == symbol && re_export`, push `RefKind::ReExport` at `exp.line`.
-   - **JSX elements**: iterate `analysis.jsx_elements()` for `name == symbol`, push `RefKind::JsxElement` at `el.line`.
-   - **Line sweep**: for every line, if `mention_re.is_match`, dedup by `(file, line)`, then classify via `classify_line`:
+9. Emit candidate occurrences in three phases, retaining the producer in `RefSite.capture`:
+   - **Imports and re-exports**: iterate dependencies and exports, retaining ambiguous/unresolved dependency diagnostics rather than selecting a target. Emit role-only matches as `RefCapture::Structural`.
+   - **JSX elements**: iterate `analysis.jsx_elements()` for `name == symbol`. Emit `RefCapture::Structural`.
+   - **Fallback line sweep**: only for a language/analyzer path that cannot provide semantic occurrences, scan every line; if `mention_re.is_match`, dedup by `(file, line)` and emit `RefCapture::Textual`. The result diagnostic must say that these are name-matched candidates. Classification remains syntactic:
      ```rust
      fn classify_line(line, call_re, type_re) -> RefKind {
          if call_re.is_match(line) { RefKind::Call }
@@ -1042,7 +1051,9 @@ pub enum RefKind {
          else { RefKind::Value }
      }
      ```
-10. Dedup via `BTreeSet<(Utf8PathBuf, usize)>`. Cap at `max_refs` (sets `truncated = true`).
+10. Dedup via `BTreeSet<(Utf8PathBuf, usize)>`, preferring `Structural` over `Textual` when two producers identify the same site. Cap at `max_refs` (sets `truncated = true`).
+
+`RefCapture` is intentionally not semantic resolution. The adopted `oxc_semantic` upgrade in Part 5 requires a separate owned occurrence record containing source range and local declaration/binding identity, constructed before the OXC allocator drops and persisted through `TsData`; imported bindings must then compose with `DependencyResolution`. Until that shape is specified and implemented, this command reports structural/textual candidates honestly rather than claiming semantic references. `ref_site_schema()` includes the required `capture` enum, and tests cover structural-vs-text fallback, alias/source narrowing, shadowed same-name candidates remaining unpromoted, ambiguous/unresolved/external `from_file` outcomes, and capture provenance surviving JSON serialization.
 
 Test-path detection:
 
