@@ -1,0 +1,703 @@
+{
+  "goal": "Extend the already-existing, already-committed crates/monokl/src/types.rs and crates/monokl/src/tests_types.rs (created by PLAN-003 for SPEC-003: SymbolKind, Visibility, SymbolEntry, 17 tests, all committed) with SPEC-005's dependency/export/JSX/language-data type cluster -- DependencyRecord, DependencyBinding, BindingKind, DependencyTarget, RustPathAnchor, ExportRecord, JsxAttribute, JsxElementEntry, LangData (plus its ts()/jsx_elements() methods), TsData, and RustData/PythonData/GoData/JavaData -- and their full serde-contract test suite, using append-only edits to both files so SPEC-003's existing, already-gated content is never overwritten.",
+  "architecture": "Both files already exist on disk with SPEC-003's content (verified by reading them fresh before drafting this plan). Every task in this plan therefore uses `cat >> file <<'EOF'` (append) against the real crates/monokl/src/types.rs and crates/monokl/src/tests_types.rs -- never `cat >` (full overwrite) -- honoring the shared_file_warning PLAN-003 recorded for exactly this situation. Each appended block is verified two ways: (1) a SCOPED extraction -- `grep -B<N> -A<M> '<unique declaration line>' file` piped to `diff` against the exact expected block text, where N/M are chosen precisely to bound just that one item's attribute lines through its closing brace/semicolon, never a whole-file diff -- plus targeted single-line greps for doc-comment anchor phrases (mirroring PLAN-003 T-006's anchored-line technique, since a naive whole-comment grep over-counts multi-line doc comments); (2) a real `cargo test` run inside an isolated /tmp fixture crate that mirrors this project's src/lib.rs + src/types.rs + src/tests_types.rs module layout, built by literally `cp`-ing the just-updated real files into the fixture (not re-quoting their cumulative content inline) -- this is simpler than PLAN-003's cumulative-heredoc approach and carries the same evidentiary weight, since the fixture's cargo test compiles and runs the exact real file content. The fixture depends only on serde/serde_json/camino (edition 2024, `[lints.rust] unsafe_code = \"deny\"` matching the real workspace), avoiding the io-errors path-dependency + orin-cargo registry gap that blocks any real `cargo` invocation against the actual crates/monokl manifest (same isolation technique PLAN-001/PLAN-003/PLAN-004 established). New types are appended in Rust-type-dependency order, not the source doc's declaration order, so every intermediate on-disk state compiles standalone: BindingKind (T-001, no deps) -> RustPathAnchor (T-003, no deps) -> DependencyTarget (T-005, needs RustPathAnchor + camino::Utf8PathBuf, so this task also makes the one precisely-scoped edit to the file's `use` block) -> DependencyBinding (T-009, needs BindingKind) -> DependencyRecord (T-011, needs DependencyBinding + DependencyTarget) -> ExportRecord (T-013, no deps) -> JsxAttribute (T-015, no deps) -> JsxElementEntry (T-017, needs JsxAttribute) -> RustData/PythonData/GoData/JavaData (T-019, no deps) -> TsData (T-021, needs JsxElementEntry) -> LangData + impl (T-023, needs TsData/RustData/PythonData/GoData/JavaData, added last since it depends on all five). Behavioral test tasks interleave immediately after each structural task, one focused acceptance criterion (or tightly related pair) per task, mirroring PLAN-003's own structure of feat-then-focused-tests. Every fixture command and expected error string/JSON shape quoted in this plan's steps was worked out by hand against serde's documented derive-macro behavior and this cluster's exact declared attributes (internally-tagged `tag=\"kind\"` for DependencyTarget vs. adjacently-tagged `tag=\"language\", content=\"data\"` for LangData vs. externally-tagged-by-default for RustPathAnchor), consistent with SPEC-005's own central finding that these three tagging strategies coexist and must not be conflated.",
+  "tech_stack": [
+    "Rust 2024 edition",
+    "serde 1 (workspace-pinned, derive feature)",
+    "serde_json 1 (workspace-pinned)",
+    "camino 1 (workspace-pinned, serde1 feature -- provides Utf8PathBuf's Serialize/Deserialize impls used by DependencyTarget)"
+  ],
+  "linked_spec": "SPEC-005",
+  "spec_file_path": ".claude/specs/SPEC-005.json",
+  "spec_hash": "sha256:41f155acaf7356818f59d2dbd53850d2208662c0005b8d940333659b8aed6ac4",
+  "linked_requirement": "REQ-005",
+  "shared_file_warning": "crates/monokl/src/types.rs and crates/monokl/src/tests_types.rs are SHARED files. Both already contain SPEC-003's committed, gated content (SymbolKind, Visibility, SymbolEntry; 17 tests; verified present on disk before this plan was drafted) -- PLAN-003's own shared_file_warning explicitly flagged that SPEC-005 (this plan), SPEC-006, SPEC-007, and SPEC-008 would each need to extend these same two files, and that a blind full-file overwrite by any of those plans would silently clobber SPEC-003's work. Every task in THIS plan honors that warning: all edits to both files use `cat >>` (append) verified by SCOPED grep -B/-A block extraction plus targeted anchor-line greps, never a whole-file `cat >` overwrite and never a whole-file diff as the sole check. This plan's own additions (the dependency/export/JSX/LangData cluster) become, in turn, shared history that SPEC-006's, SPEC-007's, and SPEC-008's own future plans must not clobber either -- any future plan targeting types.rs or tests_types.rs after this plan has run MUST continue the append-only, scoped-verification discipline established here and in PLAN-003, appending after this plan's last addition (LangData's closing `impl` block in types.rs; this plan's final test in tests_types.rs) rather than overwriting from the top. See T-023's shared_file_note (last task to modify types.rs) and T-029's shared_file_note (last task to modify tests_types.rs) for the point-of-last-contact restatement of this warning, matching PLAN-003's T-006 precedent.",
+  "reasoning": "Verified before drafting: crates/monokl/src/types.rs (91 lines) and crates/monokl/src/tests_types.rs (241 lines) both already exist and both end with a trailing blank line after their last item's closing brace (confirmed via `od -c` tail inspection), so a plain `cat >> file <<EOF` immediately reproduces this project's existing one-blank-line-between-items style with no extra newline bookkeeping needed. lib.rs (SPEC-004, already implemented) already declares `pub mod types;` and `#[cfg(test)] mod tests_types;` -- no lib.rs changes are needed for this plan. The workspace root Cargo.toml already pins `camino = { version = \"1\", features = [\"serde1\"] }` and crates/monokl/Cargo.toml already depends on it (confirmed by reading both files), so DependencyTarget's `Option<Utf8PathBuf>` fields need only a new `use camino::Utf8PathBuf;` line in types.rs, not a new workspace dependency -- this one-line edit is made precisely (via a scoped sed insertion, not a full-file rewrite) in T-005, the first task whose new type actually references Utf8PathBuf. Local `rustc --version`/`cargo --version` both report 1.96.0, confirming the fixture's `edition = \"2024\"` builds in this environment, same as PLAN-003 confirmed. Every acceptance criterion in SPEC-005 (AC-001 through AC-019, plus AC-004B and AC-019B added in this plan's amendment for the spec's second correction pass) is covered by at least one task's covers_criteria; most are covered by a (structural, behavioral) task pair, since most of SPEC-005's own criteria bundle both a compiles-with-exact-shape claim (grep/scoped-diff-provable, no runtime needed) and an observable serde-behavior claim (only provable by a real running `cargo test`) in a single criterion -- unlike SPEC-003, where several criteria were purely structural (e.g. AC-001, AC-003) and covered by their structural task alone. AC-019 (no #[serde(deny_unknown_fields)] anywhere across its 12 in-scope types -- BindingKind and RustPathAnchor are excluded, since both use serde's default external tagging and are separately covered by AC-004B/AC-019B in T-029) is a cluster-wide claim; T-028 proves it with a representative sample spanning all three serde-shape categories present among those 12 types -- a populated plain struct (ExportRecord), a fieldless placeholder struct (RustData, the more surprising case since the entire incoming object is 'extra'), and both structurally distinct tagged enums (DependencyTarget's internal tag, LangData's adjacent tag) -- rather than writing all 14 as separate assertions, since SPEC-003's AC-006 already established the plain-struct pattern via SymbolEntry and this plan's job is to add the two structurally novel tagged-enum cases plus the fieldless-struct edge case, not to re-prove an already-established pattern 12 times. Topological task ordering (see architecture) was derived directly from each new type's own field types, not from the source doc's declaration order, because Rust items may be declared in any order but a task's own fixture `cargo test` run must compile the file as it stands after that task alone -- e.g. DependencyRecord (T-011) is added only after DependencyBinding (T-009) and DependencyTarget (T-005) already exist on disk, exactly the same principle PLAN-003 used to place SymbolEntry (T-006) after both SymbolKind (T-001) and Visibility (T-003).",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "types.rs: append BindingKind enum (5 variants)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub enum BindingKind' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// The kind of a single import binding within a `DependencyBinding` (AC-003,\n/// AC-004). Exactly 5 variants in this declaration order. `Copy`/`PartialEq`/\n/// `Eq` present (fieldless enum, same pattern as `SymbolKind`/`Visibility`).\n/// No `#[non_exhaustive]`.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub enum BindingKind {\n    Named,\n    Default,\n    Namespace,\n    Glob,\n    NamespaceWide,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A6 '^pub enum BindingKind {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub enum BindingKind {\n    Named,\n    Default,\n    Namespace,\n    Glob,\n    NamespaceWide,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub enum BindingKind' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '#\\[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)\\]' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `3` (SymbolKind's, Visibility's, BindingKind's); `grep -c '^/// No .#\\[non_exhaustive\\].\\.$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1` (BindingKind's own doc-comment line stating this).",
+        "Prove this against real, running Rust via an isolated /tmp fixture crate mirroring this project's src/lib.rs + src/types.rs + src/tests_types.rs layout, built by copying the just-updated real files rather than re-quoting them (avoids the io-errors/orin-cargo registry gap that blocks a real `cargo` invocation against the actual crates/monokl manifest -- same isolation pattern PLAN-001/PLAN-003/PLAN-004 established). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (SPEC-003's 17 tests still pass; BindingKind compiles but has no dedicated test yet) and `exit=0`. Assert: `echo \"$out\" | grep -q '17 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add BindingKind enum (AC-003)\n\nAdds the 5-variant BindingKind enum verbatim per docs/spec/01-core-architecture.md:331-337, in its declared order, ahead of DependencyBinding which references it as a field type.",
+      "covers_criteria": [
+        "AC-003"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-002",
+      "title": "tests_types.rs: append BindingKind camelCase round-trip test (5 variants incl. NamespaceWide)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn binding_kind_camel_case_forms' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::BindingKind;\n\n#[test]\nfn binding_kind_camel_case_forms() {\n    let pairs: [(BindingKind, &str); 5] = [\n        (BindingKind::Named, \"\\\"named\\\"\"),\n        (BindingKind::Default, \"\\\"default\\\"\"),\n        (BindingKind::Namespace, \"\\\"namespace\\\"\"),\n        (BindingKind::Glob, \"\\\"glob\\\"\"),\n        (BindingKind::NamespaceWide, \"\\\"namespaceWide\\\"\"),\n    ];\n    for (variant, expected) in pairs {\n        let s = serde_json::to_string(&variant).unwrap();\n        assert_eq!(s, expected);\n        let round: BindingKind = serde_json::from_str(expected).unwrap();\n        assert_eq!(round, variant);\n    }\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B1 -A14 '^fn binding_kind_camel_case_forms() {$' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs) - <<'RUSTEOF'\n#[test]\nfn binding_kind_camel_case_forms() {\n    let pairs: [(BindingKind, &str); 5] = [\n        (BindingKind::Named, \"\\\"named\\\"\"),\n        (BindingKind::Default, \"\\\"default\\\"\"),\n        (BindingKind::Namespace, \"\\\"namespace\\\"\"),\n        (BindingKind::Glob, \"\\\"glob\\\"\"),\n        (BindingKind::NamespaceWide, \"\\\"namespaceWide\\\"\"),\n    ];\n    for (variant, expected) in pairs {\n        let s = serde_json::to_string(&variant).unwrap();\n        assert_eq!(s, expected);\n        let round: BindingKind = serde_json::from_str(expected).unwrap();\n        assert_eq!(round, variant);\n    }\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -cF 'NamespaceWide, \"\\\"namespaceWide\\\"\"' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run the identical fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '18 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify BindingKind camelCase serde round-trip for all 5 variants (AC-004)\n\nAsserts each variant serializes to its exact camelCase JSON string, including NamespaceWide -> \"namespaceWide\" (both leading-character-lowercase and the internal word boundary already fall out of the default transform), and round-trips back.",
+      "covers_criteria": [
+        "AC-004"
+      ]
+    },
+    {
+      "id": "T-003",
+      "title": "types.rs: append RustPathAnchor enum (4 variants, one functionally necessary rename)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-002"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub enum RustPathAnchor' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// The anchor of a resolved Rust module path (AC-008). No `Copy`/`PartialEq`/\n/// `Eq` (`Extern(String)` carries a payload). `#[non_exhaustive]`. Externally\n/// tagged by default (no `tag`/`content` attribute on this enum) --\n/// `Extern`'s associated `String` is carried as the tagged value's content,\n/// not flattened as a named field. `Crate`/`Super`/`Extern` receive the\n/// default camelCase transform with no override, producing tag values\n/// \"crate\"/\"super\"/\"extern\". `Selff` alone carries an explicit\n/// `#[serde(rename = \"self\")]` -- functionally necessary, not stylistic:\n/// `self` is a reserved keyword and cannot name an enum variant, so without\n/// this rename the default transform of the identifier `Selff` would\n/// produce \"selff\", not \"self\".\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\n#[non_exhaustive]\npub enum RustPathAnchor {\n    Crate,\n    Super,\n    #[serde(rename = \"self\")]\n    Selff,\n    Extern(String),\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B3 -A6 '^pub enum RustPathAnchor {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\n#[non_exhaustive]\npub enum RustPathAnchor {\n    Crate,\n    Super,\n    #[serde(rename = \"self\")]\n    Selff,\n    Extern(String),\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub enum RustPathAnchor' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^    #\\[serde(rename = \"self\")\\]$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'produce \"selff\", not \"self\"' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1` (the doc comment's necessity claim, anchored to one specific line, matching PLAN-003's T-006 anchoring technique).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (RustPathAnchor compiles; still 18 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '18 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add RustPathAnchor enum (AC-008)\n\nAdds the 4-variant RustPathAnchor enum verbatim per docs/spec/01-core-architecture.md:363-369, with a doc comment establishing which of its renames are functionally necessary (Selff->\"self\") versus which the default camelCase transform already produces on its own.",
+      "covers_criteria": [
+        "AC-008"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-004",
+      "title": "tests_types.rs: append RustPathAnchor rename tests (necessary vs redundant)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-003"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn rust_path_anchor_camel_case_forms' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::RustPathAnchor;\n\n#[test]\nfn rust_path_anchor_camel_case_forms() {\n    let crate_json = serde_json::to_string(&RustPathAnchor::Crate).unwrap();\n    assert_eq!(crate_json, \"\\\"crate\\\"\");\n    let round: RustPathAnchor = serde_json::from_str(&crate_json).unwrap();\n    assert!(matches!(round, RustPathAnchor::Crate));\n\n    let super_json = serde_json::to_string(&RustPathAnchor::Super).unwrap();\n    assert_eq!(super_json, \"\\\"super\\\"\");\n    let round: RustPathAnchor = serde_json::from_str(&super_json).unwrap();\n    assert!(matches!(round, RustPathAnchor::Super));\n\n    let self_json = serde_json::to_string(&RustPathAnchor::Selff).unwrap();\n    assert_eq!(self_json, \"\\\"self\\\"\");\n    let round: RustPathAnchor = serde_json::from_str(&self_json).unwrap();\n    assert!(matches!(round, RustPathAnchor::Selff));\n\n    let extern_json = serde_json::to_string(&RustPathAnchor::Extern(\"foo\".into())).unwrap();\n    assert_eq!(extern_json, \"{\\\"extern\\\":\\\"foo\\\"}\");\n    let round: RustPathAnchor = serde_json::from_str(&extern_json).unwrap();\n    assert!(matches!(round, RustPathAnchor::Extern(ref s) if s == \"foo\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn rust_path_anchor_camel_case_forms' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`. The exact string-equality assertions inside the test body (self_json equals the quoted \"self\" string, extern_json equals the {\"extern\":\"foo\"} shape) are proven by the fixture's real `cargo test` run below, not by a shell grep against escaped-quote literals -- this plan does not attempt brittle nested-quote grepping on strings containing nested quotes.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001). Run the identical fixture-build block (rm/mkdir/Cargo.toml/lib.rs/cp types.rs/cp tests_types.rs), then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0` -- this run is the authoritative proof that Selff serializes to exactly \"self\" (not \"selff\") and Extern(String) serializes as the externally-tagged newtype shape `{\"extern\":\"foo\"}`, since both assertions are exact string equalities inside the test itself. Assert: `echo \"$out\" | grep -q '19 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify RustPathAnchor's necessary vs redundant renames (AC-008)\n\nProves Crate/Super default-transform to \"crate\"/\"super\", Extern(String) serializes as the externally-tagged newtype shape {\"extern\":...}, and Selff's explicit rename produces exactly \"self\" -- not the \"selff\" the default transform would otherwise give.",
+      "covers_criteria": [
+        "AC-008",
+        "AC-019B"
+      ]
+    },
+    {
+      "id": "T-005",
+      "title": "types.rs: add camino::Utf8PathBuf import + append DependencyTarget enum (internally tagged, 3 variants, Namespace-residue doc comment)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-004"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub enum DependencyTarget' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`. Also run: `grep -c 'use camino::Utf8PathBuf;' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `0`.",
+        "Confirm red: run both commands above now. Both print `0`.",
+        "Write the minimal implementation, in two precisely-scoped edits (neither is a whole-file overwrite). First, insert the new `use` line immediately before the existing `use serde::{Deserialize, Serialize};` line (not idempotent -- running this a second time would duplicate the import) -- run: `perl -i -pe 's{^use serde::\\{Deserialize, Serialize\\};$}{use camino::Utf8PathBuf;\\nuse serde::\\{Deserialize, Serialize\\};}' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Second, append the enum -- run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// The resolved target of a dependency statement (AC-005, AC-006, AC-007).\n/// Internally tagged (`tag = \"kind\"`): each variant's own fields flatten\n/// directly into the same JSON object as the \"kind\" tag key, not nested\n/// under a separate variant-name key. The enum-level\n/// `#[serde(rename_all = \"camelCase\")]` renames only the 3 variant tag\n/// values (File->\"file\", RustPath->\"rustPath\", Namespace->\"namespace\") --\n/// it does NOT rename these struct variants' own fields, since that\n/// requires the separate `rename_all_fields` attribute, which this enum\n/// does not carry: the wire keys stay snake_case (is_relative, is_static),\n/// not isRelative/isStatic. No `#[serde(other)]` fallback; an unrecognized\n/// \"kind\" value fails with an unknown-variant error. `#[non_exhaustive]`\n/// here only affects Rust-level exhaustive match/construct checking outside\n/// this crate -- it has no effect on serde's generated (de)serialize code.\n///\n/// `Namespace` is confirmed spec residue from a dropped C#-roadmap item\n/// (docs/spec/07-edge-cases-and-failure-modes.md Part 3 finding #20;\n/// docs/spec/05-research-and-decisions.md \u00a76 records C# dropped from the\n/// bespoke Go/Java-tier roadmap, while \u00a710 separately adopts a not-yet-built\n/// generic tree-sitter fallback tier whose launch set includes C#). No\n/// analyzer in the current verbatim spec code constructs\n/// DependencyTarget::Namespace -- it is cosmetic residue in today's code,\n/// not a functional defect: the variant compiles and round-trips through\n/// serde normally.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\", tag = \"kind\")]\n#[non_exhaustive]\npub enum DependencyTarget {\n    File {\n        specifier: String,\n        resolved: Option<Utf8PathBuf>,\n        is_relative: bool,\n    },\n    RustPath {\n        segments: Vec<String>,\n        anchor: RustPathAnchor,\n        resolved: Option<Utf8PathBuf>,\n    },\n    Namespace {\n        segments: Vec<String>,\n        is_static: bool,\n        alias: Option<String>,\n    },\n}\n\nRUSTEOF`",
+        "Confirm green. Import check: `grep -c '^use camino::Utf8PathBuf;$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `head -8 /Users/gabe/Projects/monokl/crates/monokl/src/types.rs | tail -2` expect exactly `use camino::Utf8PathBuf;` then `use serde::{Deserialize, Serialize};` (confirms the insertion landed at the top, not appended at the bottom). Scoped block check: `diff <(grep -B3 -A16 '^pub enum DependencyTarget {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\", tag = \"kind\")]\n#[non_exhaustive]\npub enum DependencyTarget {\n    File {\n        specifier: String,\n        resolved: Option<Utf8PathBuf>,\n        is_relative: bool,\n    },\n    RustPath {\n        segments: Vec<String>,\n        anchor: RustPathAnchor,\n        resolved: Option<Utf8PathBuf>,\n    },\n    Namespace {\n        segments: Vec<String>,\n        is_static: bool,\n        alias: Option<String>,\n    },\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub enum DependencyTarget' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^#\\[serde(rename_all = \"camelCase\", tag = \"kind\")\\]$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'not isRelative/isStatic' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1` (anchored doc-comment line proving the field-rename-asymmetry claim was recorded); `grep -c 'finding #20' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001; camino is already included in the fixture Cargo.toml from T-001 onward). Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (DependencyTarget compiles cleanly with camino's Utf8PathBuf import, no new test yet added for it) and `exit=0`. Assert: `echo \"$out\" | grep -q '19 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add DependencyTarget enum (AC-005, AC-006, AC-007)\n\nAdds the internally-tagged (tag=\"kind\") DependencyTarget enum verbatim per docs/spec/01-core-architecture.md:342-358, with a doc comment establishing the field-rename asymmetry (container rename_all reaches only the tag, not struct-variant fields) and the Namespace variant's confirmed dropped-C#-roadmap residue (07-edge-cases-and-failure-modes.md Part 3 finding #20). Adds the camino::Utf8PathBuf import this variant's File/RustPath.resolved fields require.",
+      "covers_criteria": [
+        "AC-005",
+        "AC-006",
+        "AC-007"
+      ],
+      "shared_file_note": "Appends only, plus one precisely-scoped single-line `perl -i` insertion into the existing `use` block (verified by a targeted grep + head check, not a whole-file diff) -- per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-006",
+      "title": "tests_types.rs: append DependencyTarget internal-tagging wire-shape test (snake_case fields preserved)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-005"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn dependency_target_internal_tag_snake_case_fields' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::DependencyTarget;\n\n#[test]\nfn dependency_target_internal_tag_snake_case_fields() {\n    let file = DependencyTarget::File {\n        specifier: \"./foo\".into(),\n        resolved: None,\n        is_relative: true,\n    };\n    let v = serde_json::to_value(&file).unwrap();\n    let obj = v.as_object().unwrap();\n    assert_eq!(obj.get(\"kind\"), Some(&serde_json::Value::String(\"file\".into())));\n    assert!(obj.contains_key(\"is_relative\"));\n    assert!(!obj.contains_key(\"isRelative\"));\n    assert_eq!(obj.get(\"specifier\"), Some(&serde_json::Value::String(\"./foo\".into())));\n\n    let rust_path = DependencyTarget::RustPath {\n        segments: vec![\"crate\".into(), \"foo\".into()],\n        anchor: RustPathAnchor::Crate,\n        resolved: None,\n    };\n    let v2 = serde_json::to_value(&rust_path).unwrap();\n    assert_eq!(v2.get(\"kind\"), Some(&serde_json::Value::String(\"rustPath\".into())));\n\n    let ns = DependencyTarget::Namespace {\n        segments: vec![\"Foo\".into(), \"Bar\".into()],\n        is_static: true,\n        alias: None,\n    };\n    let v3 = serde_json::to_value(&ns).unwrap();\n    let obj3 = v3.as_object().unwrap();\n    assert_eq!(obj3.get(\"kind\"), Some(&serde_json::Value::String(\"namespace\".into())));\n    assert!(obj3.contains_key(\"is_static\"));\n    assert!(!obj3.contains_key(\"isStatic\"));\n\n    let json = r#\"{\"kind\":\"file\",\"specifier\":\"./foo\",\"resolved\":null,\"is_relative\":true}\"#;\n    let round: DependencyTarget = serde_json::from_str(json).unwrap();\n    assert!(matches!(round, DependencyTarget::File { is_relative: true, .. }));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn dependency_target_internal_tag_snake_case_fields' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert!(!obj.contains_key(\"isRelative\"))' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert!(!obj3.contains_key(\"isStatic\"))' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0` -- a real serde_json::to_value run is the only way to actually confirm is_relative/is_static keys stay snake_case rather than being camelCased, since that is exactly the asymmetry AC-005 claims and a hand-reasoned assertion alone would not catch a regression here. Assert: `echo \"$out\" | grep -q '20 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify DependencyTarget's internal tagging keeps struct-variant fields snake_case (AC-005)\n\nProves File/RustPath/Namespace each flatten their fields alongside the \"kind\" tag key (not nested), and that is_relative/is_static stay snake_case on the wire despite the enum's camelCase rename_all -- that attribute reaches only the tag values, not struct-variant field names.",
+      "covers_criteria": [
+        "AC-005"
+      ]
+    },
+    {
+      "id": "T-007",
+      "title": "tests_types.rs: append DependencyTarget unknown-kind-error and missing-snake_case-field-error tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-006"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn dependency_target_unknown_kind_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn dependency_target_unknown_kind_errors() {\n    let json = r#\"{\"kind\":\"bogus\",\"specifier\":\"x\",\"resolved\":null,\"is_relative\":false}\"#;\n    let err = serde_json::from_str::<DependencyTarget>(json).unwrap_err();\n    assert!(err.to_string().contains(\"unknown variant\"));\n}\n\n#[test]\nfn dependency_target_camel_case_field_key_fails_missing_field() {\n    let json = r#\"{\"kind\":\"file\",\"specifier\":\"x\",\"resolved\":null,\"isRelative\":false}\"#;\n    let err = serde_json::from_str::<DependencyTarget>(json).unwrap_err();\n    assert!(err.to_string().contains(\"missing field `is_relative`\"));\n}\n\n#[test]\nfn dependency_target_option_fields_lenient_on_missing_key() {\n    let json = r#\"{\"kind\":\"file\",\"specifier\":\"x\",\"is_relative\":false}\"#;\n    let v: DependencyTarget = serde_json::from_str(json).unwrap();\n    assert!(matches!(v, DependencyTarget::File { resolved: None, .. }));\n\n    let json2 = r#\"{\"kind\":\"namespace\",\"segments\":[],\"is_static\":false}\"#;\n    let v2: DependencyTarget = serde_json::from_str(json2).unwrap();\n    assert!(matches!(v2, DependencyTarget::Namespace { alias: None, .. }));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn dependency_target_unknown_kind_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'fn dependency_target_camel_case_field_key_fails_missing_field' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'fn dependency_target_option_fields_lenient_on_missing_key' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'contains(\"missing field .is_relative.\")' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0` -- the real serde_json error strings must be captured live since the exact wording (\"unknown variant\", \"missing field `is_relative`\") is a serde implementation detail this plan asserts against, not guessed. Assert: `echo \"$out\" | grep -q '23 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify DependencyTarget rejects unknown \"kind\" values and camelCase field-key substitutes (AC-006)\n\nNo #[serde(other)] fallback exists; an unrecognized \"kind\" string fails with an unknown-variant error, and submitting \"isRelative\" instead of \"is_relative\" fails with a missing-field error naming the real snake_case field. Also proves Option-typed fields (resolved, alias) still deserialize leniently to None without any #[serde(default)] attribute.",
+      "covers_criteria": [
+        "AC-005",
+        "AC-006"
+      ]
+    },
+    {
+      "id": "T-008",
+      "title": "tests_types.rs: append DependencyTarget::Namespace round-trip test (confirms residue is cosmetic, not broken)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-007"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn dependency_target_namespace_round_trips_normally' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn dependency_target_namespace_round_trips_normally() {\n    let ns = DependencyTarget::Namespace {\n        segments: vec![\"System\".into(), \"Collections\".into()],\n        is_static: false,\n        alias: Some(\"Coll\".into()),\n    };\n    let s = serde_json::to_string(&ns).unwrap();\n    let round: DependencyTarget = serde_json::from_str(&s).unwrap();\n    assert!(matches!(\n        round,\n        DependencyTarget::Namespace { alias: Some(ref a), is_static: false, .. } if a == \"Coll\"\n    ));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn dependency_target_namespace_round_trips_normally' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '24 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify DependencyTarget::Namespace round-trips normally despite being spec residue (AC-007)\n\nThe variant is dropped-C#-roadmap residue with no current constructor in the analyzer corpus, but it still compiles and round-trips through serde exactly like File/RustPath -- this is cosmetic, not a functional defect.",
+      "covers_criteria": [
+        "AC-007"
+      ]
+    },
+    {
+      "id": "T-009",
+      "title": "types.rs: append DependencyBinding struct (3 fields)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-008"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct DependencyBinding' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// A single named/local/kind binding within a `DependencyRecord` (AC-002).\n/// Exactly 3 fields in this declaration order, all required on deserialize\n/// -- no field-level attributes. Derives `Debug`, `Clone`, `Serialize`,\n/// `Deserialize` only; no `Copy`/`PartialEq`/`Eq`, no `#[non_exhaustive]`.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct DependencyBinding {\n    pub imported: String,\n    pub local: String,\n    pub kind: BindingKind,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A4 '^pub struct DependencyBinding {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct DependencyBinding {\n    pub imported: String,\n    pub local: String,\n    pub kind: BindingKind,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct DependencyBinding' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (DependencyBinding compiles; still 24 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '24 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add DependencyBinding struct (AC-002)\n\nAdds the 3-field DependencyBinding struct verbatim per docs/spec/01-core-architecture.md:323-327, added after BindingKind since it references that enum as a field type.",
+      "covers_criteria": [
+        "AC-002"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-010",
+      "title": "tests_types.rs: append DependencyBinding missing-required-field-error tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-009"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn dependency_binding_missing_required_field_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::DependencyBinding;\n\n#[test]\nfn dependency_binding_missing_required_field_errors() {\n    let err_imported = serde_json::from_str::<DependencyBinding>(r#\"{\"local\":\"x\",\"kind\":\"named\"}\"#).unwrap_err();\n    assert!(err_imported.to_string().contains(\"missing field `imported`\"));\n    let err_local = serde_json::from_str::<DependencyBinding>(r#\"{\"imported\":\"x\",\"kind\":\"named\"}\"#).unwrap_err();\n    assert!(err_local.to_string().contains(\"missing field `local`\"));\n    let err_kind = serde_json::from_str::<DependencyBinding>(r#\"{\"imported\":\"x\",\"local\":\"y\"}\"#).unwrap_err();\n    assert!(err_kind.to_string().contains(\"missing field `kind`\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn dependency_binding_missing_required_field_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'missing field .imported.' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '25 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify DependencyBinding's 3 fields are all required on deserialize (AC-002)\n\nOmitting any of imported/local/kind fails to deserialize with a missing-field error naming that specific field.",
+      "covers_criteria": [
+        "AC-002"
+      ]
+    },
+    {
+      "id": "T-011",
+      "title": "types.rs: append DependencyRecord struct (3 fields, bindings default-leniency)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-010"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct DependencyRecord' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// monokl's per-dependency-statement output record (AC-001). Exactly 3\n/// fields in this declaration order. Derives `Debug`, `Clone`,\n/// `Serialize`, `Deserialize` only -- no `Copy`/`PartialEq`/`Eq`, no\n/// `#[non_exhaustive]`. Only `bindings` carries a field-level attribute:\n/// `#[serde(default)]` with no `skip_serializing_if`, so an empty\n/// `bindings` vec still serializes its key (\"bindings\":[]) while a missing\n/// \"bindings\" key still deserializes leniently to an empty vec -- this is\n/// load-bearing, unlike an `Option<T>` field's `#[serde(default)]`: a\n/// `Vec<T>` field gets no implicit missing-key deserialize leniency from\n/// serde's derive macro on its own. `line` and `target` carry no\n/// field-level attributes and are required.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct DependencyRecord {\n    pub line: usize,\n    #[serde(default)]\n    pub bindings: Vec<DependencyBinding>,\n    pub target: DependencyTarget,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A5 '^pub struct DependencyRecord {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct DependencyRecord {\n    pub line: usize,\n    #[serde(default)]\n    pub bindings: Vec<DependencyBinding>,\n    pub target: DependencyTarget,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct DependencyRecord' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'load-bearing, unlike an .Option<T>. field' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (DependencyRecord compiles; still 25 since no new test added yet) and `exit=0`. Assert: `echo \"$out\" | grep -q '25 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add DependencyRecord struct (AC-001)\n\nAdds the 3-field DependencyRecord struct verbatim per docs/spec/01-core-architecture.md:314-319, added after DependencyBinding and DependencyTarget since it references both as field types.",
+      "covers_criteria": [
+        "AC-001"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-012",
+      "title": "tests_types.rs: append DependencyRecord bindings-default-leniency and missing-required-field-error tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-011"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn dependency_record_bindings_default_and_required_fields' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::DependencyRecord;\n\n#[test]\nfn dependency_record_bindings_default_and_required_fields() {\n    let json = r#\"{\"line\":1,\"target\":{\"kind\":\"file\",\"specifier\":\"x\",\"resolved\":null,\"is_relative\":false}}\"#;\n    let rec: DependencyRecord = serde_json::from_str(json).unwrap();\n    assert_eq!(rec.bindings.len(), 0);\n\n    let v = serde_json::to_value(&rec).unwrap();\n    let obj = v.as_object().unwrap();\n    assert!(obj.contains_key(\"bindings\"));\n    assert_eq!(obj.get(\"bindings\"), Some(&serde_json::Value::Array(vec![])));\n\n    let err_line = serde_json::from_str::<DependencyRecord>(\n        r#\"{\"target\":{\"kind\":\"file\",\"specifier\":\"x\",\"resolved\":null,\"is_relative\":false}}\"#,\n    )\n    .unwrap_err();\n    assert!(err_line.to_string().contains(\"missing field `line`\"));\n\n    let err_target = serde_json::from_str::<DependencyRecord>(r#\"{\"line\":1}\"#).unwrap_err();\n    assert!(err_target.to_string().contains(\"missing field `target`\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn dependency_record_bindings_default_and_required_fields' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert_eq!(rec.bindings.len(), 0)' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'missing field .target.' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '26 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify DependencyRecord.bindings' Vec default-leniency and line/target's required-field errors (AC-001)\n\nA missing \"bindings\" key deserializes leniently to an empty vec (load-bearing #[serde(default)], unlike Option<T>'s implicit leniency); an empty bindings vec still serializes its key. line and target are required -- omitting either fails naming that field.",
+      "covers_criteria": [
+        "AC-001"
+      ]
+    },
+    {
+      "id": "T-013",
+      "title": "types.rs: append ExportRecord struct (3 fields)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-012"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct ExportRecord' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// A single named export statement (AC-009). Exactly 3 fields in this\n/// declaration order, all required on deserialize -- no field-level\n/// attributes. Under rename_all = \"camelCase\", re_export's JSON key is\n/// reExport.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct ExportRecord {\n    pub name: String,\n    pub line: usize,\n    pub re_export: bool,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A4 '^pub struct ExportRecord {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct ExportRecord {\n    pub name: String,\n    pub line: usize,\n    pub re_export: bool,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct ExportRecord' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (ExportRecord compiles; still 26 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '26 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add ExportRecord struct (AC-009)\n\nAdds the 3-field ExportRecord struct verbatim per docs/spec/01-core-architecture.md:373-377.",
+      "covers_criteria": [
+        "AC-009"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-014",
+      "title": "tests_types.rs: append ExportRecord required-fields and reExport camelCase tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-013"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn export_record_required_fields_and_camel_case' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::ExportRecord;\n\n#[test]\nfn export_record_required_fields_and_camel_case() {\n    let rec = ExportRecord { name: \"foo\".into(), line: 3, re_export: true };\n    let s = serde_json::to_string(&rec).unwrap();\n    assert!(s.contains(\"\\\"reExport\\\":true\"));\n    assert!(!s.contains(\"re_export\"));\n\n    let err_name = serde_json::from_str::<ExportRecord>(r#\"{\"line\":1,\"reExport\":false}\"#).unwrap_err();\n    assert!(err_name.to_string().contains(\"missing field `name`\"));\n    let err_line = serde_json::from_str::<ExportRecord>(r#\"{\"name\":\"foo\",\"reExport\":false}\"#).unwrap_err();\n    assert!(err_line.to_string().contains(\"missing field `line`\"));\n    let err_re = serde_json::from_str::<ExportRecord>(r#\"{\"name\":\"foo\",\"line\":1}\"#).unwrap_err();\n    assert!(err_re.to_string().contains(\"missing field `reExport`\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn export_record_required_fields_and_camel_case' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'missing field .reExport.' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '27 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify ExportRecord's 3 fields are required and re_export serializes as reExport (AC-009)\n\nOmitting name/line/reExport each fails with a missing-field error naming that field; re_export's JSON key is confirmed as reExport under rename_all=camelCase.",
+      "covers_criteria": [
+        "AC-009"
+      ]
+    },
+    {
+      "id": "T-015",
+      "title": "types.rs: append JsxAttribute struct (4 fields)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-014"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct JsxAttribute' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// A single JSX attribute (AC-010). Exactly 4 fields in this declaration\n/// order. name/is_expression/is_spread are required; string_value carries\n/// no serde attribute at all yet still deserializes leniently to None on a\n/// missing or explicitly-null key (Option<T>'s own implicit leniency), and\n/// serializes its key with a JSON null when None (no skip_serializing_if to\n/// omit it).\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JsxAttribute {\n    pub name: String,\n    pub string_value: Option<String>,\n    pub is_expression: bool,\n    pub is_spread: bool,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A5 '^pub struct JsxAttribute {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JsxAttribute {\n    pub name: String,\n    pub string_value: Option<String>,\n    pub is_expression: bool,\n    pub is_spread: bool,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct JsxAttribute' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (JsxAttribute compiles; still 27 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '27 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add JsxAttribute struct (AC-010)\n\nAdds the 4-field JsxAttribute struct verbatim per docs/spec/01-core-architecture.md:381-386, added ahead of JsxElementEntry which references it as a field type.",
+      "covers_criteria": [
+        "AC-010"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-016",
+      "title": "tests_types.rs: append JsxAttribute required-fields and stringValue null-present tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-015"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn jsx_attribute_required_fields_and_string_value_leniency' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::JsxAttribute;\n\n#[test]\nfn jsx_attribute_required_fields_and_string_value_leniency() {\n    let attr = JsxAttribute { name: \"foo\".into(), string_value: None, is_expression: false, is_spread: false };\n    let v = serde_json::to_value(&attr).unwrap();\n    let obj = v.as_object().unwrap();\n    assert!(obj.contains_key(\"stringValue\"));\n    assert_eq!(obj.get(\"stringValue\"), Some(&serde_json::Value::Null));\n\n    let json = r#\"{\"name\":\"foo\",\"isExpression\":false,\"isSpread\":false}\"#;\n    let parsed: JsxAttribute = serde_json::from_str(json).unwrap();\n    assert_eq!(parsed.string_value, None);\n\n    let err_name = serde_json::from_str::<JsxAttribute>(r#\"{\"isExpression\":false,\"isSpread\":false}\"#).unwrap_err();\n    assert!(err_name.to_string().contains(\"missing field `name`\"));\n    let err_expr = serde_json::from_str::<JsxAttribute>(r#\"{\"name\":\"foo\",\"isSpread\":false}\"#).unwrap_err();\n    assert!(err_expr.to_string().contains(\"missing field `isExpression`\"));\n    let err_spread = serde_json::from_str::<JsxAttribute>(r#\"{\"name\":\"foo\",\"isExpression\":false}\"#).unwrap_err();\n    assert!(err_spread.to_string().contains(\"missing field `isSpread`\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn jsx_attribute_required_fields_and_string_value_leniency' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'obj.get(\"stringValue\"), Some(&serde_json::Value::Null)' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '28 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify JsxAttribute's required fields and string_value's null-present-not-omitted serialize behavior (AC-010)\n\nname/isExpression/isSpread are required; stringValue, despite carrying zero serde attributes, still deserializes leniently to None and serializes its key as null rather than being omitted.",
+      "covers_criteria": [
+        "AC-010"
+      ]
+    },
+    {
+      "id": "T-017",
+      "title": "types.rs: append JsxElementEntry struct (4 fields, no default on attributes)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-016"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct JsxElementEntry' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// A single JSX element usage (AC-011). Exactly 4 fields in this\n/// declaration order. Unlike DependencyRecord.bindings, attributes carries\n/// no #[serde(default)]: Vec<T> gets no implicit missing-key leniency from\n/// serde's derive macro, so all 4 fields including attributes are required\n/// on deserialize.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JsxElementEntry {\n    pub name: String,\n    pub is_html: bool,\n    pub line: usize,\n    pub attributes: Vec<JsxAttribute>,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A5 '^pub struct JsxElementEntry {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JsxElementEntry {\n    pub name: String,\n    pub is_html: bool,\n    pub line: usize,\n    pub attributes: Vec<JsxAttribute>,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct JsxElementEntry' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'no #\\[serde(default)\\]' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (JsxElementEntry compiles; still 28 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '28 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add JsxElementEntry struct (AC-011)\n\nAdds the 4-field JsxElementEntry struct verbatim per docs/spec/01-core-architecture.md:390-395, added after JsxAttribute since it references that struct as a field type, and after DependencyRecord (AC-001) to document the contrasting attributes-has-no-#[serde(default)] design.",
+      "covers_criteria": [
+        "AC-011"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-018",
+      "title": "tests_types.rs: append JsxElementEntry attributes-required-no-default-leniency test",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-017"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn jsx_element_entry_attributes_required_no_default_leniency' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::JsxElementEntry;\n\n#[test]\nfn jsx_element_entry_attributes_required_no_default_leniency() {\n    let err = serde_json::from_str::<JsxElementEntry>(r#\"{\"name\":\"Foo\",\"isHtml\":true,\"line\":1}\"#).unwrap_err();\n    assert!(err.to_string().contains(\"missing field `attributes`\"));\n\n    let json = r#\"{\"name\":\"Foo\",\"isHtml\":true,\"line\":1,\"attributes\":[]}\"#;\n    let parsed: JsxElementEntry = serde_json::from_str(json).unwrap();\n    assert_eq!(parsed.attributes.len(), 0);\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn jsx_element_entry_attributes_required_no_default_leniency' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'missing field .attributes.' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '29 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify JsxElementEntry.attributes is required, unlike Vec fields carrying #[serde(default)] (AC-011)\n\nOmitting \"attributes\" fails with a missing-field error, in contrast to DependencyRecord.bindings (AC-001) -- the difference is entirely the presence/absence of #[serde(default)], since Vec<T> gets no implicit missing-key leniency on its own.",
+      "covers_criteria": [
+        "AC-011"
+      ]
+    },
+    {
+      "id": "T-019",
+      "title": "types.rs: append RustData, PythonData, GoData, JavaData (4 empty placeholder structs)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-018"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct RustData' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// Empty per-language placeholder (AC-018) -- populated once the Rust\n/// analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct RustData {}\n\n/// Empty per-language placeholder (AC-018) -- populated once the Python\n/// analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct PythonData {}\n\n/// Empty per-language placeholder (AC-018, AC-015) -- replaces the dropped\n/// CSharp variant; populated once the Go analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct GoData {}\n\n/// Empty per-language placeholder (AC-018, AC-015) -- replaces the dropped\n/// CSharp variant; populated once the Java analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JavaData {}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B4 -A18 '^pub struct RustData {}$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n/// Empty per-language placeholder (AC-018) -- populated once the Rust\n/// analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct RustData {}\n\n/// Empty per-language placeholder (AC-018) -- populated once the Python\n/// analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct PythonData {}\n\n/// Empty per-language placeholder (AC-018, AC-015) -- replaces the dropped\n/// CSharp variant; populated once the Go analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct GoData {}\n\n/// Empty per-language placeholder (AC-018, AC-015) -- replaces the dropped\n/// CSharp variant; populated once the Java analyzer lands.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct JavaData {}\nRUSTEOF`. Expected: no output, exit 0. Additionally `grep -c '^pub struct PythonData {}$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^pub struct GoData {}$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^pub struct JavaData {}$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '#\\[derive(Debug, Clone, Default, Serialize, Deserialize)\\]' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `4` (RustData/PythonData/GoData/JavaData -- TsData not yet added); `grep -c 'replaces the dropped' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `2` (GoData's and JavaData's doc comments).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (the 4 empty structs compile; still 29 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '29 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add RustData, PythonData, GoData, JavaData empty placeholder structs (AC-018, AC-015)\n\nAdds the four structurally identical, field-less per-language placeholder structs verbatim per docs/spec/01-core-architecture.md:438-452, with doc comments on GoData/JavaData noting they replace an earlier dropped CSharp variant.",
+      "covers_criteria": [
+        "AC-018",
+        "AC-015"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-020",
+      "title": "tests_types.rs: append empty per-language structs serialize/deserialize/Default test",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-019"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn empty_lang_data_structs_serialize_as_empty_object' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::{GoData, JavaData, PythonData, RustData};\n\n#[test]\nfn empty_lang_data_structs_serialize_as_empty_object() {\n    assert_eq!(serde_json::to_string(&RustData {}).unwrap(), \"{}\");\n    assert_eq!(serde_json::to_string(&PythonData {}).unwrap(), \"{}\");\n    assert_eq!(serde_json::to_string(&GoData {}).unwrap(), \"{}\");\n    assert_eq!(serde_json::to_string(&JavaData {}).unwrap(), \"{}\");\n\n    let _: RustData = serde_json::from_str(\"{}\").unwrap();\n    let _: PythonData = serde_json::from_str(\"{}\").unwrap();\n    let _: GoData = serde_json::from_str(\"{}\").unwrap();\n    let _: JavaData = serde_json::from_str(\"{}\").unwrap();\n\n    fn assert_default<T: Default>() {}\n    assert_default::<RustData>();\n    assert_default::<PythonData>();\n    assert_default::<GoData>();\n    assert_default::<JavaData>();\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn empty_lang_data_structs_serialize_as_empty_object' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'to_string(&JavaData {}).unwrap(), \"{}\"' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '30 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify RustData/PythonData/GoData/JavaData serialize as {}, deserialize from {}, and implement Default (AC-018)\n\nAll four empty placeholder structs behave identically: {} in, {} out, ::default() = XData {}.",
+      "covers_criteria": [
+        "AC-018"
+      ]
+    },
+    {
+      "id": "T-021",
+      "title": "types.rs: append TsData struct (3 Vec fields, selective skip_serializing_if)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-020"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub struct TsData' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// TypeScript-specific analysis output (AC-017) -- the only one of the 5\n/// per-language data structs with real fields. Of its 3 Vec fields, all\n/// carry #[serde(default)] (load-bearing missing-key leniency, per\n/// DependencyRecord.bindings), but only unresolved_aliases also carries\n/// skip_serializing_if = \"Vec::is_empty\": jsx_elements and\n/// type_only_imports always serialize their key even when empty.\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct TsData {\n    #[serde(default)]\n    pub jsx_elements: Vec<JsxElementEntry>,\n    #[serde(default)]\n    pub type_only_imports: Vec<String>,\n    #[serde(default, skip_serializing_if = \"Vec::is_empty\")]\n    pub unresolved_aliases: Vec<String>,\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B2 -A7 '^pub struct TsData {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Default, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\")]\npub struct TsData {\n    #[serde(default)]\n    pub jsx_elements: Vec<JsxElementEntry>,\n    #[serde(default)]\n    pub type_only_imports: Vec<String>,\n    #[serde(default, skip_serializing_if = \"Vec::is_empty\")]\n    pub unresolved_aliases: Vec<String>,\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub struct TsData' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^    #\\[serde(default, skip_serializing_if = \"Vec::is_empty\")\\]$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1` (only unresolved_aliases carries it).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (TsData compiles; still 30 since no new test added by this task) and `exit=0`. Assert: `echo \"$out\" | grep -q '30 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add TsData struct (AC-017)\n\nAdds the 3-field TsData struct verbatim per docs/spec/01-core-architecture.md:427-436, added after JsxElementEntry since jsx_elements references it as a field type, and after the 4 empty placeholder structs to keep the per-language-data-struct cluster contiguous.",
+      "covers_criteria": [
+        "AC-017"
+      ],
+      "shared_file_note": "Appends only -- verified via scoped grep -B/-A block extraction, not a whole-file diff, per this plan's shared_file_warning."
+    },
+    {
+      "id": "T-022",
+      "title": "tests_types.rs: append TsData default-vec-leniency and selective skip_serializing_if test",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-021"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn ts_data_default_leniency_and_selective_skip_serializing' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::TsData;\n\n#[test]\nfn ts_data_default_leniency_and_selective_skip_serializing() {\n    let d = TsData::default();\n    assert_eq!(d.jsx_elements.len(), 0);\n    assert_eq!(d.type_only_imports.len(), 0);\n    assert_eq!(d.unresolved_aliases.len(), 0);\n\n    let empty: TsData = serde_json::from_str(\"{}\").unwrap();\n    assert_eq!(empty.jsx_elements.len(), 0);\n    assert_eq!(empty.type_only_imports.len(), 0);\n    assert_eq!(empty.unresolved_aliases.len(), 0);\n\n    let v = serde_json::to_value(&empty).unwrap();\n    let obj = v.as_object().unwrap();\n    assert!(obj.contains_key(\"jsxElements\"));\n    assert!(obj.contains_key(\"typeOnlyImports\"));\n    assert!(!obj.contains_key(\"unresolvedAliases\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn ts_data_default_leniency_and_selective_skip_serializing' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert!(!obj.contains_key(\"unresolvedAliases\"))' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '31 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify TsData's 3 Vec fields default-deserialize leniently and only unresolved_aliases omits its key when empty (AC-017)\n\nAn empty {} deserializes to all-empty vecs via each field's #[serde(default)]; on serialize, jsxElements/typeOnlyImports keys stay present when empty while unresolvedAliases is omitted -- the only field carrying skip_serializing_if.",
+      "covers_criteria": [
+        "AC-017"
+      ]
+    },
+    {
+      "id": "T-023",
+      "title": "types.rs: append LangData enum (adjacently tagged, Post-research doc comment) + ts()/jsx_elements() methods",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-022"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'pub enum LangData' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/types.rs <<'RUSTEOF'\n/// Post-research correction (AC-015): Go/Java replace an earlier CSharp\n/// variant -- the language roadmap dropped C# and added Go and Java\n/// instead (docs/spec/05-research-and-decisions.md \u00a76). GoData/JavaData\n/// are empty placeholders today, same as PythonData -- populated once\n/// those analyzers land. LangData's own #[non_exhaustive] protects only\n/// enum-level exhaustive-match compatibility; it does not extend to\n/// GoData/JavaData's own fields -- adding real fields to those structs\n/// later is a separate, unresolved compatibility question.\n///\n/// Per-language analysis output (AC-012, AC-013, AC-014). Adjacently\n/// tagged (tag = \"language\", content = \"data\"): the tag and the variant's\n/// payload stay in two separate keys of the same object (e.g. Ts\n/// serializes as {\"language\":\"typescript\",\"data\":{...}}) -- a\n/// structurally different JSON shape from DependencyTarget's internal\n/// tagging, which flattens variant fields alongside the tag key with no\n/// separate content wrapper. Each variant carries its own explicit\n/// #[serde(rename = ...)] tag value; only Ts's rename to \"typescript\" is\n/// functionally necessary (the default transform would otherwise give\n/// \"ts\") -- Rust/Python/Go/Java's renames are redundant with what the\n/// default transform already produces. No #[serde(other)] fallback; an\n/// unrecognized \"language\" value fails with an unknown-variant error.\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\", tag = \"language\", content = \"data\")]\n#[non_exhaustive]\npub enum LangData {\n    #[serde(rename = \"typescript\")]\n    Ts(TsData),\n    #[serde(rename = \"rust\")]\n    Rust(RustData),\n    #[serde(rename = \"python\")]\n    Python(PythonData),\n    #[serde(rename = \"go\")]\n    Go(GoData),\n    #[serde(rename = \"java\")]\n    Java(JavaData),\n}\n\nimpl LangData {\n    /// Returns `Some(&TsData)` iff `self` is the `Ts` variant, `None`\n    /// otherwise. Never panics (AC-016).\n    pub fn ts(&self) -> Option<&TsData> {\n        if let LangData::Ts(ts) = self { Some(ts) } else { None }\n    }\n\n    /// Delegates to `ts()`: `TsData.jsx_elements` as a slice when `self` is\n    /// `Ts`, an empty slice otherwise. Never panics (AC-016).\n    pub fn jsx_elements(&self) -> &[JsxElementEntry] {\n        self.ts().map_or(&[], |ts| ts.jsx_elements.as_slice())\n    }\n}\n\nRUSTEOF`",
+        "Confirm green. Scoped block check: `diff <(grep -B3 -A11 '^pub enum LangData {' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs) - <<'RUSTEOF'\n#[derive(Debug, Clone, Serialize, Deserialize)]\n#[serde(rename_all = \"camelCase\", tag = \"language\", content = \"data\")]\n#[non_exhaustive]\npub enum LangData {\n    #[serde(rename = \"typescript\")]\n    Ts(TsData),\n    #[serde(rename = \"rust\")]\n    Rust(RustData),\n    #[serde(rename = \"python\")]\n    Python(PythonData),\n    #[serde(rename = \"go\")]\n    Go(GoData),\n    #[serde(rename = \"java\")]\n    Java(JavaData),\n}\nRUSTEOF`. Expected: no output, exit 0. Also run: `grep -c '^pub enum LangData' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c '^#\\[serde(rename_all = \"camelCase\", tag = \"language\", content = \"data\")\\]$' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'pub fn ts(&self) -> Option<&TsData>' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'pub fn jsx_elements(&self) -> &\\[JsxElementEntry\\]' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1`; `grep -c 'only Ts.s rename to \"typescript\" is' /Users/gabe/Projects/monokl/crates/monokl/src/types.rs` expect `1` (anchored necessary-vs-redundant claim).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` (LangData and its impl compile; no new test added yet) and `exit=0`. Assert: `echo \"$out\" | grep -q '31 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "feat(types): add LangData enum plus ts()/jsx_elements() methods (AC-012, AC-013, AC-015, AC-016)\n\nAdds the adjacently-tagged (tag=\"language\", content=\"data\") LangData enum and its impl block verbatim per docs/spec/01-core-architecture.md:402-424, including the Post-research correction doc comment (Go/Java replace a dropped CSharp variant) and the necessary-vs-redundant rename reasoning for its 5 tag values. Added last among this cluster's types since it depends on TsData, RustData, PythonData, GoData, and JavaData all already existing.",
+      "covers_criteria": [
+        "AC-012",
+        "AC-013",
+        "AC-015",
+        "AC-016"
+      ],
+      "shared_file_note": "This is the LAST task in this plan to modify types.rs. Appends only, verified via scoped grep block extraction, never a whole-file diff. After this task, types.rs contains SPEC-003's SymbolKind/Visibility/SymbolEntry plus this plan's full dependency/export/JSX/LangData cluster (DependencyRecord, DependencyBinding, BindingKind, DependencyTarget, RustPathAnchor, ExportRecord, JsxAttribute, JsxElementEntry, RustData, PythonData, GoData, JavaData, TsData, LangData). Any future plan (SPEC-006, SPEC-007, SPEC-008) extending types.rs further MUST continue this append-only, scoped-verification discipline -- appending new types after LangData's closing `impl` block, never overwriting from the top. This restates PLAN-003's own shared_file_warning at this plan's point of last contact with the file, per that plan's established precedent (its T-006)."
+    },
+    {
+      "id": "T-024",
+      "title": "tests_types.rs: append LangData adjacent-tagging wire-shape test",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-023"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn lang_data_adjacent_tag_wire_shape' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\nuse crate::types::LangData;\n\n#[test]\nfn lang_data_adjacent_tag_wire_shape() {\n    let ts = LangData::Ts(TsData::default());\n    let v = serde_json::to_value(&ts).unwrap();\n    let obj = v.as_object().unwrap();\n    assert_eq!(obj.get(\"language\"), Some(&serde_json::Value::String(\"typescript\".into())));\n    assert!(obj.contains_key(\"data\"));\n    assert_eq!(obj.len(), 2);\n\n    let json = r#\"{\"language\":\"typescript\",\"data\":{\"jsxElements\":[],\"typeOnlyImports\":[]}}\"#;\n    let round: LangData = serde_json::from_str(json).unwrap();\n    assert!(matches!(round, LangData::Ts(_)));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn lang_data_adjacent_tag_wire_shape' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert_eq!(obj.len(), 2)' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1` (proves the tag and payload occupy exactly 2 top-level keys, not flattened together).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '32 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify LangData's adjacent tagging keeps tag and payload in two separate top-level keys (AC-012)\n\nTs serializes as exactly {\"language\":\"typescript\",\"data\":{...}} -- 2 keys, contrasting with DependencyTarget's internal tagging (AC-005) which flattens variant fields alongside the tag with no separate wrapper.",
+      "covers_criteria": [
+        "AC-012"
+      ]
+    },
+    {
+      "id": "T-025",
+      "title": "tests_types.rs: append LangData tag-value necessary-vs-redundant rename test (all 5 variants)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-024"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn lang_data_tag_values_necessary_vs_redundant_renames' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn lang_data_tag_values_necessary_vs_redundant_renames() {\n    let pairs: [(LangData, &str); 5] = [\n        (LangData::Ts(TsData::default()), \"typescript\"),\n        (LangData::Rust(RustData {}), \"rust\"),\n        (LangData::Python(PythonData {}), \"python\"),\n        (LangData::Go(GoData {}), \"go\"),\n        (LangData::Java(JavaData {}), \"java\"),\n    ];\n    for (value, expected_tag) in pairs {\n        let v = serde_json::to_value(&value).unwrap();\n        assert_eq!(v.get(\"language\"), Some(&serde_json::Value::String(expected_tag.into())));\n    }\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn lang_data_tag_values_necessary_vs_redundant_renames' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'LangData::Java(JavaData {}), \"java\"' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0` -- this run is the authoritative proof that Ts actually produces \"typescript\" (not the default-transform \"ts\"), pairing the behavioral evidence with T-023's hand-computed necessary-vs-redundant doc-comment claim. Assert: `echo \"$out\" | grep -q '33 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify all 5 LangData tag values produce their exact declared string (AC-013)\n\nConfirms Ts->\"typescript\" (the one functionally necessary rename) and Rust/Python/Go/Java's tag values, which the default camelCase transform would already have produced without their explicit #[serde(rename = ...)] overrides.",
+      "covers_criteria": [
+        "AC-013"
+      ]
+    },
+    {
+      "id": "T-026",
+      "title": "tests_types.rs: append LangData unknown-tag-error, malformed-data-error, and extra-key-in-data-discarded tests",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-025"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn lang_data_unknown_language_tag_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn lang_data_unknown_language_tag_errors() {\n    let json = r#\"{\"language\":\"csharp\",\"data\":{}}\"#;\n    let err = serde_json::from_str::<LangData>(json).unwrap_err();\n    assert!(err.to_string().contains(\"unknown variant\"));\n}\n\n#[test]\nfn lang_data_malformed_data_shape_errors_per_inner_struct() {\n    let json = r#\"{\"language\":\"typescript\",\"data\":{\"jsxElements\":\"not-an-array\"}}\"#;\n    let err = serde_json::from_str::<LangData>(json).unwrap_err();\n    assert!(err.to_string().contains(\"invalid type\"));\n}\n\n#[test]\nfn lang_data_extra_key_in_data_silently_discarded() {\n    let json = r#\"{\"language\":\"typescript\",\"data\":{\"jsxElements\":[],\"typeOnlyImports\":[],\"bogusKey\":123}}\"#;\n    let parsed: LangData = serde_json::from_str(json).unwrap();\n    assert!(matches!(parsed, LangData::Ts(_)));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn lang_data_unknown_language_tag_errors' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'fn lang_data_malformed_data_shape_errors_per_inner_struct' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'fn lang_data_extra_key_in_data_silently_discarded' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '36 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify LangData rejects unknown language tags, surfaces malformed-data errors per the inner struct's own contract, and discards unrecognized data keys (AC-014)\n\n\"csharp\" fails with an unknown-variant error; a non-array jsxElements fails with TsData's own invalid-type error, not a LangData-specific one; an unrecognized key inside \"data\" is silently discarded, same as everywhere else in this cluster.",
+      "covers_criteria": [
+        "AC-014"
+      ]
+    },
+    {
+      "id": "T-027",
+      "title": "tests_types.rs: append LangData::ts()/jsx_elements() behavior test across all 5 variants",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-026"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn lang_data_ts_and_jsx_elements_methods' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn lang_data_ts_and_jsx_elements_methods() {\n    let entry = JsxElementEntry { name: \"div\".into(), is_html: true, line: 1, attributes: vec![] };\n    let ts_data = TsData { jsx_elements: vec![entry.clone()], type_only_imports: vec![], unresolved_aliases: vec![] };\n    let ts = LangData::Ts(ts_data);\n    assert!(ts.ts().is_some());\n    assert_eq!(ts.jsx_elements().len(), 1);\n    assert_eq!(ts.jsx_elements()[0].name, \"div\");\n\n    let others: [LangData; 4] = [\n        LangData::Rust(RustData {}),\n        LangData::Python(PythonData {}),\n        LangData::Go(GoData {}),\n        LangData::Java(JavaData {}),\n    ];\n    for variant in others {\n        assert!(variant.ts().is_none());\n        assert_eq!(variant.jsx_elements().len(), 0);\n    }\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn lang_data_ts_and_jsx_elements_methods' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert_eq!(ts.jsx_elements()\\[0\\].name, \"div\")' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -20; echo \"exit=$rc\"`. Expected: `test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. Assert: `echo \"$out\" | grep -q '37 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify LangData::ts() and ::jsx_elements() return the right value for Ts and empty/None for every other variant (AC-016)\n\nts() returns Some(&TsData) only for Ts, None for Rust/Python/Go/Java; jsx_elements() returns the real slice for Ts and an empty slice for every other variant -- neither method panics on any variant.",
+      "covers_criteria": [
+        "AC-016"
+      ]
+    },
+    {
+      "id": "T-028",
+      "title": "tests_types.rs: append AC-019 extra-unknown-key-silently-discarded test (representative plain struct, fieldless struct, both tagged enums)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-027"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn extra_unknown_key_silently_discarded_across_cluster' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn extra_unknown_key_silently_discarded_across_cluster() {\n    let json = r#\"{\"name\":\"foo\",\"line\":1,\"reExport\":false,\"bogusKey\":123}\"#;\n    let rec: ExportRecord = serde_json::from_str(json).unwrap();\n    assert_eq!(rec.name, \"foo\");\n\n    let json2 = r#\"{\"bogusKey\":123}\"#;\n    let _: RustData = serde_json::from_str(json2).unwrap();\n\n    let json3 = r#\"{\"kind\":\"file\",\"specifier\":\"x\",\"resolved\":null,\"is_relative\":false,\"bogusKey\":123}\"#;\n    let dt: DependencyTarget = serde_json::from_str(json3).unwrap();\n    assert!(matches!(dt, DependencyTarget::File { .. }));\n\n    let json4 = r#\"{\"language\":\"rust\",\"data\":{},\"bogusKey\":123}\"#;\n    let ld: LangData = serde_json::from_str(json4).unwrap();\n    assert!(matches!(ld, LangData::Rust(_)));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn extra_unknown_key_silently_discarded_across_cluster' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'assert!(matches!(ld, LangData::Rust(_)))' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`.",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate. Run the fixture-build block, then `out=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -30; echo \"exit=$rc\"`. Expected: `test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. The 38-test count is the sum of SPEC-003's 17 tests plus this plan's 21 new tests across T-002/T-004/T-006/T-007/T-008/T-010/T-012/T-014/T-016/T-018/T-020/T-022/T-024/T-025/T-026 (3 fns)/T-027/T-028; T-029 (added in this plan's amendment to cover AC-004B/AC-019B) brings the file's final total to 40 and is now this plan's true last task. Assert: `echo \"$out\" | grep -q '38 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify an unrecognized extra key is silently discarded across all three serde-shape categories in this cluster (AC-019)\n\nExportRecord (plain struct), the fieldless RustData (the whole payload is \"extra\"), DependencyTarget (internal tag), and LangData (adjacent tag) all accept and discard an unrecognized key rather than erroring -- none of this cluster's 12 AC-019-scoped types carries #[serde(deny_unknown_fields)] (BindingKind and RustPathAnchor are excluded from AC-019's scope and separately covered by AC-004B/AC-019B in T-029, since both use serde's default external tagging instead).",
+      "covers_criteria": [
+        "AC-019"
+      ]
+    },
+    {
+      "id": "T-029",
+      "title": "tests_types.rs: append BindingKind's full external-tagging behavior (AC-004B) and RustPathAnchor's second-key rejection (AC-019B)",
+      "files": {
+        "modify": [
+          "/Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs"
+        ]
+      },
+      "depends_on": [
+        "T-028"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'fn binding_kind_external_tagging_shapes' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs`. Expected output: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Both BindingKind (imported by T-002) and RustPathAnchor (imported by T-004) are already in scope in this module -- no new `use` line is added. Run: `cat >> /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs <<'RUSTEOF'\n#[test]\nfn binding_kind_external_tagging_shapes() {\n    let v: BindingKind = serde_json::from_str(r#\"\"named\"\"#).unwrap();\n    assert!(matches!(v, BindingKind::Named));\n\n    let err = serde_json::from_str::<BindingKind>(r#\"\"bogus\"\"#).unwrap_err();\n    assert!(err.to_string().contains(\"unknown variant\"));\n    assert!(err.to_string().contains(\"expected one of `named`, `default`, `namespace`, `glob`, `namespaceWide`\"));\n\n    let v2: BindingKind = serde_json::from_str(r#\"{\"named\":null}\"#).unwrap();\n    assert!(matches!(v2, BindingKind::Named));\n    let v3: BindingKind = serde_json::from_str(r#\"{\"namespaceWide\":null}\"#).unwrap();\n    assert!(matches!(v3, BindingKind::NamespaceWide));\n\n    for (bad, want) in [\n        (r#\"{\"named\":true}\"#, \"invalid type: boolean `true`, expected unit\"),\n        (r#\"{\"named\":\"x\"}\"#, \"invalid type: string \\\"x\\\", expected unit\"),\n        (r#\"{\"named\":1}\"#, \"invalid type: integer `1`, expected unit\"),\n        (r#\"{\"named\":{}}\"#, \"invalid type: map, expected unit\"),\n        (r#\"{\"named\":[]}\"#, \"invalid type: sequence, expected unit\"),\n    ] {\n        let e = serde_json::from_str::<BindingKind>(bad).unwrap_err();\n        assert!(e.to_string().contains(want));\n    }\n\n    let err3 = serde_json::from_str::<BindingKind>(r#\"{\"named\":null,\"bogusKey\":1}\"#).unwrap_err();\n    assert!(err3.to_string().contains(\"expected value\"));\n\n    for bad in [\"123\", \"true\", \"null\", r#\"[\"named\"]\"#] {\n        let e = serde_json::from_str::<BindingKind>(bad).unwrap_err();\n        assert!(e.to_string().contains(\"expected value\"));\n    }\n}\n\n#[test]\nfn rust_path_anchor_unknown_variant_and_second_key_rejected() {\n    let err = serde_json::from_str::<RustPathAnchor>(r#\"\"bogus\"\"#).unwrap_err();\n    assert!(err.to_string().contains(\"unknown variant\"));\n\n    let err2 = serde_json::from_str::<RustPathAnchor>(r#\"{\"extern\":\"foo\",\"bogusKey\":123}\"#).unwrap_err();\n    assert!(err2.to_string().contains(\"expected value\"));\n}\n\nRUSTEOF`",
+        "Confirm green. Run: `grep -c 'fn binding_kind_external_tagging_shapes' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'fn rust_path_anchor_unknown_variant_and_second_key_rejected' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `1`; `grep -c 'expected unit' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `5`; `grep -c 'contains(\"expected value\")' /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs` expect `3` (BindingKind's second-key case, the new non-string/non-object loop case, and RustPathAnchor's).",
+        "Prove this against real, running Rust via the isolated /tmp fixture crate (same construction as T-001's proof step). Run: `rm -rf /tmp/spec005_fx && mkdir -p /tmp/spec005_fx/src && cat > /tmp/spec005_fx/Cargo.toml <<'TOMLEOF'\n[package]\nname = \"spec005_fx\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[lib]\nname = \"spec005_fx\"\npath = \"src/lib.rs\"\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ncamino = { version = \"1\", features = [\"serde1\"] }\n[lints.rust]\nunsafe_code = \"deny\"\nTOMLEOF\ncat > /tmp/spec005_fx/src/lib.rs <<'RSEOF'\npub mod types;\n#[cfg(test)]\nmod tests_types;\nRSEOF\ncp /Users/gabe/Projects/monokl/crates/monokl/src/types.rs /tmp/spec005_fx/src/types.rs\ncp /Users/gabe/Projects/monokl/crates/monokl/src/tests_types.rs /tmp/spec005_fx/src/tests_types.rs\nout=$( (cd /tmp/spec005_fx && cargo test) 2>&1); rc=$?; echo \"$out\" | tail -30; echo \"exit=$rc\"`. Expected: `test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` and `exit=0`. This is this plan's true final task (added in this plan's amendment for the AC-004B/AC-019B spec correction) -- the 40-test count is T-028's 38 plus this task's 2 new tests. Assert: `echo \"$out\" | grep -q '40 passed; 0 failed' && echo PASSED_OK` expect `PASSED_OK`. Clean up: `rm -rf /tmp/spec005_fx`."
+      ],
+      "commit_message": "test(types): verify BindingKind's full external-tagging deserialize behavior and RustPathAnchor's second-key rejection (AC-004B, AC-019B)\n\nBindingKind accepts both a recognized bare string and a single-key {\"variant\":null} object as equivalent forms, rejects an unrecognized string with an unknown-variant error, rejects a non-null payload with an \"expected unit\" invalid-type error, and rejects a second key alongside the recognized one with the same \"expected value\" parse error RustPathAnchor produces for {\"extern\":\"foo\",\"bogusKey\":123} -- both types share this strictness because both use serde's default external tagging, which AC-019's 12-type silent-discard claim does not cover.",
+      "covers_criteria": [
+        "AC-004B",
+        "AC-019B"
+      ],
+      "shared_file_note": "This is now the LAST task in this plan to modify tests_types.rs (added in this plan's amendment, after T-028). After this task, tests_types.rs contains SPEC-003's 17 tests plus this plan's 23 new tests (40 total). Any future plan (SPEC-006, SPEC-007, SPEC-008) extending tests_types.rs further MUST continue this plan's and PLAN-003's append-only, scoped-verification discipline -- appending new #[test] functions after this task's last function, never overwriting from the top. This restates PLAN-003's own shared_file_warning at this plan's point of last contact with the file, per that plan's established precedent (its T-006) -- T-028, now superseded as the last-contact point by this task, was itself establishing that same discipline for tests_types.rs for the first time in this plan."
+    }
+  ]
+}

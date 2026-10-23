@@ -25,15 +25,62 @@ pub struct UpgradeOutcome {
     /// What this specific upgrade attempt achieved — may still be `Heuristic`/`Structural` if a
     /// sentinel (§6) indicated the backend degraded internally.
     pub precision: CapabilityPrecision,
-    /// Which backend/operation produced this, for provenance — see §6 rule 5.
-    pub provenance: &'static str,
-    /// Zero, one, or many candidates. A single confident answer is `candidates.len() == 1`; an
-    /// ambiguous result (Kotlin overload resolution, Go interface satisfaction) is
-    /// `candidates.len() > 1` with no candidate silently dropped.
-    pub candidates: Vec<UpgradeCandidate>,
+    /// Runtime backend identity, including version/configuration, plus the normalized operation.
+    /// These are the `AnalyzerId` and `OperationId` shapes defined in Part 8; a static label cannot
+    /// identify the server binary or configuration that actually produced the answer.
+    pub backend: AnalyzerId,
+    pub operation: OperationId,
+    /// A typed outcome. Empty candidate lists never conflate an external symbol, an unresolved
+    /// query, an unsupported operation, and a backend that declined to answer.
+    pub resolution: UpgradeResolution,
     /// Per-language-typed data this backend exposed that has no generic shape — never flattened.
     /// See §4.
     pub extension: Option<DaemonExtension>,
+}
+
+pub enum UpgradeResolution {
+    Resolved(UpgradeCandidate),
+    Ambiguous { candidates: AmbiguousUpgradeCandidates, diagnostic: Diagnostic },
+    Unresolved { diagnostic: Diagnostic },
+    External { symbol: SymbolId },
+    Declined { reason: BackendDeclineReason, diagnostic: Diagnostic },
+}
+
+/// Construction requires two candidates; additional candidates retain backend order.
+pub struct AmbiguousUpgradeCandidates {
+    first: UpgradeCandidate,
+    second: UpgradeCandidate,
+    additional: Vec<UpgradeCandidate>,
+}
+
+impl AmbiguousUpgradeCandidates {
+    pub fn new(
+        first: UpgradeCandidate,
+        second: UpgradeCandidate,
+        additional: Vec<UpgradeCandidate>,
+    ) -> Self {
+        Self { first, second, additional }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &UpgradeCandidate> {
+        [&self.first, &self.second].into_iter().chain(self.additional.iter())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BackendDeclineReason {
+    ExecutableMissing,
+    StartupFailed,
+    InitializationFailed,
+    UnsupportedCapability,
+    Timeout,
+    MalformedFrame,
+    OversizedFrame,
+    TransportClosed,
+    BackendCrashed,
+    StaleResponse,
+    CircuitOpen,
 }
 ```
 
@@ -137,7 +184,8 @@ pub struct PrecisionAnnotation {
     pub precision: CapabilityPrecision,
     /// "Exact via JDT full resolution" / "Structural via clangd, no compile_commands.json" — same
     /// provenance discipline as UpgradeOutcome (§2).
-    pub provenance: &'static str,
+    pub backend: AnalyzerId,
+    pub operation: OperationId,
     /// Which sentinel (if any) triggered a downgrade instead of a silent Exact claim — §6.
     pub sentinel: Option<SentinelKind>,
     /// The exact content this annotation applies to. A ContentHash mismatch means "stale,
@@ -182,7 +230,7 @@ Rules, required before any `PrecisionUpgrader` promotes a result toward `Exact`:
 2. Prefer native/extended APIs that expose the backend's own confidence bit over plain LSP: JDT `IBinding.isRecovered()`, Kotlin's `KaErrorCallInfo` sealed type, clangd's `textDocument/ast` extension, TS's separate opt-in suggestion-diagnostics channel.
 3. Maintain a per-backend sentinel denylist, checked on every promotion attempt: JDT `isRecovered() == true`; Clang dependent/recovery type strings or diagnostics at or upstream of the queried span; TS hover text of bare `any` not matching an explicit source annotation; Kotlin `T!` platform-type markers or `SMARTCAST_IMPOSSIBLE`; Scala ambiguous-implicit compiler notices; Go's global-algorithm-only matches (cap those at `candidate`, never `confirmed` — see `GoSatisfactionFacts`, §4).
 4. When only generic LSP is available and no sentinel exists, cap at `Structural` if the file has any diagnostic at or upstream of the queried location, and emit a monokl `Diagnostic` explaining the downgrade rather than guessing.
-5. Tag every upgraded result with backend + operation identity — "Exact via JDT full resolution" vs. "Exact via clangd without `compile_commands.json`" — never an undifferentiated `Exact` bucket. An analysis tier is carried as metadata and never erased, so a consumer can reason differently about a result from one backend/operation than another. `UpgradeOutcome.provenance` (§2) is this tag.
+5. Tag every upgraded result with structured backend + operation identity — analyzer name, runtime version, configuration digest, operation name, and normalized-parameter digest — never an undifferentiated `Exact` bucket or display string. An analysis tier is carried as metadata and never erased, so a consumer can reason differently about a result from one backend/operation than another. `UpgradeOutcome.backend` and `.operation` (§2) are this identity.
 
 ## 7. Computing precision: sourcing, the downgrade lattice, and long-term feedback
 
@@ -199,12 +247,14 @@ Shipped production tools converge on the same categorical answer. CodeQL's `@pre
 ```rust
 fn compute_precision(
     reported: CapabilityPrecision,
-    candidates: &[UpgradeCandidate],
+    resolution: &UpgradeResolution,
     sentinel: Option<SentinelKind>,
     cross_tier_agreement: bool,
 ) -> CapabilityPrecision {
     let mut precision = reported;
-    if candidates.len() > 1 { precision = precision.saturating_downgrade(); }
+    if matches!(resolution, UpgradeResolution::Ambiguous { .. }) {
+        precision = precision.saturating_downgrade();
+    }
     if sentinel.is_some() { precision = precision.saturating_downgrade(); }
     // Real corroboration when present, per the agreement-is-rare finding above this counteracts
     // at most one downgrade step — never grounds to exceed `reported`.
@@ -239,7 +289,41 @@ Real backend, real lifetime fit, and what's language-specific enough that it mus
 | Ruby | Sorbet (near-zero fixed cold start via a compiled-in stdlib blob) or Solargraph | `PerCall` is viable for Sorbet — the one backend where that's true | The fixed-cost floor is uniquely cheap; project-size-proportional check time still applies on top of it |
 | PHP | Intelephense | `PerInvocation`/`Session`, standard shape | Licensing (proprietary premium tier), not architecture, is the real constraint |
 
-## 9. Known gaps
+## 9. LSP backend lifecycle contract
+
+An LSP-speaking upgrader is optional infrastructure, so its failure must reduce precision rather than take the base analyzer down. Every implementation must satisfy this lifecycle:
+
+1. **Initialize and negotiate.** Record the backend executable identity and version, send `initialize`/`initialized`, and retain the negotiated capability set. An operation is available only when the server advertised the corresponding capability; a process accepting bytes is not proof that it can answer the request.
+2. **Bind answers to content.** Document versions arrive through `didOpen`/`didChange`; ordinary definition/reference/hover requests carry a URI and position, not a version. When dispatching a request, the connection actor records the locally synchronized document version and source `ContentHash` in its pending-request context. Before publishing the response, it compares that context with the snapshot that will receive it. A response for older content is discarded as `Declined { reason: BackendDeclineReason::StaleResponse, diagnostic }`, never attached to newer content.
+3. **Bound both protocol and work.** `LspBackendLimits` configures initialization deadline, per-request deadline, maximum frame bytes, restart backoff sequence, maximum restarts per window, and circuit-open interval. Missing executable, startup/initialization failure, unsupported capability, timeout, malformed/oversized framing, transport closure, crash, stale response, and an open restart circuit return `Declined` with the corresponding stable `BackendDeclineReason` plus a human-readable diagnostic, preserving the base structural result. A valid backend response of `null`/no location returns `Unresolved`; a location outside the indexed workspace returns `External`; one in-scope location returns `Resolved`; multiple viable locations return `Ambiguous` with all candidates.
+4. **Supervise owned processes.** Graceful shutdown sends `shutdown`, then `exit`, then reaps the child. Unexpected exit may restart with bounded exponential backoff. Repeated failure opens a circuit for that `(workspace, backend)` so a query cannot create a restart storm; an explicit health probe or backoff expiry is required before retry.
+5. **Isolate polyglot failure.** One language backend failing initialization, timing out, or crashing does not prevent other backends or the base analyzers from serving the snapshot.
+6. **Publish health without source.** Lifecycle telemetry may include backend/version, language, capability names, cold/warm state, latency, restart count, requested/served precision, and degradation reason. It must not include source text or absolute paths.
+
+```rust
+use std::time::Duration;
+
+pub struct LspBackendLimits {
+    pub initialize_timeout: Duration,
+    pub request_timeout: Duration,
+    pub max_frame_bytes: usize,
+    pub restart_backoff: Vec<Duration>,
+    pub max_restarts: u32,
+    pub restart_window: Duration,
+    pub circuit_open_for: Duration,
+}
+```
+
+The connection actor owns these limits and the pending-request table. Each
+pending request stores the synchronized document version and `ContentHash`
+captured at dispatch. The server does not echo document versions on ordinary
+definition/reference/hover responses, so freshness is established by comparing
+that stored request context with the receiving snapshot, not by reading a
+version from the response.
+
+Acceptance tests inject small `LspBackendLimits` values and cover unsupported capability, startup failure, initialization timeout, request timeout, malformed/oversized frame, response dispatched against a stale synchronized document version/hash, `null` response, external location, multiple candidates, crash/restart, restart-circuit opening, create/delete/rename notifications, partial polyglot failure, and graceful shutdown/reaping. Each decline fixture asserts its exact `BackendDeclineReason`, not diagnostic message text. Transport-crate selection remains deferred until a spike verifies these behaviors, MSRV, runtime coupling, and cancellation semantics; `lsp-types` supplies protocol DTOs but not lifecycle management.
+
+## 10. Known gaps
 
 - No published data exists on what fraction of Java symbol references are external-JAR-only; a bytecode-LOC statistic found during research measures a different thing and shouldn't be repurposed as a reference-density estimate.
 - Microsoft's official C# language server's redistribution/licensing terms outside VS Code are unconfirmed.
