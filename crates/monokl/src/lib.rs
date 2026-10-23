@@ -20,6 +20,7 @@ pub mod output;
 /// ```
 pub mod query;
 pub mod rank;
+pub mod text_search;
 pub mod tokens;
 pub mod types;
 
