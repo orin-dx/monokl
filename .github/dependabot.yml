@@ -26,10 +26,12 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     groups:
-      # oxc_* minor releases carry breaking API changes and ship in lockstep, so they update together.
+      # oxc_* minor releases carry breaking API changes and ship in lockstep, so they update together. oxc_resolver
+      # has its own version line, so it stays out of the group and gets its own PR.
       oxc:
         applies-to: version-updates
         patterns: ["oxc_*"]
+        exclude-patterns: ["oxc_resolver"]
       routine-cargo:
         applies-to: version-updates
         patterns: ["*"]
