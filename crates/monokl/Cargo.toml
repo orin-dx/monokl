@@ -1,87 +1,45 @@
 [package]
-name        = "monokl"
-version     = "0.1.0"
-edition.workspace     = true
+name = "monokl"
+version = "0.1.0"
+edition.workspace = true
 rust-version.workspace = true
-license.workspace     = true
-repository.workspace  = true
-authors.workspace     = true
-categories.workspace  = true
-keywords    = ["monokl", "search", "ast", "semantic", "typescript"]
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords = ["monokl", "search", "ast", "semantic", "typescript"]
 description = "AST-aware semantic code search for TypeScript/JavaScript and Rust."
-publish     = ["orin-cargo"]
+publish = false
 
 [lib]
-name       = "monokl"
-path       = "src/lib.rs"
-
-[[bin]]
-name              = "monokl"
-path              = "src/main.rs"
-required-features = ["cli"]
+name = "monokl"
+path = "src/lib.rs"
 
 [features]
-default = ["lang-ts", "cli"]
+default = ["cli"]
 
-# TypeScript/JavaScript analysis via OXC parser + AST + resolver.
-lang-ts = [
-    "dep:oxc_parser",
-    "dep:oxc_ast",
-    "dep:oxc_span",
-    "dep:oxc_allocator",
-    "dep:oxc_resolver",
-]
-
-# CLI binary — clap + miette diagnostics.
+# Agent-facing output via michi, and clap's ValueEnum on CLI-selectable types.
 cli = ["dep:clap", "dep:michi", "miette"]
 
-# Miette Diagnostic derive on MonoklError — forwarded to io-errors for full chain rendering.
-miette = ["dep:miette", "io-errors/miette"]
-
+# Miette Diagnostic derive on MonoklError.
+miette = ["dep:miette", "michi?/miette"]
 
 [dependencies]
-io-errors = { path = "../io-errors", version = "0.1", registry = "orin-cargo", default-features = false }
+camino.workspace = true
+grep-regex.workspace = true
+ignore.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 
-blake3        = { workspace = true }
-camino        = { workspace = true }
-dashmap       = { workspace = true }
-grep-regex    = { workspace = true }
-grep-searcher = { workspace = true }
-ignore        = { workspace = true }
-rayon         = { workspace = true }
-regex         = { workspace = true }
-rustc-hash    = { workspace = true }
-serde         = { workspace = true }
-serde_json    = { workspace = true }
-thiserror     = { workspace = true }
-tiktoken-rs   = { workspace = true }
-tracing       = { workspace = true }
-
-# lang-ts feature-gated OXC deps.
-oxc_parser    = { workspace = true, optional = true }
-oxc_ast       = { workspace = true, optional = true }
-oxc_span      = { workspace = true, optional = true }
-oxc_allocator = { workspace = true, optional = true }
-# Versioned independently from OXC 0.128 suite — own 11.x line.
-oxc_resolver  = { workspace = true, optional = true }
-
-# CLI feature-gated deps.
-clap   = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
 miette = { workspace = true, optional = true }
-michi  = { git = "https://github.com/orin-axi/michi", rev = "cb355b8c05048e71e7219af8416c475346b6f837", optional = true, default-features = false, features = ["miette"] }
-
-
-[dev-dependencies]
-insta             = { workspace = true }
-pretty_assertions = { workspace = true }
-proptest          = { workspace = true }
-serde_json        = { workspace = true }
-tempfile          = { workspace = true }
-criterion         = { workspace = true }
-
-[[bench]]
-name    = "pipeline"
-harness = false
+michi = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

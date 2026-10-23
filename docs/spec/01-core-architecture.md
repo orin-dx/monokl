@@ -16,7 +16,7 @@ Part of the [monokl spec](./README.md). See [ARCHITECTURE.md](../../ARCHITECTURE
 - **Package name:** `monokl`
 - **CLI binary:** `monokl`
 - **Short command alias:** `mnkl`
-- **npm wrapper:** `@orin-axi/monokl`
+- **npm wrapper:** `@orin-dx/monokl`
 - **Cache directory:** `.monokl/`
 
 ### Rationale
@@ -149,7 +149,7 @@ tags:
 
 project:
   name: 'monokl'
-  description: 'AST-aware semantic code search for TypeScript/JavaScript and Rust. Distributed via @orin-axi/monokl npm package.'
+  description: 'AST-aware semantic code search for TypeScript/JavaScript and Rust. Distributed via @orin-dx/monokl npm package.'
 ```
 
 # Section 2: lib.rs — module declarations and feature gates
@@ -3057,9 +3057,9 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/orin-axi/monokl"
-authors = ["Orin-Axi Contributors"]
-keywords = ["orin-axi", "developer-tools"]
+repository = "https://github.com/orin-dx/monokl"
+authors = ["Orin DX Contributors"]
+keywords = ["orin-dx", "developer-tools"]
 categories = ["development-tools"]
 publish = false
 ```

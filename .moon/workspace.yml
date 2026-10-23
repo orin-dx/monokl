@@ -1,0 +1,19 @@
+# https://moonrepo.dev/docs/config/workspace
+$schema: "https://moonrepo.dev/schemas/workspace.json"
+
+projects:
+  - "crates/*"
+
+vcs:
+  client: git
+  defaultBranch: main
+  sync: true
+  hooks:
+    # Defined in the justfile so the hooks and `just ci` share one definition.
+    # Re-run `moon sync vcs-hooks` after changing this list.
+    pre-commit:
+      - "just pre-commit"
+    pre-push:
+      - "just pre-push"
+
+telemetry: false

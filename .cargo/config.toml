@@ -1,0 +1,3 @@
+[profile.dev]
+# Faster incremental links on macOS.
+split-debuginfo = "off"

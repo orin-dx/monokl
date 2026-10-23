@@ -1,0 +1,7 @@
+# https://moonrepo.dev/docs/config/toolchain
+$schema: "https://moonrepo.dev/schemas/toolchains.json"
+
+rust:
+  versionFromPrototools: true
+  # proto is the single source of truth for the toolchain; moon must not write a competing rust-toolchain.toml.
+  syncToolchainConfig: false

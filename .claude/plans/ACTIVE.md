@@ -236,7 +236,7 @@ fully closed, same as SPEC-003.
 ### SPEC-003: SymbolKind/Visibility/SymbolEntry — ESCALATED, needs human review
 
 Spec: `.claude/specs/SPEC-003.json`
-Semantic model: `.claude/semantic-model/core-types.md`
+Semantic model: `docs/architecture/core-types.md`
 Status: NOT gated. `canon-exit-gate`'s third attempt (its own stated retry maximum) returned
 `escalate`, not pass or fail — it found one more real defect (AC-011 falsely claimed
 `signature` carries `#[serde(default)]`, contradicting AC-004/AC-005) but flagged a pattern
@@ -250,7 +250,7 @@ treating it as gated.
 ### SPEC-001: MonoklError enum + Result<T> alias — GATED
 
 Spec: `.claude/specs/SPEC-001.json`
-Semantic model: `.claude/semantic-model/error-taxonomy.md`
+Semantic model: `docs/architecture/error-taxonomy.md`
 Implementation: not started — this is spec-stage only, no crate exists yet.
 Exit-gate: PASS (4th attempt, high confidence). 24 acceptance criteria, all 14 `MonoklError`
 variants covered, zero blockers on the final pass.
@@ -362,9 +362,9 @@ workspace `Cargo.toml` lint config directly when the crate is scaffolded, not as
 - **SPEC-002 — cache.json corruption-vs-staleness recovery policy.** Deferred out of SPEC-001.
   Must start with `superpowers:brainstorming`, not `canon:canon-drafter` directly — this is a
   new design decision, not a faithful correction. See SPEC-001's non_goals and
-  `.claude/semantic-model/error-taxonomy.md` gap 1 for full context.
+  `docs/architecture/error-taxonomy.md` gap 1 for full context.
 - **Core types** (`types.rs` — `SymbolEntry`, `Visibility`, `CodeBlock`, `LangData`, etc.).
-  Semantic model already written: `.claude/semantic-model/core-types.md`, which documents two
+  Semantic model already written: `docs/architecture/core-types.md`, which documents two
   real, would-not-compile naming defects in `docs/spec/04-analysis-fidelity.md` (`impl_owner`
   vs. the canonical `owner`; a nonexistent `Visibility::Super` variant) that any spec@1 for
   this track must resolve, not port.
@@ -377,18 +377,18 @@ workspace `Cargo.toml` lint config directly when the crate is scaffolded, not as
   command path (SPEC-001 AC-016/AC-017). Wiring it into `extract`/`refs`/`definition` as the
   existing prose already claims is real, scoped implementation work.
 - **Query language + ranking determinism.** Semantic model written:
-  `.claude/semantic-model/query-and-ranking.md`. Six open questions (regex hard-fail vs.
+  `docs/architecture/query-and-ranking.md`. Six open questions (regex hard-fail vs.
   silent-drop, `+regex:` degradation, the unimplemented `(file, line_start)` tie-break claim,
   non-deterministic candidate selection above `max_candidates`, uncapped query length,
   exclusion-only-query silent-empty behavior).
 - **Cache Tier-1 content-hash gap.** Semantic model written:
-  `.claude/semantic-model/cache-architecture.md`. The architecture's own "ContentHash is
+  `docs/architecture/cache-architecture.md`. The architecture's own "ContentHash is
   authoritative" claim is not backed by the Tier-1 lookup code as specified — needs a decision,
   not a silent port.
 - **LanguageAnalyzer diagnostic-signal gaps.** Semantic model written:
-  `.claude/semantic-model/language-analyzer-contract.md`. Macro/`#[cfg(...)]`-gated Rust code is
+  `docs/architecture/language-analyzer-contract.md`. Macro/`#[cfg(...)]`-gated Rust code is
   invisible with no capability signal; `.d.ts` files get a misleading "language unsupported"
   message when the language is fully supported and this one file is intentionally excluded.
 - **Daemon/session-mode design** (`PrecisionUpgrader`, `PrecisionLedger`, etc.) — explicitly
   future work, not required for v0.1.0. Semantic model written:
-  `.claude/semantic-model/daemon-lifetimes.md`, five independently-reverified open gaps.
+  `docs/architecture/daemon-lifetimes.md`, five independently-reverified open gaps.
