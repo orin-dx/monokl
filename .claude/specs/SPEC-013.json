@@ -1,0 +1,51 @@
+{
+  "id": "SPEC-013",
+  "spec_file_path": ".claude/specs/SPEC-013.json",
+  "purpose": "Define monokl's text search -- the first search stage, which finds candidate files and matching lines -- per docs/spec/01-core-architecture.md Section 7, resolving the determinism and limit questions docs/architecture/query-and-ranking.md leaves open (#7, #10, #11) under Part 8's rule that core returns uncapped results and reports what any memory ceiling cut (docs/spec/08-library-session-api.md §7.3-§7.5).",
+  "scope": "crates/monokl/src/text_search.rs: TextSearchOptions, TextSearchResult, search_files, and the private test-path classifier. It walks a root, searches every file for any of the given regex patterns, and returns matching lines per file.",
+  "non_goals": [
+    "Boolean evaluation of required and excluded terms, block retrieval, ranking and budgeting (Section 20 stages 4-8). They consume this stage's result in the search pipeline track.",
+    "Query parsing. Open questions #8 (`+regex:` drops both modifier and regex semantics) and #16 (no per-term length cap) belong to the query language (SPEC-009) and are not changed here.",
+    "Per-term highlighting regexes (Section 20 stage 5). Finding #7's second compile path is the pipeline track's; it must reuse this stage's failure policy (AC-004).",
+    "Parallel walking. The walk is single-threaded so its order is deterministic; parallelism can come later if it keeps AC-005.",
+    "A diagnostics type. Unreadable files and non-UTF-8 paths are returned as data; the pipeline turns them into diagnostics."
+  ],
+  "api_surface": [
+    {
+      "name": "TextSearchOptions",
+      "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct TextSearchOptions { pub allow_tests: bool, pub respect_ignore_files: bool, pub max_files: usize }",
+      "description": "allow_tests: include test files. respect_ignore_files: honour .gitignore, .ignore and hidden-file rules (ignore's standard filters). max_files: memory ceiling on the number of files whose hits are kept. Default: allow_tests false, respect_ignore_files true, max_files 100_000 (Part 8's Limits default for items).",
+      "error_conditions": []
+    },
+    {
+      "name": "TextSearchResult",
+      "signature": "#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct TextSearchResult { pub hits: BTreeMap<Utf8PathBuf, Vec<LineHit>>, pub files_total: u64, pub ceiling_hit: bool, pub unreadable: Vec<Utf8PathBuf>, pub non_utf8_paths: u64 }",
+      "description": "hits: kept files, each with its matching lines in line order. files_total: every file with at least one match, kept or not. ceiling_hit: files_total exceeded max_files. unreadable: files that could not be read or decoded, in walk order. non_utf8_paths: how many paths were skipped because they are not UTF-8.",
+      "error_conditions": []
+    },
+    {
+      "name": "search_files",
+      "signature": "pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions) -> crate::error::Result<TextSearchResult>",
+      "description": "Searches every file under root for lines matching any pattern, case-insensitively.",
+      "error_conditions": ["MonoklError::RegexBuild for any pattern that does not compile", "MonoklError::Walk when the walk yields an error entry, such as a missing root"]
+    }
+  ],
+  "acceptance_criteria": [
+    { "id": "AC-001", "criterion": "In a temp directory with a.ts containing lines \"alpha\", \"beta\", \"ALPHA beta\", search_files(root, [\"alpha\"], default) returns hits {a.ts: [LineHit{1, \"alpha\"}, LineHit{3, \"ALPHA beta\"}]} (matching is case-insensitive; line numbers are 1-based), files_total 1, ceiling_hit false.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-002", "criterion": "Patterns are alternatives: [\"alpha\", \"gamma\"] matches lines containing either. Line text has its trailing \"\\n\" or \"\\r\\n\" removed, so a CRLF file yields text without a trailing \"\\r\".", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-003", "criterion": "An empty pattern slice returns TextSearchResult::default() without walking, rather than joining to an empty regex that matches every line.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 joins patterns with `|`; an empty join is the empty regex, which matches everything. The search pipeline already returns early on an empty plan, so this only removes a footgun." },
+    { "id": "AC-004", "criterion": "If any pattern fails to compile (e.g. \"(\"), search_files returns Err(MonoklError::RegexBuild) before walking -- the whole query fails, never a silent drop of the bad term. This is the one failure policy for query regexes; any later per-term compile of the same patterns must fail the same way.", "is_error_case": true, "judgment_call": true, "rationale": "Resolves finding #7: Section 20 fails here but silently drops the same pattern in stage 5. Fail-fast is chosen because a dropped term silently changes the query's meaning." },
+    { "id": "AC-005", "criterion": "The walk visits entries sorted by file name, so for the same tree the hits map, unreadable list and which files are kept under the ceiling are identical across runs and machines.", "is_error_case": false, "judgment_call": true, "rationale": "Resolves finding #10: Section 7's unsorted walk made the candidate set above the cap filesystem-order-dependent." },
+    { "id": "AC-006", "criterion": "max_files is a memory ceiling, not a stop: once max_files files with matches are kept, later matching files are still searched and counted in files_total but their hits are not stored, and ceiling_hit is true. With max_files 2 and 3 matching files a.ts, b.ts, c.ts, hits holds a.ts and b.ts, files_total is 3 and ceiling_hit is true; with max_files 3, ceiling_hit is false. max_files 0 keeps no hits but still counts.", "is_error_case": false, "judgment_call": true, "rationale": "Part 8 §7.3-§7.4: core applies only a memory ceiling and always reports the pre-ceiling total. Section 7's `break` lost the total and, with an unsorted walk, made the kept set arbitrary." },
+    { "id": "AC-007", "criterion": "Files with no matching line never appear in hits and do not count toward files_total or max_files.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-008", "criterion": "With allow_tests false, a file is excluded when its path relative to root (with a leading '/') contains /__tests__/, /test/, /tests/ or /spec/, or ends with .test.ts, .test.tsx, .test.js, .spec.ts, .spec.tsx or .spec.js. The root's own path is never considered, so searching a root located at /home/me/test/project still finds src/a.ts. With allow_tests true nothing is excluded for being a test.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 checks the absolute path, so a repository checked out under any test/ or spec/ directory would have every file excluded." },
+    { "id": "AC-009", "criterion": "With respect_ignore_files true, a file matched by a .gitignore or .ignore in the tree, and hidden files, are not searched; with it false they are. (Tests create the .ignore file, which ignore honours without a git repository.)", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-010", "criterion": "A file containing a NUL byte is treated as binary and skipped: it appears in neither hits nor unreadable and is not counted.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 has no binary detection; ripgrep's convention (stop at the first NUL) keeps binary files out of results without reporting them as errors." },
+    { "id": "AC-011", "criterion": "A text file that fails to decode as UTF-8 in a matching line, or cannot be read, is listed in unreadable and contributes no hits; the search continues and returns Ok.", "is_error_case": true, "judgment_call": true, "rationale": "Section 7 logged and continued; the result now carries the paths so the pipeline can report them, since core does not log." },
+    { "id": "AC-012", "criterion": "A root that does not exist returns Err(MonoklError::Walk { path: root, .. }), with path equal to the root argument.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-013", "criterion": "Non-UTF-8 paths are skipped and counted in non_utf8_paths (tested only on platforms that allow creating one, i.e. not macOS or Windows).", "is_error_case": false, "judgment_call": false }
+  ],
+  "linked_requirement": "REQ-013",
+  "linked_research": "docs/spec/01-core-architecture.md Sections 7 and 20; docs/architecture/query-and-ranking.md findings #7, #10, #11; docs/spec/08-library-session-api.md §7.3-§7.5.",
+  "reasoning": "Section 7's behavior is kept where it is sound: one combined case-insensitive matcher, ignore's standard filters, the test-path list, LineHit shape, Walk errors. Every change is marked judgment_call with its reason: deterministic walk order, a counting memory ceiling instead of a break, fail-fast regex policy, root-relative test classification, binary skipping, and returning unreadable files instead of logging. max_candidates is renamed max_files because it counts files with matches, and its default follows Part 8's Limits."
+}
