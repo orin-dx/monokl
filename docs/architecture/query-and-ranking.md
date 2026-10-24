@@ -8,7 +8,7 @@ pipeline stages (§20, ~L2315-2326) and design tenet #4 (§29, L3093).
 this doc and the code disagree, the code and its tests win.
 
 **Resolved (05 §18):** #7 (one fail-fast regex policy), #9 (total-order tie-break), #10 (sorted walk), #11 (`max_files`
-memory ceiling that keeps counting). **Still open:** #8, #16 (query language) and #21 (search pipeline).
+memory ceiling that keeps counting). **Still open:** #8, #16 (query language). **Resolved since:** #21, as an empty result with one explanatory diagnostic (05 §21).
 
 ## Lexer (`query/lexer.rs`)
 
