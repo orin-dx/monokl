@@ -78,6 +78,7 @@ oxc_resolver = "11"
 # Search
 ignore = "0.4"
 regex = "1"
+grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 tiktoken-rs = "0.6"

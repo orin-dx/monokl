@@ -2,6 +2,7 @@
 
 pub mod file_analysis;
 pub mod lang;
+pub mod registry;
 #[cfg(feature = "lang-ts")]
 pub mod ts;
 

@@ -1,0 +1,34 @@
+{
+  "id": "SPEC-016",
+  "spec_file_path": ".claude/specs/SPEC-016.json",
+  "purpose": "Define AnalyzerRegistry and pipeline::search, the core of `monokl search`: query to fully ranked, deduplicated, uncapped blocks with counts and diagnostics, per docs/spec/01-core-architecture.md Section 20 stages 1-7 and 05 sections 18-20. Budgeting is a separate stage.",
+  "scope": "crates/monokl/src/analysis/registry.rs and crates/monokl/src/pipeline/mod.rs. Works against the LanguageAnalyzer trait only; tests use in-test stand-in analyzers.",
+  "non_goals": [
+    "Any real analyzer (TsAnalyzer), budgets, token counting, truncation markers, serde on result types, printing.",
+    "extract, symbols and dependents pipelines.",
+    "Registry construction from workspace options and config hashes; AnalyzerRegistry::new takes ready analyzers.",
+    "A caller-visible max_files option: the file ceiling is text_search::DEFAULT_MAX_FILES.",
+    "BM25 contribution of regex terms: regex terms add matched lines and matched_keywords but no BM25 query terms.",
+    "Diagnostic wire shapes; the output layer owns them."
+  ],
+  "api_surface": [
+    { "name": "AnalyzerRegistry", "signature": "pub struct AnalyzerRegistry; impl AnalyzerRegistry { pub fn new(analyzers: Vec<Arc<dyn LanguageAnalyzer>>) -> Self; pub fn analyzer_for(&self, path: &Utf8Path) -> Option<&dyn LanguageAnalyzer>; pub fn supports_language(&self, path: &Utf8Path, languages: &[LanguageId]) -> bool }", "description": "Ordered analyzers; the first whose supports(path) is true owns the path.", "error_conditions": [] },
+    { "name": "search", "signature": "pub fn search(registry: &AnalyzerRegistry, request: &SearchRequest<'_>) -> Result<SearchResult>", "description": "Runs language filter, query parse, text search, boolean evaluation, block retrieval, ranking and dedup.", "error_conditions": ["MonoklError::Io or NonUtf8Path when root cannot be canonicalized", "MonoklError::RegexBuild when any term, excluded ones included, is an invalid regex", "MonoklError::TooManyTerms from query parse", "MonoklError::Walk when root is not a listable directory"] }
+  ],
+  "acceptance_criteria": [
+    { "id": "AC-001", "criterion": "AnalyzerRegistry::analyzer_for returns the first registered analyzer whose supports(path) is true, None when none is, and supports_language is true only when that analyzer's language_for(path) is in the given list.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-002", "criterion": "A request with a language other than TypeScript or JavaScript returns no blocks, files_total 0 and one Skipped diagnostic whose message is \"language {language:?} not supported in v1; only TypeScript/JavaScript\"; an empty query, and an exact query that is only whitespace, return an empty result with no diagnostics.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-003", "criterion": "A query of only excluded terms returns an empty result with exactly one Skipped diagnostic saying the query has no positive terms.", "is_error_case": false, "judgment_call": true, "rationale": "Resolves open question #21: a silent empty result is indistinguishable from no match." },
+    { "id": "AC-004", "criterion": "Boolean evaluation: a file with a line matching an excluded term yields no blocks, even when the excluded term is in a file past the text-search file ceiling; a file missing a required term in every hit line yields none; optional terms alone need only one match. Terms match case-insensitively.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-005", "criterion": "With exact set, the whole query text, operators and quotes included, is one escaped literal optional term.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-006", "criterion": "Only blocks whose line range contains a hit line are kept; matched_lines holds the hit lines inside the block in ascending order and matched_keywords the unescaped text (or regex source) of each non-excluded term matching one of them, in query order.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-007", "criterion": "Blocks are ranked with BM25 query terms taken from tokens::tokenize of each non-excluded literal term, then deduplicated; ranks are 1-based and contiguous, the result is uncapped, and two runs over the same tree give equal results.", "is_error_case": false, "judgment_call": true, "rationale": "rank_blocks takes lowercase tokens, so literals are tokenized and regex terms contribute none." },
+    { "id": "AC-008", "criterion": "files_total and ceiling_hit are the text search's values. Each unreadable path becomes one Skipped diagnostic with that path; non_utf8_paths and walk_errors_without_path above zero each become one diagnostic stating the count.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-009", "criterion": "A file no registered analyzer supports yields no blocks and no diagnostic; a source read failure yields one Skipped diagnostic with the path; an analyzer error yields one Skipped diagnostic with the path; had_parse_errors yields one Degraded diagnostic with the path and the blocks are still used.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-010", "criterion": "An invalid regex in any term, positive or excluded, fails the whole search with MonoklError::RegexBuild before any file is read; a nonexistent root fails with MonoklError::Io.", "is_error_case": true, "judgment_call": false }
+  ],
+  "linked_requirement": "REQ-016",
+  "linked_research": "docs/spec/01-core-architecture.md Section 20; docs/spec/03-multi-language-platform.md section 3; docs/architecture/query-and-ranking.md; docs/spec/05-research-and-decisions.md sections 18-20; SPEC-013 non_goals. No requirement@1 REQ-016 exists.",
+  "revision_note": "2026-10-24: drafted.",
+  "reasoning": "Section 20's search stages minus the budget, with the corrections in 05 sections 18-20."
+}
