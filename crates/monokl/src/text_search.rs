@@ -47,6 +47,7 @@ impl Default for TextSearchOptions {
 
 /// What [`search_files`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TextSearchResult {
     /// The kept files, keyed by `root` joined with the path below it, each with its matching lines in line order.
     pub hits: BTreeMap<Utf8PathBuf, Vec<LineHit>>,
