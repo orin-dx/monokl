@@ -3,6 +3,8 @@
 
 // Modules are declared as they are implemented, not ahead of time.
 pub mod analysis;
+#[cfg(feature = "cli")]
+pub mod budget;
 pub mod dedup;
 pub mod digest;
 pub mod error;
