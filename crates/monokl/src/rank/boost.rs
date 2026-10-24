@@ -109,6 +109,9 @@ mod tests {
     #[case::none_inside(block(10, 20, vec![9, 21]), 0.0)]
     #[case::single_line_block(block(7, 7, vec![7, 8]), 0.5)]
     #[case::duplicate_matched_lines_count_twice(block(1, 5, vec![3, 3, 9]), 0.666_667)]
+    #[case::every_line_of_the_block(block(3, 5, vec![3, 4, 5]), 1.0)]
+    #[case::one_of_three_inside_a_short_block(block(3, 5, vec![1, 4, 9]), 0.333_333)]
+    #[case::a_duplicate_inside_counts_per_entry(block(3, 5, vec![4, 4, 9]), 0.666_667)]
     #[case::inverted_block_contains_nothing(block(10, 5, vec![5, 7, 10]), 0.0)]
     fn coverage_boost_is_the_rounded_fraction_of_matched_lines_inside_the_block(
         #[case] block: CodeBlock,

@@ -50,8 +50,8 @@ source: io::Error }`. `MonoklError::Io` wraps it transparently via `#[from]`.
 | Variant | Fires when | Construction site(s) |
 |---|---|---|
 | `Io` | Any `FileIoError::{read,write,create_dir,remove}` — filesystem op failed | Root canonicalization, cache load/write, `read_to_string_capped`'s underlying read; auto via `#[from]` on any `?` |
-| `Walk` | `ignore::WalkBuilder` iterator yields `Err` mid-traversal (perm denied, loop, etc.) | `text_search::search_files` (01-core:1005), index-build walker (01-core:2206), 03-multi:2033. `path` is the walk root, not the failing entry |
-| `RegexBuild` | `RegexMatcherBuilder::build()` fails to compile the **combined** OR'd pattern from all query terms | `text_search::search_files` stage (01-core:998), auto via `#[from]`/`?`. NOT used for the per-term highlighting regex — see gap 3 |
+| `Walk` | `ignore::WalkBuilder` iterator yields `Err` mid-traversal (perm denied, loop, etc.) | `text_search::search_files` raises it only for the root itself (missing, not a directory, cannot be listed); errors below the root go in `TextSearchResult::unreadable`/`walk_errors_without_path` (05 §18). Index-build walker (01-core:2206), 03-multi:2033. `path` is the walk root, not the failing entry |
+| `RegexBuild` | `RegexMatcherBuilder::build()` fails to compile a query pattern | `text_search::search_files` compiles each pattern alone, then all together, before walking; auto via `#[from]`/`?`. The per-term highlighting compile must fail the same way (05 §18, #7) — see gap 3 |
 | `NonUtf8Path` | `Utf8PathBuf::from_path_buf` fails at a canonicalization boundary | `search` stage 3 (root canon.), `dependents` (file+root canon.), `pipeline::session::canonicalize_utf8`/`current_dir` fallback (03-multi:1289-1292). NOT raised mid-walk — see gap 4 |
 | `TooManyTerms` | Query term count exceeds `LIMIT: usize = 64` | Query parse, `parse(&opts.query)` (01-core:831) |
 | `TokenizerInit` | `tiktoken_rs::o200k_base()` fails to build the BPE tokenizer | `budget`/token counting (01-core:1240). No fields — unparameterized init failure |
@@ -114,6 +114,7 @@ silently pick one when implementing — spec@1 for this subsystem must state the
    because stage 1's regex gates *candidate selection* (a bad pattern really does invalidate
    the result set) while the later stage's gates *cosmetic highlighting* only? Pick one and, if
    degrade-not-fail, route it through a `Diagnostic` instead of disappearing.
+   **Resolved (05 §18):** hard-fail in both stages.
 
 4. **Non-UTF-8 path: hard error at the root, silent skip mid-walk (07#12).** Root/entry-point
    canonicalization (`search` stage 3, `dependents`, `canonicalize_utf8`/`current_dir` fallback)
@@ -126,6 +127,7 @@ silently pick one when implementing — spec@1 for this subsystem must state the
    `Diagnostic` is added, note `NonUtf8Path` itself only carries `std::path::PathBuf` (not a
    lossy string) — decide how a diagnostic would represent a path that by definition can't
    round-trip through the rest of the UTF-8-only type system.
+   **Partly resolved (05 §18):** `search_files` no longer drops them silently; it counts them in `TextSearchResult::non_utf8_paths`, and the search pipeline turns a non-zero count into one diagnostic.
 
 5. **Two contradictory error-output mechanisms both defined; only one wired up (07#19).**
    `output.rs::render_error(err: &MonoklError) -> !` (01-core:2436) prints
