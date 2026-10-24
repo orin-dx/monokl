@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 // Modules are declared as they are implemented, not ahead of time.
+pub mod dedup;
 pub mod digest;
 pub mod error;
 pub mod file_io;
@@ -18,6 +19,8 @@ pub mod output;
 /// use monokl::query::Lexer;
 /// ```
 pub mod query;
+pub mod rank;
+pub mod tokens;
 pub mod types;
 
 #[cfg(test)]

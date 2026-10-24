@@ -395,10 +395,10 @@ this rigor level, not one sitting.
 | 5b | Search-command request/response types (`SearchOptions`, `SearchLimits`, `Language`, `SearchResponse`, `SymbolsResult`, `DependentsResult`) | §4 (subset) | GATED — `SPEC-007.json` |
 | 5c | Workspace/extract config types (`TsconfigMode`, `WorkspaceOptions`, `ExtractRequest`) | §4 (subset) | GATED — `SPEC-008.json` |
 | 6 | Query language (lexer/parser/plan) | §5 | **IMPLEMENTED** — `SPEC-009.json`; resolves query-and-ranking.md's regex/`+`/`-` gaps |
-| 7 | Token counting | §6 | Not started |
-| 8 | Text search | §7 | Not started — resolves the non-deterministic candidate-selection gap |
-| 9 | Ranking (BM25/boost/tokenize) | §8 | Not started — resolves the unimplemented tie-break claim |
-| 10 | Dedup | §9 | Not started |
+| 7 | Token counting | §6 | Identifier tokenizing **IMPLEMENTED** (`SPEC-012`, `tokens.rs`); tiktoken counting moves to the output layer (Part 8 §7.5) |
+| 8 | Text search | §7 | **SPECCED** — `SPEC-013.json`; decisions in 05 §18 |
+| 9 | Ranking (BM25/boost/tokenize) | §8 | **IMPLEMENTED** — `SPEC-012.json`, `rank/`, total-order tie-break |
+| 10 | Dedup | §9 | **IMPLEMENTED** — `SPEC-012.json`, `dedup.rs` |
 | 11 | Budget | §10 | Not started — resolves the uncapped `max_results`/`max_tokens` gap |
 | 12 | `LanguageAnalyzer` trait + capability model | §11 | Not started |
 | 13 | `Digest` (was `ContentHash`) | §12, Part 8 §8.4 | **IMPLEMENTED** — `SPEC-011.json` (corrected to `Digest`), `crates/monokl/src/digest.rs`, ADR 0002 |
