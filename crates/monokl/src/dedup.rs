@@ -243,3 +243,6 @@ mod tests {
         assert_eq!(survivors(&dedup_blocks(blocks)), expected);
     }
 }
+
+#[cfg(test)]
+mod proptests;

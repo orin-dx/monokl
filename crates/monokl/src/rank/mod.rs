@@ -430,3 +430,6 @@ mod tests {
         assert_eq!(scores, [("b.ts", 0.0, 0.0), ("a.ts", -1.15268, -1.72902)]);
     }
 }
+
+#[cfg(test)]
+mod proptests;
