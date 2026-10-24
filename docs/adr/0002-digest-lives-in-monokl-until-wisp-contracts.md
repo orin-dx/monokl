@@ -8,7 +8,7 @@
 
 ## Decision
 
-`Digest` and `DigestAlgorithm` live in `monokl::digest` with exactly the §8.4 shape: public `algorithm` and `bytes` fields, `algorithm:hex` text, lowercase-only hex. When `wisp-contracts` ships `Digest`, monokl re-exports it from `monokl::digest` and deletes its own.
+`Digest` and `DigestAlgorithm` live in `monokl::digest` with exactly the §8.4 shape: public `algorithm` and `bytes` fields, an exhaustive `DigestAlgorithm { Sha256, Blake3 }` (no `#[non_exhaustive]`), `algorithm:hex` text, lowercase-only hex. When `wisp-contracts` ships `Digest`, monokl re-exports it from `monokl::digest` and deletes its own.
 
 ## Consequences
 

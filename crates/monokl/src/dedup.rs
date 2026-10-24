@@ -96,6 +96,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn survivors_keep_every_field_but_rank() {
+        let mut first = ranked("a.ts", 10, 20, 7);
+        first.block.node_kind = SymbolKind::Class;
+        first.block.code = "class A {}".to_string();
+        first.block.symbol_signature = Some("class A".to_string());
+        first.block.matched_lines = vec![11, 12];
+        first.block.matched_keywords = vec!["a".to_string()];
+        first.bm25_score = 1.25;
+        first.coverage_boost = 0.5;
+        first.node_type_boost = 1.4;
+        first.final_score = 2.25;
+        first.parent_context =
+            Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string(), line: 1 });
+        let duplicate = ranked("a.ts", 12, 18, 8);
+        let mut other = ranked("b.ts", 1, 3, 9);
+        other.block.code = "fn b() {}".to_string();
+        other.final_score = 0.75;
+
+        let out = dedup_blocks(vec![first.clone(), duplicate, other.clone()]);
+        let fields = |r: &RankedBlock| {
+            let b = &r.block;
+            let parent = r.parent_context.as_ref().map(|p| (p.kind, p.name.clone(), p.line));
+            // Two tuples: std implements PartialEq and Debug for tuples of at most 12 elements.
+            (
+                (b.file.clone(), b.line_start, b.line_end, b.node_kind, b.code.clone(), b.symbol_signature.clone()),
+                (
+                    b.matched_lines.clone(),
+                    b.matched_keywords.clone(),
+                    r.bm25_score.to_bits(),
+                    r.coverage_boost.to_bits(),
+                    r.node_type_boost.to_bits(),
+                    r.final_score.to_bits(),
+                    parent,
+                ),
+            )
+        };
+        assert_eq!(out.iter().map(|r| r.rank).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(out.iter().map(fields).collect::<Vec<_>>(), [fields(&first), fields(&other)]);
+    }
+
     fn survivors(blocks: &[RankedBlock]) -> Vec<(String, usize, usize, usize)> {
         blocks.iter().map(|r| (r.block.file.to_string(), r.block.line_start, r.block.line_end, r.rank)).collect()
     }
@@ -128,6 +169,27 @@ mod tests {
     fn dedup_blocks_keeps_a_later_block_overlapping_at_most_half(#[case] line_start: usize, #[case] line_end: usize) {
         let out = dedup_blocks(vec![ranked("a.ts", 1, 10, 1), ranked("a.ts", line_start, line_end, 2)]);
         assert_eq!(survivors(&out), [kept("a.ts", 1, 10, 1), kept("a.ts", line_start, line_end, 2)]);
+    }
+
+    #[rstest]
+    // Overlap 16..=20 is 5 lines; the smaller block is 10..=20 at 11 lines, and 5 * 2 > 11 is false.
+    #[case::five_of_eleven(16, 30, true)]
+    // Overlap 15..=20 is 6 lines, and 6 * 2 > 11.
+    #[case::six_of_eleven(15, 30, false)]
+    #[case::adjacent_after(21, 30, true)]
+    // Overlap 12..=14 is all 3 lines of the smaller block.
+    #[case::contained_short_block(12, 14, false)]
+    fn dedup_blocks_drops_only_overlap_above_half_of_the_smaller_block(
+        #[case] line_start: usize,
+        #[case] line_end: usize,
+        #[case] is_kept: bool,
+    ) {
+        let out = dedup_blocks(vec![ranked("a.ts", 10, 20, 1), ranked("a.ts", line_start, line_end, 2)]);
+        let mut expected = vec![kept("a.ts", 10, 20, 1)];
+        if is_kept {
+            expected.push(kept("a.ts", line_start, line_end, 2));
+        }
+        assert_eq!(survivors(&out), expected);
     }
 
     #[test]
@@ -171,6 +233,7 @@ mod tests {
 
     #[rstest]
     #[case::inverted_first(vec![ranked("a.ts", 10, 5, 1), ranked("a.ts", 5, 10, 2)])]
+    #[case::inverted_inside_a_kept_block(vec![ranked("a.ts", 1, 20, 1), ranked("a.ts", 10, 5, 2)])]
     #[case::inverted_later(vec![ranked("a.ts", 5, 10, 1), ranked("a.ts", 8, 7, 2)])]
     #[case::both_inverted(vec![ranked("a.ts", 9, 3, 1), ranked("a.ts", 9, 3, 2)])]
     #[case::inverted_beside_a_one_line_block(vec![ranked("a.ts", 7, 7, 1), ranked("a.ts", usize::MAX, 0, 2)])]

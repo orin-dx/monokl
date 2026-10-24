@@ -25,7 +25,9 @@ pub fn round6(x: f64) -> f64 {
 ///
 /// Uses `K1 = 1.5` and `B = 0.5`. `corpus_size` is the number of documents and `df` maps a term to the number of
 /// documents containing it; a term missing from `df` has a document frequency of 0. A query term absent from the
-/// document contributes nothing. Returns 0.0 when either `doc_tokens` or `query_terms` is empty.
+/// document contributes nothing. Term frequency is exact, case-sensitive token equality, and a term repeated in
+/// `query_terms` counts once per occurrence. Returns 0.0 when either `doc_tokens` or `query_terms` is empty, or when
+/// `avg_doc_len` is not a finite number above zero.
 ///
 /// # Examples
 ///
@@ -45,7 +47,9 @@ pub fn score<S: BuildHasher>(
     corpus_size: usize,
     df: &HashMap<String, usize, S>,
 ) -> f64 {
-    if query_terms.is_empty() || doc_tokens.is_empty() {
+    // A non-positive or non-finite average length has no meaning as a corpus statistic and would turn the length
+    // normalization into a sign flip or NaN.
+    if query_terms.is_empty() || doc_tokens.is_empty() || !(avg_doc_len.is_finite() && avg_doc_len > 0.0) {
         return 0.0;
     }
     let doc_len = as_f64(doc_tokens.len());
@@ -94,15 +98,26 @@ mod tests {
     #[case(2.5, 2.5)]
     #[case(0.0, 0.0)]
     #[case(1.0 / 3.0, 0.333_333)]
+    #[case(-0.123_456_5, -0.123_457)]
     fn round6_rounds_half_away_from_zero_at_six_places(#[case] x: f64, #[case] expected: f64) {
         assert_eq!(round6(x), expected);
     }
 
-    #[test]
-    fn score_matches_the_hand_computed_bm25_value() {
-        // ln((2 - 1 + 0.5) / (1 + 0.5) + 1) * (2 * 2.5) / (2 + 1.5 * (0.5 + 0.5 * 4 / 4)) = ln(2) * 5 / 3.5
+    #[rstest]
+    // ln((2 - 1 + 0.5) / (1 + 0.5) + 1) * (2 * 2.5) / (2 + 1.5 * (0.5 + 0.5 * 4 / 4)) = ln(2) * 5 / 3.5
+    #[case::one_term(&["foo"], &[("foo", 1)], 0.99021)]
+    #[case::term_frequency_is_case_sensitive(&["Foo"], &[("foo", 1)], 0.0)]
+    // Rounded once after summing: 2 * 0.990210258 = 1.980420516.
+    #[case::a_repeated_query_term_counts_per_occurrence(&["foo", "foo"], &[("foo", 1)], 1.980_421)]
+    // ln((2 - 0 + 0.5) / (0 + 0.5) + 1) * 5 / 3.5 = ln(6) * 5 / 3.5
+    #[case::a_term_missing_from_df_has_df_zero(&["foo"], &[], 2.559_656)]
+    fn score_matches_the_hand_computed_bm25_value(
+        #[case] terms: &[&str],
+        #[case] df_entries: &[(&str, usize)],
+        #[case] expected: f64,
+    ) {
         let tokens = doc(&["foo", "foo", "bar", "baz"]);
-        assert_eq!(score(&tokens, &["foo"], 4.0, 2, &df(&[("foo", 1)])), 0.99021);
+        assert_eq!(score(&tokens, terms, 4.0, 2, &df(df_entries)), expected);
     }
 
     #[test]
@@ -113,18 +128,27 @@ mod tests {
     }
 
     #[test]
+    fn score_is_negative_without_clamping_when_df_exceeds_the_corpus_size() {
+        // ln((1 - 3 + 0.5) / (3 + 0.5) + 1) * 2.5 / (1 + 1.5): the IDF is negative and is not clamped.
+        assert_eq!(score(&doc(&["foo"]), &["foo"], 1.0, 1, &df(&[("foo", 3)])), -0.559_616);
+    }
+
+    #[test]
     fn score_sums_terms_and_treats_a_term_missing_from_df_as_zero() {
         let tokens = doc(&["foo", "qux", "bar", "foo", "zip", "zap"]);
         assert_eq!(score(&tokens, &["foo", "qux"], 3.0, 5, &df(&[("foo", 2)])), 2.94143);
     }
 
-    #[test]
-    fn score_skips_a_query_term_absent_from_the_document() {
-        // An average length of minus the document length makes the length normalization zero, so scoring an absent
-        // term would compute 0 / 0 and turn the sum into NaN. Skipping it leaves the present term's score intact.
-        let tokens = doc(&["foo", "bar"]);
-        let df = df(&[("foo", 1), ("absent", 1)]);
-        assert_eq!(score(&tokens, &["foo", "absent"], -2.0, 1, &df), 0.719_205);
+    #[rstest]
+    #[case::zero(0.0)]
+    #[case::negative(-2.0)]
+    #[case::nan(f64::NAN)]
+    #[case::infinite(f64::INFINITY)]
+    #[case::negative_infinite(f64::NEG_INFINITY)]
+    fn score_is_zero_when_the_average_document_length_is_not_a_positive_number(#[case] avg_doc_len: f64) {
+        let df = df(&[("foo", 1)]);
+        assert_eq!(score(&doc(&["foo"]), &["foo"], avg_doc_len, 1, &df), 0.0);
+        assert_eq!(score(&doc(&["foo", "bar"]), &["foo", "absent"], avg_doc_len, 1, &df), 0.0);
     }
 
     #[test]

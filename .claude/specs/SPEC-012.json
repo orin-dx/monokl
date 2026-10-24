@@ -11,30 +11,145 @@
     "Changing BM25 constants, boost values or the score formula. They are carried over from Section 8 unchanged."
   ],
   "api_surface": [
-    { "name": "tokens::tokenize", "signature": "pub fn tokenize(input: &str) -> Vec<String>", "description": "Splits one identifier into lowercase sub-words per Section 6's case-transition rules, dropping tokens shorter than 2 characters and stop words.", "error_conditions": [] },
-    { "name": "tokens::tokenize_source", "signature": "pub fn tokenize_source(source: &str) -> Vec<String>", "description": "Splits source text on non-[A-Za-z0-9_] characters and tokenizes each fragment, keeping duplicates for term frequency.", "error_conditions": [] },
-    { "name": "rank::round6", "signature": "pub fn round6(x: f64) -> f64", "description": "Rounds to 6 decimal places.", "error_conditions": [] },
-    { "name": "rank::score", "signature": "pub fn score<S: BuildHasher>(doc_tokens: &[String], query_terms: &[&str], avg_doc_len: f64, corpus_size: usize, df: &HashMap<String, usize, S>) -> f64", "description": "Okapi BM25, K1 = 1.5, B = 0.5, rounded with round6.", "error_conditions": [] },
-    { "name": "rank::coverage_boost", "signature": "pub fn coverage_boost(block: &CodeBlock) -> f64", "description": "Fraction of matched_lines inside [line_start, line_end], rounded with round6; 0 when matched_lines is empty.", "error_conditions": [] },
-    { "name": "rank::node_type_boost", "signature": "pub fn node_type_boost(kind: SymbolKind) -> f64", "description": "Section 8's per-kind multiplier table.", "error_conditions": [] },
-    { "name": "rank::tokenize_block", "signature": "pub fn tokenize_block(block: &CodeBlock) -> Vec<String>", "description": "tokenize_source of the block's code followed by tokenize_source of its signature, if any.", "error_conditions": [] },
-    { "name": "rank::rank_blocks", "signature": "pub fn rank_blocks<S: BuildHasher>(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], df: &HashMap<String, usize, S>) -> Vec<RankedBlock>", "description": "Scores every block, sorts with the total order in AC-009, and assigns 1-based ranks.", "error_conditions": [] },
-    { "name": "dedup::dedup_blocks", "signature": "pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock>", "description": "Drops a block that overlaps an earlier kept block in the same file by more than half of the smaller block, then reassigns 1-based ranks.", "error_conditions": [] }
+    {
+      "name": "tokens::tokenize",
+      "signature": "pub fn tokenize(input: &str) -> Vec<String>",
+      "description": "Splits one identifier into lowercase sub-words per AC-001's rules, dropping tokens shorter than 2 bytes and STOP_WORDS (AC-002).",
+      "error_conditions": []
+    },
+    {
+      "name": "tokens::tokenize_source",
+      "signature": "pub fn tokenize_source(source: &str) -> Vec<String>",
+      "description": "Splits source text on every character outside [A-Za-z0-9_] and tokenizes each fragment, keeping duplicates in source order for term frequency.",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::round6",
+      "signature": "pub fn round6(x: f64) -> f64",
+      "description": "Rounds to 6 decimal places.",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::score",
+      "signature": "pub fn score<S: BuildHasher>(doc_tokens: &[String], query_terms: &[&str], avg_doc_len: f64, corpus_size: usize, df: &HashMap<String, usize, S>) -> f64",
+      "description": "Okapi BM25, K1 = 1.5, B = 0.5, rounded with round6 (AC-005); 0.0 for an empty query or document or a non-positive or non-finite avg_doc_len (AC-012).",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::coverage_boost",
+      "signature": "pub fn coverage_boost(block: &CodeBlock) -> f64",
+      "description": "Fraction of matched_lines inside [line_start, line_end], rounded with round6; 0 when matched_lines is empty.",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::node_type_boost",
+      "signature": "pub fn node_type_boost(kind: SymbolKind) -> f64",
+      "description": "Section 8's per-kind multiplier table.",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::tokenize_block",
+      "signature": "pub fn tokenize_block(block: &CodeBlock) -> Vec<String>",
+      "description": "tokenize_source of the block's code followed by tokenize_source of its symbol_signature, if any.",
+      "error_conditions": []
+    },
+    {
+      "name": "rank::rank_blocks",
+      "signature": "pub fn rank_blocks<S: BuildHasher>(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], df: &HashMap<String, usize, S>) -> Vec<RankedBlock>",
+      "description": "Scores every block with the input as its corpus (AC-008), sorts with the order in AC-009, and assigns 1-based ranks.",
+      "error_conditions": []
+    },
+    {
+      "name": "dedup::dedup_blocks",
+      "signature": "pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock>",
+      "description": "Drops a block that overlaps an earlier kept block in the same file by more than half of the smaller block (AC-010), then reassigns 1-based ranks.",
+      "error_conditions": []
+    }
   ],
   "acceptance_criteria": [
-    { "id": "AC-001", "criterion": "tokenize follows Section 6's transition rules exactly: tokenize(\"XMLParser\") == [\"xml\", \"parser\"]; tokenize(\"getUserName\") == [\"user\", \"name\"] (\"get\" is a stop word); tokenize(\"v8Engine\") == [\"v8\", \"engine\"] (letter-to-digit never breaks); tokenize(\"user_id\") == [\"user\", \"id\"]; tokenize(\"\") == [].", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-002", "criterion": "tokenize drops tokens of length below 2 and every entry of Section 6's STOP_WORDS list, including the post-research additions crate, self, super, dyn, async, await and unsafe; non-ASCII characters act as separators.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-003", "criterion": "tokenize_source keeps duplicates in source order: tokenize_source(\"fooBar(fooBar)\") == [\"foo\", \"bar\", \"foo\", \"bar\"].", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-004", "criterion": "round6 rounds half away from zero at 6 decimal places (f64::round semantics): round6(0.1234565) and round6(1.0000004) give 0.123457 and 1.0.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-005", "criterion": "score returns 0.0 when query_terms or doc_tokens is empty, skips terms with zero term frequency, and otherwise returns round6 of the sum over terms of ln((N - df + 0.5)/(df + 0.5) + 1) * tf*(K1+1)/(tf + K1*(1 - B + B*doc_len/avg_doc_len)), K1 = 1.5, B = 0.5. A hand-computed case (one doc of 4 tokens, avg_doc_len 4, N = 2, df = 1, tf = 2) is asserted to the exact round6 value.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-006", "criterion": "node_type_boost returns exactly: Function 1.5; Class, Method, Constructor 1.4; Interface, Struct 1.3; TypeAlias, Enum 1.2; Variable, Impl 1.1; Property, Field, Macro 1.0; Module 0.9; Other 0.7 -- with no wildcard arm, so a new SymbolKind variant fails to compile until it is given a value.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-007", "criterion": "coverage_boost is 0.0 for empty matched_lines, 1.0 when every matched line is within [line_start, line_end], and round6(inside / total) otherwise (e.g. 1 of 3 inside gives 0.333333). A block with line_end < line_start contains no lines and never panics.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-008", "criterion": "rank_blocks returns an empty Vec for empty input; otherwise one RankedBlock per input with bm25_score, coverage_boost and node_type_boost set as above, final_score = round6(bm25 * node_type_boost + coverage_boost), parent_context None, and rank 1..=n in output order.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-009", "criterion": "rank_blocks orders by a total order: final_score descending (f64::total_cmp), then file ascending, then line_start ascending, then line_end ascending. Two inputs that are permutations of each other produce identical output, so the order never depends on input order. This implements Section 29 tenet #4's (file, line_start) tie-break that Section 8's single-key sort lacked.", "is_error_case": false, "judgment_call": true, "rationale": "query-and-ranking.md finding #9 requires either implementing the tenet or striking it; determinism is a stated principle, so it is implemented, with line_end added so blocks sharing a start line also order deterministically." },
-    { "id": "AC-010", "criterion": "dedup_blocks keeps the first block and drops any later block in the same file whose overlap with a kept block is more than half the smaller block's line count (overlap_lines * 2 > smaller_len); blocks in different files never dedupe; adjacent blocks with no shared line are both kept; ranks are reassigned 1..=n.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-011", "criterion": "dedup_blocks never panics on a block with line_end < line_start; such a block has length 1 for the comparison (Section 9's saturating_sub).", "is_error_case": true, "judgment_call": false }
+    {
+      "id": "AC-001",
+      "criterion": "tokenize(input) works on chars. Separators: '_', '-' and every char that is not an ASCII letter or digit; a separator ends the current word and is dropped. Within a run of ASCII letters and digits a new word starts at the current char when: the previous char is ASCII lowercase and the current is ASCII uppercase; or the previous and current are ASCII uppercase and the next char is ASCII lowercase; or the previous is an ASCII digit and the current is an ASCII letter. A letter-to-digit transition and an uppercase-to-lowercase transition never start a word. Each word is ASCII-lowercased; then words shorter than 2 bytes and words in STOP_WORDS (AC-002) are dropped, keeping order. Fixtures: tokenize(\"XMLParser\") == [\"xml\", \"parser\"]; tokenize(\"getUserName\") == [\"user\", \"name\"] (\"get\" is a stop word); tokenize(\"v8Engine\") == [\"v8\", \"engine\"]; tokenize(\"HTTP2Server\") == [\"http2\", \"server\"]; tokenize(\"user_id\") == [\"user\", \"id\"]; tokenize(\"user-id\") == [\"user\", \"id\"]; tokenize(\"THE\") == []; tokenize(\"a\") == []; tokenize(\"\") == [].",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-002",
+      "criterion": "STOP_WORDS is exactly these 62 distinct words: the, and, for, are, but, not, you, all, can, had, her, was, one, our, out, day, get, has, him, his, how, its, may, new, now, old, see, two, use, way, who, did, let, put, too, any, fn, var, const, mut, pub, mod, impl, type, enum, struct, trait, return, import, export, from, default, class, extends, interface, crate, self, super, dyn, async, await, unsafe. tokenize(w) == [] for every w in that set; tokenize(\"id\") == [\"id\"] (2 bytes, not a stop word, kept). Non-ASCII chars are separators: tokenize(\"naïveCase\") == [\"na\", \"ve\", \"case\"].",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-003",
+      "criterion": "tokenize_source splits on every char outside [A-Za-z0-9_], skips empty fragments, tokenizes each fragment with tokenize, and concatenates the results, keeping duplicates in source order: tokenize_source(\"fooBar(fooBar)\") == [\"foo\", \"bar\", \"foo\", \"bar\"]; tokenize_source(\"user_id = user_id\") == [\"user\", \"id\", \"user\", \"id\"]; tokenize_source(\"\") == [].",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-004",
+      "criterion": "round6(x) == (x * 1_000_000.0).round() / 1_000_000.0, so halves round away from zero (f64::round semantics): round6(0.1234565) == 0.123457, round6(-0.1234565) == -0.123457, round6(1.0000004) == 1.0.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-005",
+      "criterion": "For a non-empty doc_tokens, non-empty query_terms and a finite avg_doc_len > 0, score returns round6 of the sum, over every entry of query_terms (a term repeated in query_terms is summed once per occurrence), of ln((N - df + 0.5)/(df + 0.5) + 1) * tf*(K1+1)/(tf + K1*(1 - B + B*doc_len/avg_doc_len)), with K1 = 1.5, B = 0.5, N = corpus_size, doc_len = doc_tokens.len(), tf = the number of doc_tokens exactly equal (case-sensitive) to the term, and df = df[term] or 0 when the term is absent from df. A term with tf = 0 adds nothing. It returns 0.0 when query_terms or doc_tokens is empty. Fixtures with doc [\"foo\", \"foo\", \"bar\", \"baz\"], avg_doc_len 4.0, N = 2: terms [\"foo\"], df {foo: 1} gives 0.99021; terms [\"Foo\"], df {foo: 1} gives 0.0; terms [\"foo\", \"foo\"], df {foo: 1} gives 1.980421 (rounded once after summing, 2 * 0.99021026 = 1.98042052); terms [\"foo\"], empty df gives 2.559656 (round6(ln(6) * 5 / 3.5)). df is caller-supplied, so df[term] may exceed corpus_size: the IDF is then computed in f64 without clamping, the term contributes a negative value, and score never panics. Fixture: score([\"foo\"], [\"foo\"], 1.0, 1, {foo: 3}) == -0.559616 (ln((1 - 3 + 0.5) / (3 + 0.5) + 1) * 2.5 / 2.5).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-006",
+      "criterion": "node_type_boost returns exactly, for all 15 SymbolKind variants: Function 1.5; Class, Method, Constructor 1.4; Interface, Struct 1.3; TypeAlias, Enum 1.2; Variable, Impl 1.1; Property, Field, Macro 1.0; Module 0.9; Other 0.7. Implementation guidance: the match has no wildcard arm, so a new SymbolKind variant fails to compile until it is given a value.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-007",
+      "criterion": "coverage_boost is 0.0 for empty matched_lines; otherwise round6(inside / total), where total is matched_lines.len() and inside is the number of entries e with line_start <= e <= line_end, each entry counted separately (duplicates count once per entry). Fixtures with line_start 3, line_end 5: matched_lines [3, 4, 5] gives 1.0; [1, 4, 9] gives 0.333333; [4, 4, 9] gives 0.666667. A block with line_end < line_start contains no lines: line_start 10, line_end 5, matched_lines [5, 7, 10] gives 0.0 and does not panic.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-008",
+      "criterion": "rank_blocks returns an empty Vec for empty input. Otherwise the input is the BM25 corpus: corpus_size = the number of input blocks and avg_doc_len = (total token count over all input blocks) / corpus_size. Each block yields one RankedBlock with bm25_score = score(its tokens, query_terms, avg_doc_len, corpus_size, df), coverage_boost and node_type_boost per AC-007 and AC-006, final_score = round6(bm25_score * node_type_boost + coverage_boost) computed from the already-rounded bm25_score, parent_context None, and rank 1..=n in output order. Fixture: one Function block with tokens [\"foo\", \"foo\", \"bar\", \"baz\"] and no matched_lines, query [\"foo\"], df {foo: 1} (corpus_size 1, avg_doc_len 4.0) gives bm25_score 0.410974, coverage_boost 0.0, final_score 0.616461, rank 1.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-009",
+      "criterion": "rank_blocks sorts by these keys in turn: (1) final_score descending, with -0.0 equal to 0.0 and every other pair compared by f64::total_cmp; (2) file ascending by Utf8PathBuf's Ord, which compares path components, so \"a/z.ts\" sorts before \"a.b.ts\" (component \"a\" < \"a.b.ts\", although the plain strings order the other way); (3) line_start ascending; (4) line_end ascending; (5) node_kind ascending in SymbolKind declaration order (Function, Method, Constructor, Class, Struct, Enum, Interface, TypeAlias, Property, Field, Variable, Module, Impl, Macro, Other); (6) code ascending by byte order. For any permutation of an input in which no two blocks are equal on all six keys, the output is identical; blocks equal on all six keys keep their relative input order. Fixtures: equal-score blocks b.ts:1-5, a.ts:9-9, a.ts:1-5 come out a.ts:1-5, a.ts:9-9, b.ts:1-5; two blocks with bm25_score 0, no matched_lines and the same file and span, one Variable and one Class, come out Class then Variable for both input orders; two blocks with equal first five keys and code \"b()\" and \"a()\" come out \"a()\" then \"b()\" for both input orders; comparing hand-built RankedBlocks with the sort's comparator, final_score -0.0 in b.ts and 0.0 in a.ts order a.ts first, as do -0.0 in a.ts and 0.0 in b.ts (rank_blocks itself yields -0.0 only from a negative bm25_score, which needs df > corpus_size per AC-005, so the rule is tested on the comparator); all 720 orderings of a six-block input with no two blocks equal on all six keys give the same output.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "rationale": "Determinism is tenet #4 of docs/spec/01-core-architecture.md Section 29 and a stated principle in PRINCIPLES.md (same query, same code, byte-identical output). Section 8's single-key sort did not deliver it (query-and-ranking.md finding #9). The keys after (file, line_start), and treating -0.0 as 0.0 inside an otherwise total_cmp order, are the completions needed for the output to be independent of input order; docs/spec/05-research-and-decisions.md Section 18 first records the total order."
+    },
+    {
+      "id": "AC-010",
+      "criterion": "dedup_blocks expects its input in rank_blocks output order (callers pass rank_blocks' result) and walks it once, keeping the first block. A later block is dropped when some already-kept block in the same file overlaps it significantly: overlap_lines = min(line_end) - max(line_start) + 1 over the two blocks when max(line_start) <= min(line_end), else no overlap; smaller_len = min over the two blocks of (line_end - line_start + 1); significant means overlap_lines * 2 > smaller_len. Blocks in different files never dedupe; only kept blocks are compared against. Surviving blocks keep their relative order and every field except rank, which is reassigned 1..=n. Fixtures with a kept a.ts:10-20 first: a.ts:16-30 is kept (overlap 5, 10 > 11 false); a.ts:15-30 is dropped (overlap 6, 12 > 11); a.ts:21-30 is kept (no shared line); a.ts:12-14 is dropped (overlap 3, 6 > 3).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-011",
+      "criterion": "dedup_blocks never panics when a block has line_end < line_start; such a block is never dropped as a duplicate and never causes another block to be dropped. Example: a kept a.ts:1-20 followed by an inverted a.ts:10-5 gives both blocks, ranks 1 and 2.",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-012",
+      "criterion": "score returns 0.0 when doc_tokens and query_terms are non-empty but avg_doc_len is <= 0.0 or not finite: score(&[\"foo\"], &[\"foo\"], 0.0, 1, &{foo: 1}) == 0.0, and the same call with avg_doc_len f64::NAN, -2.0, f64::INFINITY or f64::NEG_INFINITY returns 0.0.",
+      "is_error_case": true,
+      "judgment_call": true,
+      "rationale": "Owner decision. rank_blocks never produces such an average for a non-empty document, but score is public; without the guard a negative average flips the length normalization's sign, an infinite one disables it, and NaN propagates into the sort."
+    },
+    {
+      "id": "AC-013",
+      "criterion": "tokenize_block(block) equals tokenize_source(&block.code) followed by tokenize_source(sig) when block.symbol_signature is Some(sig), and tokenize_source(&block.code) alone when it is None. Fixtures: code \"const total = sumItems(cart);\" with symbol_signature Some(\"function sumItems(cart: Cart): number\") gives [\"total\", \"sum\", \"items\", \"cart\", \"function\", \"sum\", \"items\", \"cart\", \"cart\", \"number\"]; code \"parseJson(raw)\" with None gives [\"parse\", \"json\", \"raw\"]; empty code with None gives [].",
+      "is_error_case": false,
+      "judgment_call": false
+    }
   ],
   "linked_requirement": "REQ-012",
-  "linked_research": "docs/spec/01-core-architecture.md Sections 6, 8, 9, 29; docs/architecture/query-and-ranking.md (finding #9); docs/spec/08-library-session-api.md §7.5.",
-  "reasoning": "Everything except the sort order is carried over from Sections 6, 8 and 9. AC-009 is the one decision: the tie-break tenet #4 claims is implemented, since Part 8 and PRINCIPLES.md treat determinism as a requirement. total_cmp replaces partial_cmp so a NaN score cannot make the order input-dependent."
+  "linked_research": "docs/spec/01-core-architecture.md Sections 6, 8, 9, 29; docs/architecture/query-and-ranking.md (finding #9); docs/spec/08-library-session-api.md §7.5; PRINCIPLES.md (Determinism); docs/spec/05-research-and-decisions.md Section 18.",
+  "reasoning": "Everything except the sort order and the avg_doc_len guard is carried over from Sections 6, 8 and 9. AC-009 completes the tie-break tenet #4 claims into a total order, since Part 8 and PRINCIPLES.md treat determinism as a requirement; -0.0 is folded into 0.0 because total_cmp alone would order by a zero's sign. AC-012 is an owner decision for a public function's degenerate input.",
+  "revision_note": "2026-10-23 retroactive gate: verifier/auditor findings applied; tie-break extended to a total order. 2026-10-23: exit-gate round 1 blockers fixed: AC-013 covers tokenize_block; AC-005 states df > corpus_size; AC-009's kind and -0.0 fixtures name their inputs."
 }

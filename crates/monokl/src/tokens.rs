@@ -92,7 +92,11 @@ mod tests {
     #[case("XMLParser", &["xml", "parser"])]
     #[case("getUserName", &["user", "name"])]
     #[case("v8Engine", &["v8", "engine"])]
+    #[case("HTTP2Server", &["http2", "server"])]
     #[case("user_id", &["user", "id"])]
+    #[case("user-id", &["user", "id"])]
+    #[case("THE", &[])]
+    #[case("a", &[])]
     #[case("", &[])]
     #[case("parseHTTPResponse", &["parse", "http", "response"])]
     #[case("HTMLElement", &["html", "element"])]
@@ -114,6 +118,85 @@ mod tests {
         assert_eq!(tokenize("aB"), Vec::<String>::new());
         assert_eq!(tokenize("x_yz"), ["yz"]);
         assert_eq!(tokenize("a1"), ["a1"]);
+    }
+
+    #[test]
+    fn stop_words_are_the_documented_set() {
+        // Written out independently of STOP_WORDS, so changing the list fails here.
+        let mut expected = [
+            "the",
+            "and",
+            "for",
+            "are",
+            "but",
+            "not",
+            "you",
+            "all",
+            "can",
+            "had",
+            "her",
+            "was",
+            "one",
+            "our",
+            "out",
+            "day",
+            "get",
+            "has",
+            "him",
+            "his",
+            "how",
+            "its",
+            "may",
+            "new",
+            "now",
+            "old",
+            "see",
+            "two",
+            "use",
+            "way",
+            "who",
+            "did",
+            "let",
+            "put",
+            "too",
+            "any",
+            "fn",
+            "var",
+            "const",
+            "mut",
+            "pub",
+            "mod",
+            "impl",
+            "type",
+            "enum",
+            "struct",
+            "trait",
+            "return",
+            "import",
+            "export",
+            "from",
+            "default",
+            "class",
+            "extends",
+            "interface",
+            "crate",
+            "self",
+            "super",
+            "dyn",
+            "async",
+            "await",
+            "unsafe",
+        ];
+        expected.sort_unstable();
+        let mut words = STOP_WORDS.to_vec();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(words, expected);
+    }
+
+    #[test]
+    fn tokenize_keeps_a_two_character_non_stop_word() {
+        assert_eq!(tokenize("id"), ["id"]);
     }
 
     #[test]
@@ -143,6 +226,7 @@ mod tests {
     #[rstest]
     #[case("fooébar", &["foo", "bar"])]
     #[case("naïveCount", &["na", "ve", "count"])]
+    #[case("naïveCase", &["na", "ve", "case"])]
     #[case("日本lookup", &["lookup"])]
     #[case("ÀBc", &["bc"])]
     fn tokenize_treats_non_ascii_as_a_separator(#[case] input: &str, #[case] expected: &[&str]) {
@@ -158,6 +242,7 @@ mod tests {
     #[case("", &[])]
     #[case("   ", &[])]
     #[case("user_id", &["user", "id"])]
+    #[case("user_id = user_id", &["user", "id", "user", "id"])]
     #[case("let count = getCount();", &["count", "count"])]
     #[case("a.b.cd", &["cd"])]
     #[case("parse-json", &["parse", "json"])]
