@@ -16,6 +16,11 @@ publish = false
 name = "monokl"
 path = "src/lib.rs"
 
+[[bin]]
+name = "monokl"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [features]
 default = ["cli", "lang-ts"]
 
