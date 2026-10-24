@@ -284,3 +284,16 @@ Status: proposed 2026-10-23, ratified by the owner 2026-10-23.
 - **Minor, by the owner's delegate.** Binary versus unreadable is decided by bytes actually read: a NUL read before any read error makes a file binary; a file that cannot be opened, or fails before a NUL, is unreadable. Byte-order marks are not decoded, so UTF-16 files are binary and a UTF-8 BOM stays in line 1's text. One trailing `\n` or `\r\n` is stripped from line text; a lone `\r` is content. A pattern is matched against that same stripped text, so `^` and `$` anchor at line start and end in LF and CRLF files alike (`^alpha$` matches the line `alpha` in both, not `alpha beta`), a `\r` from a CRLF terminator is never seen, and a pattern for `\n` compiles and matches no line. Regular files with non-UTF-8 paths are counted in `non_utf8_paths`, not failed. Symbolic links below the root are not followed.
 - **Found while speccing.** Section 7's test-path filter checked the absolute path, so a checkout under any `test/` or `spec/` directory excluded every file; it now checks the root-relative path.
 - **Still open.** #8 (`+regex:` loses both modifier and regex semantics) and #16 (no per-term length cap) belong to the query language and are unchanged. #21 (exclusion-only queries return empty silently) belongs to the search pipeline.
+
+## 19. Part 8 governs core; one crate (2026-10-23)
+
+Ratified by the owner 2026-10-23.
+
+- **Part 8 over Part 1.** Where Part 1's v0.1.0 text and Part 8 conflict, Part 8 governs core: results are fully ranked, deduped and uncapped, with counts; no tiktoken, budget or caps in core; core result types such as `FileAnalysis` are not `Serialize`; `.monokl/cache.json` gets its own `persist::v1` types. Rejected: porting Part 1 as written, which keeps one type set serving the Rust API, the cache format and the wire shape, three compatibility clocks on one struct. Tracks still to be specced (12, 14, 16–22) are drafted against Part 8; Part 1 remains the reconstruction source where Part 8 is silent.
+- **One crate.** The core/agent boundary is two modules in `crates/monokl` with an architecture test, not two crates (ADR 0003). Rejected: splitting now, which buys a compiler-enforced boundary at the cost of a second crate before anything outside monokl consumes core.
+
+## 20. Analyzer foundation corrections (2026-10-23)
+
+- **`Ord` on `LanguageId`.** Part 3 §11 keeps a `BTreeSet<LanguageId>` to deduplicate skip diagnostics, but Part 1 §11 derives no `PartialOrd`/`Ord`, so the spec does not compile. `LanguageId` derives both, in declaration order. Rejected: a hash set in Part 3, since both Part 3 and the contract doc name a sorted set.
+- **Other departures from Part 1.** `AnalyzerCapabilities` also derives `PartialEq`/`Eq` so analyzers can be tested against expected values. `FileAnalysis` takes `digest: Digest` for `content_hash` (SPEC-011) and records the `profile` it was built under (owner decision: fixed fields per profile, recorded, so the cache never serves a `Dependencies` result as `Full`). `language()` keeps Part 1's `&str`.
+- **For later tracks.** What an analyzer does when `analyze_with_profile` gets a path `supports` rejects is left to the registry track, which checks `supports` first. Part 3's `language_label` matches only 5 of the 13 `LanguageId` variants and will not compile as written.

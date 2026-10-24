@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 // Modules are declared as they are implemented, not ahead of time.
+pub mod analysis;
 pub mod dedup;
 pub mod digest;
 pub mod error;
