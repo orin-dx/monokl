@@ -400,9 +400,9 @@ this rigor level, not one sitting.
 | 9 | Ranking (BM25/boost/tokenize) | §8 | **IMPLEMENTED** — `SPEC-012.json`, `rank/`, total-order tie-break |
 | 10 | Dedup | §9 | **IMPLEMENTED** — `SPEC-012.json`, `dedup.rs` |
 | 11 | Budget | §10 | Not started — resolves the uncapped `max_results`/`max_tokens` gap |
-| 12 | `LanguageAnalyzer` trait + capability model | §11 | Not started |
+| 12 | `LanguageAnalyzer` trait + capability model | §11 | **IMPLEMENTED** — `SPEC-014.json`, `analysis/lang.rs` |
 | 13 | `Digest` (was `ContentHash`) | §12, Part 8 §8.4 | **IMPLEMENTED** — `SPEC-011.json` (corrected to `Digest`), `crates/monokl/src/digest.rs`, ADR 0002 |
-| 14 | `FileAnalysis` | §13 | Not started |
+| 14 | `FileAnalysis` | §13 | **IMPLEMENTED** — `SPEC-014.json`, `analysis/file_analysis.rs` |
 | 15 | `NodeKind` | §14 | Not started |
 | 16 | In-memory cache | §15 | Not started — resolves cache-architecture.md's Tier-1 content-hash gap |
 | 17 | Disk persistence | §16 | Not started — heavily overlaps SPEC-001/SPEC-002, reconcile when drafted |
