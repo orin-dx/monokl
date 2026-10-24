@@ -1,0 +1,32 @@
+{
+  "id": "SPEC-015",
+  "spec_file_path": ".claude/specs/SPEC-015.json",
+  "purpose": "Implement TsAnalyzer, the LanguageAnalyzer for TypeScript and JavaScript, per docs/spec/01-core-architecture.md Sections 14, 17 and 25 and docs/spec/03-multi-language-platform.md section 3. It parses one file with OXC and returns an owned FileAnalysis honouring the requested AnalysisProfile.",
+  "scope": "crates/monokl/src/analysis/ts/{mod,parse}.rs behind the lang-ts feature, and the small-ts fixtures under crates/monokl/tests/fixtures/small-ts/. Dependencies keep their unresolved specifier (DependencyTarget::File with resolved: None).",
+  "non_goals": [
+    "Import resolution (oxc_resolver), tsconfig handling and unresolved_aliases.",
+    "The in-memory and persisted caches.",
+    "Methods, properties and other nested symbols; only top-level declarations are extracted.",
+    "The AnalyzerRegistry and any language other than TypeScript/JavaScript.",
+    "Reading the file or any I/O beyond calling the source closure."
+  ],
+  "api_surface": [
+    { "name": "TsAnalyzer", "signature": "pub struct TsAnalyzer; impl LanguageAnalyzer for TsAnalyzer", "description": "Stateless analyzer for .ts, .tsx, .js, .jsx, .mts, .cts, .mjs and .cjs files; .d.ts files are not supported.", "error_conditions": ["the source closure's error is returned unchanged"] }
+  ],
+  "acceptance_criteria": [
+    { "id": "AC-001", "criterion": "supports is true for .ts .tsx .js .jsx .mts .cts .mjs .cjs paths and false for .d.ts, .rs and extensionless paths; language_for is Some(TypeScript) exactly when supports is true.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-002", "criterion": "Analyzing each small-ts fixture file at Full yields exactly the symbols, exports, dependencies (specifier, bindings, line, resolved: None) and code blocks listed in the tests, with digest equal to Digest::blake3 of the source.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-003", "criterion": "Dependencies fills only dependencies (and TsData::type_only_imports); Structural also fills symbols and exports; Full also fills blocks and TsData::jsx_elements. FileAnalysis::profile equals the requested profile.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-004", "criterion": "Button.tsx yields a JSX element button (is_html) with attributes onClick and disabled, both expressions.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-005", "criterion": "A file with a syntax error returns Ok with had_parse_errors true and still returns the declarations that parsed.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-006", "criterion": "A file whose bracket nesting exceeds 2000 returns Ok with had_parse_errors true and empty symbols, dependencies, exports, blocks and JSX, without overflowing the stack.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-007", "criterion": "A panic during parse or extraction is contained and reported as the same degraded result as AC-006.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-008", "criterion": "The source closure's Err is returned unchanged and the closure is called exactly once.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-009", "criterion": "Two analyses of the same source produce equal Debug output.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-010", "criterion": "With --no-default-features the crate builds, lints and passes machete.", "is_error_case": false, "judgment_call": false }
+  ],
+  "linked_requirement": "REQ-015",
+  "linked_research": "docs/spec/01-core-architecture.md Sections 14, 17, 25; docs/spec/03-multi-language-platform.md section 3; docs/spec/05-research-and-decisions.md sections 17 and 20.",
+  "revision_note": "2026-10-24: drafted.",
+  "reasoning": "Section 17's parse_full without resolution or caching, plus caliper's parse safety."
+}
