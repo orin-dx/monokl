@@ -2,21 +2,35 @@
   "id": "SPEC-011",
   "spec_file_path": ".claude/specs/SPEC-011.json",
   "purpose": "Define Digest -- monokl's content-identity type -- per docs/spec/08-library-session-api.md §8.4, which supersedes the bare-hex ContentHash(String) of docs/spec/01-core-architecture.md Section 12. A Digest names its algorithm, so a cache entry written today stays distinguishable from one written after an algorithm or width change. FileAnalysis (track #14), the in-memory cache (track #16) and disk persistence (track #17) key on it.",
-  "scope": "The Digest struct and DigestAlgorithm enum in crates/monokl/src/digest.rs; Digest::blake3(content) as the one hashing constructor; the textual form `algorithm \":\" encoded` produced by Display and accepted by FromStr; the serde wire form, which is that same string; and the parse errors.",
+  "scope": "The Digest struct and DigestAlgorithm enum in crates/monokl/src/digest.rs; DigestAlgorithm's text names (as_str and FromStr); Digest::blake3(content) as the one hashing constructor; the textual form `algorithm \":\" encoded` produced by Display and accepted by FromStr; the serde wire form, which is that same string, including as a JSON map key; and the parse errors.",
   "non_goals": [
     "Computing sha256 digests. DigestAlgorithm::Sha256 exists so a sha256 digest from a third-party harness plugin parses and round-trips (§8.4's boundary table); monokl computes blake3 only, and nothing in monokl needs a sha256 hasher yet.",
-    "sha512 or any other OCI-registered algorithm. DigestAlgorithm is #[non_exhaustive] so one can be added without a breaking change.",
+    "sha512 or any other OCI-registered algorithm. DigestAlgorithm is exhaustive, exactly §8.4's shape; adding a variant would be done in wisp-contracts and is a breaking change accepted there.",
     "Moving Digest into wisp-contracts. That crate does not exist yet; Digest is shaped to move there unchanged (docs/adr/0002-digest-lives-in-monokl-until-wisp-contracts.md).",
     "FileAnalysis, the cache, and the cache.json format (tracks #14, #16, #17). They reference Digest; their own shapes are not locked here.",
+    "Round-trip of Digest-valued fields inside cache.json, and whether a legacy bare-hex hash loads as StaleDiskCache or Json, belong to the track #17 spec, which must carry those criteria.",
     "The cache Tier-1 mtime/size fast-path gap (docs/architecture/cache-architecture.md). It concerns when a digest is compared, not the digest's shape.",
-    "Streaming or incremental hashing. Digest::blake3 hashes one byte slice in one call."
+    "Streaming or incremental hashing. Digest::blake3 hashes one byte slice in one call.",
+    "An ordering on Digest or DigestAlgorithm. Callers needing a deterministic order sort by to_string()."
   ],
   "api_surface": [
     {
       "name": "DigestAlgorithm",
-      "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DigestAlgorithm { Sha256, Blake3 }",
-      "description": "The algorithm half of a digest. Its textual names are `sha256` and `blake3`.",
+      "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum DigestAlgorithm { Sha256, Blake3 }",
+      "description": "The algorithm half of a digest, exactly §8.4's shape: no #[non_exhaustive], so a downstream crate can match both variants without a wildcard arm.",
       "error_conditions": []
+    },
+    {
+      "name": "DigestAlgorithm::as_str",
+      "signature": "#[must_use] pub fn as_str(self) -> &'static str",
+      "description": "Returns \"sha256\" for Sha256 and \"blake3\" for Blake3.",
+      "error_conditions": []
+    },
+    {
+      "name": "impl FromStr for DigestAlgorithm",
+      "signature": "impl std::str::FromStr for DigestAlgorithm { type Err = DigestParseError; }",
+      "description": "Accepts exactly \"sha256\" and \"blake3\", case-sensitive. Any other input is Err(DigestParseError::UnknownAlgorithm { algorithm: <the input> }).",
+      "error_conditions": ["DigestParseError::UnknownAlgorithm"]
     },
     {
       "name": "Digest",
@@ -39,26 +53,26 @@
     {
       "name": "impl FromStr for Digest",
       "signature": "impl std::str::FromStr for Digest { type Err = DigestParseError; }",
-      "description": "Parses `algorithm:hex`. Rejects an unknown algorithm, a missing separator, hex of the wrong length, and any character outside [0-9a-f], uppercase hex included.",
+      "description": "Parses `algorithm:hex`, splitting at the first `:`. Checks the separator, then the algorithm, then the encoding; never trims.",
       "error_conditions": ["DigestParseError::MissingSeparator", "DigestParseError::UnknownAlgorithm", "DigestParseError::InvalidEncoding"]
     },
     {
       "name": "DigestParseError",
       "signature": "#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)] #[non_exhaustive] pub enum DigestParseError { MissingSeparator, UnknownAlgorithm { algorithm: String }, InvalidEncoding }",
-      "description": "Why a string is not a digest.",
+      "description": "Why a string is not a digest. This spec's own error type, so it stays #[non_exhaustive].",
       "error_conditions": []
     },
     {
       "name": "Serialize / Deserialize for Digest",
       "signature": "impl Serialize for Digest; impl<'de> Deserialize<'de> for Digest",
       "description": "Serializes as the Display string; deserializes from a string through FromStr, so an invalid digest fails to deserialize.",
-      "error_conditions": ["any FromStr error, surfaced as a serde custom error", "a non-string value"]
+      "error_conditions": ["any FromStr error, surfaced as a serde custom error whose message is the DigestParseError Display text", "a non-string value"]
     }
   ],
   "acceptance_criteria": [
     {
       "id": "AC-001",
-      "criterion": "Digest::blake3(b\"\") equals Digest { algorithm: DigestAlgorithm::Blake3, bytes: *blake3::hash(b\"\").as_bytes() }, and its Display output is exactly \"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\" (blake3's published digest of empty input).",
+      "criterion": "Digest::blake3(b\"\") equals Digest { algorithm: DigestAlgorithm::Blake3, bytes: *blake3::hash(b\"\").as_bytes() }, and its Display output is exactly \"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\". Against the official BLAKE3 test vectors (test_vectors/test_vectors.json in BLAKE3-team/BLAKE3; input is the bytes i % 251 for i in 0..input_len; expected value is the first 64 hex characters of `hash`), with input = (0..n).map(|i| (i % 251) as u8): for n = 0 the Display is \"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\", for n = 1 it is \"blake3:2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\", and for n = 1025 it is \"blake3:d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444\".",
       "is_error_case": false,
       "judgment_call": false
     },
@@ -70,55 +84,79 @@
     },
     {
       "id": "AC-003",
-      "criterion": "For every digest d, d.to_string().parse::<Digest>() returns Ok(d), for both DigestAlgorithm::Blake3 and DigestAlgorithm::Sha256 and for bytes of all zeros, all 0xff, and a blake3 output.",
+      "criterion": "d.to_string().parse::<Digest>() returns Ok(d) for each of these 8 digests: algorithm in {DigestAlgorithm::Blake3, DigestAlgorithm::Sha256} crossed with bytes in {[0x00; 32], [0xff; 32], Digest::blake3(b\"monokl\").bytes, the bytes 0x00..=0x1f in ascending order}. A property test over arbitrary [u8; 32] crossed with both algorithms asserts the same.",
       "is_error_case": false,
       "judgment_call": false
     },
     {
       "id": "AC-004",
-      "criterion": "Display writes the algorithm name (`blake3` or `sha256`), one `:`, then exactly 64 characters from [0-9a-f]; no uppercase letter ever appears.",
+      "criterion": "Display writes the algorithm name, one `:`, then two lowercase hex characters per byte: Digest { algorithm: Blake3, bytes: [0xab; 32] } displays as \"blake3:\" followed by \"ab\" repeated 32 times, and the same bytes with Sha256 display as \"sha256:\" followed by \"ab\" repeated 32 times.",
       "is_error_case": false,
       "judgment_call": false
     },
     {
       "id": "AC-005",
-      "criterion": "Parsing a string with no `:` (e.g. a bare 64-character hex string, the old ContentHash form) returns Err(DigestParseError::MissingSeparator).",
+      "criterion": "Parsing \"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\" (a bare 64-character hex string, the old ContentHash form) returns Err(DigestParseError::MissingSeparator).",
       "is_error_case": true,
       "judgment_call": false
     },
     {
       "id": "AC-006",
-      "criterion": "Parsing `md5:` followed by 64 valid hex characters returns Err(DigestParseError::UnknownAlgorithm { algorithm: \"md5\" }). Algorithm names are case-sensitive: `BLAKE3:` followed by valid hex also returns UnknownAlgorithm.",
+      "criterion": "Parsing each of `md5:`, `sha512:`, `BLAKE3:` and `Sha256:` followed by 64 lowercase hex characters returns Err(DigestParseError::UnknownAlgorithm { algorithm }) where algorithm is exactly \"md5\", \"sha512\", \"BLAKE3\" and \"Sha256\" respectively.",
       "is_error_case": true,
       "judgment_call": false
     },
     {
       "id": "AC-007",
-      "criterion": "Parsing `blake3:` followed by any of these returns Err(DigestParseError::InvalidEncoding): 63 hex characters, 65 hex characters, an empty string, 64 characters containing one uppercase hex letter (OCI: [A-F] MUST NOT be used), and 64 characters containing a non-hex character such as `g`. A second `:` in the encoded part (`blake3:ab:cd...`) is also InvalidEncoding.",
+      "criterion": "For each prefix P in {\"blake3:\", \"sha256:\"}, parsing P followed by each of these returns Err(DigestParseError::InvalidEncoding): 63 lowercase hex characters; 65 lowercase hex characters; nothing (the input is exactly P); 64 characters of which the first is an uppercase `A` and the rest lowercase hex; 64 characters of which the first is `g` and the rest lowercase hex; U+00E9 repeated 32 times (64 bytes, 32 chars); `ab:` followed by 61 lowercase hex characters.",
       "is_error_case": true,
       "judgment_call": false
     },
     {
       "id": "AC-008",
-      "criterion": "serde_json::to_string(&d) is the JSON string literal of d.to_string() (e.g. \"\\\"blake3:af13...\\\"\"), and serde_json::from_str::<Digest> of that literal returns d.",
+      "criterion": "For d = Digest::blake3(b\"\"), serde_json::to_string(&d) is exactly \"\\\"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\\\"\", and serde_json::from_str, serde_json::from_slice and serde_json::from_reader of that literal each return Ok(d), as does serde_json::from_value(serde_json::to_value(&d)).",
       "is_error_case": false,
       "judgment_call": false
     },
     {
       "id": "AC-009",
-      "criterion": "serde_json::from_str::<Digest> fails (returns Err, never panics) for a JSON string that FromStr rejects (each AC-005..AC-007 case), and for null, a number, a boolean, an array, and an object.",
+      "criterion": "serde_json::from_str::<Digest> returns Err (never panics) for the JSON strings \"\", \"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\", \"md5:\" + 64 hex, \"BLAKE3:\" + 64 hex, \"blake3:\" + 63 hex, and \"blake3:\" + 64 uppercase hex; for each, the Err's to_string() contains the Display text of the DigestParseError that FromStr returns for that string (MissingSeparator, MissingSeparator, UnknownAlgorithm { \"md5\" }, UnknownAlgorithm { \"BLAKE3\" }, InvalidEncoding, InvalidEncoding). It also returns Err for the JSON values null, 1, true, [] and {}.",
       "is_error_case": true,
       "judgment_call": false
     },
     {
       "id": "AC-010",
-      "criterion": "Digest and DigestAlgorithm are Copy and usable as HashMap/HashSet keys; equal digests hash equally. Neither implements PartialOrd/Ord or Default.",
+      "criterion": "Digest and DigestAlgorithm are Copy and usable as HashMap/HashSet keys; equal digests hash equal: a HashSet built from [blake3(b\"x\"), blake3(b\"x\"), blake3(b\"y\")] has len 2, and inserting blake3(b\"x\") twice into a HashMap leaves len 1 holding the second value.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-011",
+      "criterion": "DigestAlgorithm::Sha256.as_str() is \"sha256\" and DigestAlgorithm::Blake3.as_str() is \"blake3\"; for both variants a, a.as_str().parse::<DigestAlgorithm>() == Ok(a); \"Blake3\".parse::<DigestAlgorithm>() is Err(DigestParseError::UnknownAlgorithm { algorithm: \"Blake3\" }). A crate outside monokl can match DigestAlgorithm with arms for Sha256 and Blake3 only, no wildcard.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-012",
+      "criterion": "Digest::from_str checks the separator, then the algorithm, then the encoding, and never trims: \"\" is Err(MissingSeparator); a bare 64-hex string is Err(MissingSeparator); \"md5:zz\" is Err(UnknownAlgorithm { algorithm: \"md5\" }); \":\" + 64 hex is Err(UnknownAlgorithm { algorithm: \"\" }); \" blake3:\" + 64 hex is Err(UnknownAlgorithm { algorithm: \" blake3\" }); \"blake3:\" + 64 hex + \"\\n\" is Err(InvalidEncoding).",
+      "is_error_case": true,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-013",
+      "criterion": "A HashMap<Digest, u32> of {blake3(b\"a\"): 1, blake3(b\"b\"): 2} serializes to a JSON object whose keys are exactly blake3(b\"a\").to_string() and blake3(b\"b\").to_string(), and deserializes back to an equal map. serde_json::from_str::<HashMap<Digest, u32>>(r#\"{\"deadbeef\":1}\"#) returns Err.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-014",
+      "criterion": "Digest { algorithm: Blake3, bytes: [0xab; 32] } != Digest { algorithm: Sha256, bytes: [0xab; 32] }, their Display strings differ, and a HashSet containing both has len 2.",
       "is_error_case": false,
       "judgment_call": false
     }
   ],
   "linked_requirement": "REQ-011",
-  "linked_research": "docs/spec/08-library-session-api.md §8.4 and §14; OCI image-spec descriptor digest grammar; docs/spec/01-core-architecture.md Section 12 (superseded).",
-  "revision_note": "2026-10-23 correction: replaced ContentHash(String) with Digest per Part 8 §8.4, which supersedes it (§14). An unprefixed hash is unmigratable, and the old spec explicitly declined deserialize-time validation; Digest validates on parse and deserialize. The earlier ContentHash criteria are withdrawn, not carried over.",
-  "reasoning": "Shape, grammar and the lowercase rule come straight from §8.4. Choices this spec makes that §8.4 leaves open: a single blake3 constructor (sha256 is parse-only, non_goals); DigestAlgorithm is #[non_exhaustive] because OCI registers more algorithms; serde goes through the Display/FromStr string so the wire form and the text form cannot drift; a second `:` is InvalidEncoding rather than a separate variant, since the encoded part is what is malformed. Digest lives in monokl until wisp-contracts exists (ADR 0002)."
+  "linked_research": "docs/spec/08-library-session-api.md §8.4 and §14; docs/adr/0002-digest-lives-in-monokl-until-wisp-contracts.md; docs/spec/05-research-and-decisions.md §16 (declare-as-implemented: blake3 and proptest are listed because code uses them) and §18 (determinism: no ordering is defined on Digest, so ordered output sorts by the text form); OCI image-spec descriptor digest grammar; BLAKE3-team/BLAKE3 test_vectors/test_vectors.json; docs/spec/01-core-architecture.md Section 12 (superseded). No requirement@1 named REQ-011 exists; this spec is grounded in Part 8 §8.4/§14 and ADR 0002.",
+  "revision_note": "2026-10-23 correction: replaced ContentHash(String) with Digest per Part 8 §8.4, which supersedes it (§14). An unprefixed hash is unmigratable, and the old spec explicitly declined deserialize-time validation; Digest validates on parse and deserialize. The earlier ContentHash criteria are withdrawn, not carried over.\n2026-10-23: Retroactive gate: verifier/auditor findings applied.",
+  "reasoning": "Shape, grammar and the lowercase rule come straight from §8.4; DigestAlgorithm drops #[non_exhaustive] so the shape is exactly §8.4's, as ADR 0002 claims. Choices this spec makes that §8.4 leaves open: a single blake3 constructor (sha256 is parse-only, non_goals); DigestAlgorithm::as_str/FromStr as the one place algorithm names live; serde goes through the Display/FromStr string so the wire form, the text form and the map-key form cannot drift; a second `:` is InvalidEncoding rather than a separate variant, since parsing splits at the first `:` and the encoded part is what is malformed; parse order is separator, algorithm, encoding so the error names the first thing wrong. AC-010 asserts only the positive Copy/Eq/Hash contract; the absence of PartialOrd/Ord/Default is not asserted because it cannot be tested without a compile-fail harness, and callers needing deterministic order sort by to_string(). Digest lives in monokl until wisp-contracts exists (ADR 0002)."
 }

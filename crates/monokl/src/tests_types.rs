@@ -1580,8 +1580,8 @@ use crate::types::LineHit;
 
 #[test]
 fn line_hit_field_types_and_derives_pinned() {
-    fn assert_debug_clone_derives<T: std::fmt::Debug + Clone>() {}
-    assert_debug_clone_derives::<LineHit>();
+    fn assert_debug_clone_eq_derives<T: std::fmt::Debug + Clone + PartialEq + Eq>() {}
+    assert_debug_clone_eq_derives::<LineHit>();
 
     let hit = LineHit { line_number: 42, text: "fn foo() {}".into() };
     let LineHit { line_number, text } = hit;

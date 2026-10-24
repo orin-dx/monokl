@@ -276,7 +276,7 @@ pub struct Diagnostic {
 /// A single line matched by the text searcher.
 ///
 /// It is internal and deliberately has no serde derives.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineHit {
     pub line_number: usize,
     pub text: String,

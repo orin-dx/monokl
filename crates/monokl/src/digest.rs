@@ -4,8 +4,23 @@ use std::fmt;
 use std::str::FromStr;
 
 /// The hash algorithm a [`Digest`] was computed with.
+///
+/// The set is closed, so a `match` needs no wildcard arm. Adding an algorithm is a breaking change.
+///
+/// # Examples
+///
+/// ```
+/// use monokl::digest::DigestAlgorithm;
+///
+/// fn hex_len(algorithm: DigestAlgorithm) -> usize {
+///     match algorithm {
+///         DigestAlgorithm::Sha256 => 64,
+///         DigestAlgorithm::Blake3 => 64,
+///     }
+/// }
+/// assert_eq!(hex_len(DigestAlgorithm::Blake3), 64);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum DigestAlgorithm {
     Sha256,
     Blake3,
@@ -32,6 +47,15 @@ pub enum DigestParseError {
 
 impl DigestAlgorithm {
     /// Returns the name used before the `:` in a digest's text form.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monokl::digest::DigestAlgorithm;
+    ///
+    /// assert_eq!(DigestAlgorithm::Blake3.as_str(), "blake3");
+    /// assert_eq!(DigestAlgorithm::Sha256.as_str(), "sha256");
+    /// ```
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -41,6 +65,20 @@ impl DigestAlgorithm {
     }
 }
 
+/// Parses exactly `sha256` or `blake3`; any other spelling, including a different case, is
+/// [`DigestParseError::UnknownAlgorithm`].
+///
+/// # Examples
+///
+/// ```
+/// use monokl::digest::{DigestAlgorithm, DigestParseError};
+///
+/// assert_eq!("blake3".parse(), Ok(DigestAlgorithm::Blake3));
+/// assert_eq!(
+///     "Blake3".parse::<DigestAlgorithm>(),
+///     Err(DigestParseError::UnknownAlgorithm { algorithm: "Blake3".to_string() })
+/// );
+/// ```
 impl FromStr for DigestAlgorithm {
     type Err = DigestParseError;
 
@@ -85,6 +123,17 @@ impl fmt::Display for Digest {
     }
 }
 
+/// Parses `algorithm:hex`, checking the separator, then the algorithm, then the hex. Nothing is trimmed.
+///
+/// # Examples
+///
+/// ```
+/// use monokl::digest::{Digest, DigestParseError};
+///
+/// let text = "blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
+/// assert_eq!(text.parse(), Ok(Digest::blake3(b"")));
+/// assert_eq!("md5:zz".parse::<Digest>(), Err(DigestParseError::UnknownAlgorithm { algorithm: "md5".to_string() }));
+/// ```
 impl FromStr for Digest {
     type Err = DigestParseError;
 
@@ -131,8 +180,9 @@ impl<'de> serde::Deserialize<'de> for Digest {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
+    use proptest::prelude::*;
     use rstest::rstest;
 
     use super::*;
@@ -140,11 +190,25 @@ mod tests {
     const EMPTY_BLAKE3: &str = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
     const HEX64: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    fn ascending_bytes() -> [u8; 32] {
+        std::array::from_fn(|i| u8::try_from(i).unwrap())
+    }
+
     #[test]
     fn blake3_of_empty_input_matches_the_published_digest() {
         let d = Digest::blake3(b"");
         assert_eq!(d, Digest { algorithm: DigestAlgorithm::Blake3, bytes: *blake3::hash(b"").as_bytes() });
         assert_eq!(d.to_string(), format!("blake3:{EMPTY_BLAKE3}"));
+    }
+
+    /// The official BLAKE3 test vectors hash the bytes `i % 251` for `i` in `0..len`.
+    #[rstest]
+    #[case(0, "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")]
+    #[case(1, "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213")]
+    #[case(1025, "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444")]
+    fn blake3_matches_the_official_test_vectors(#[case] len: usize, #[case] hex: &str) {
+        let input: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
+        assert_eq!(Digest::blake3(&input).to_string(), format!("blake3:{hex}"));
     }
 
     #[test]
@@ -154,11 +218,23 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Digest { algorithm: DigestAlgorithm::Blake3, bytes: [0; 32] })]
-    #[case(Digest { algorithm: DigestAlgorithm::Sha256, bytes: [0xff; 32] })]
-    #[case(Digest::blake3(b"monokl"))]
-    fn display_and_parse_round_trip(#[case] d: Digest) {
+    fn display_and_parse_round_trip(
+        #[values(DigestAlgorithm::Blake3, DigestAlgorithm::Sha256)] algorithm: DigestAlgorithm,
+        #[values([0x00; 32], [0xff; 32], Digest::blake3(b"monokl").bytes, ascending_bytes())] bytes: [u8; 32],
+    ) {
+        let d = Digest { algorithm, bytes };
         assert_eq!(d.to_string().parse::<Digest>(), Ok(d));
+    }
+
+    proptest! {
+        #[test]
+        fn any_digest_round_trips_through_its_text_form(
+            bytes in any::<[u8; 32]>(),
+            algorithm in prop_oneof![Just(DigestAlgorithm::Blake3), Just(DigestAlgorithm::Sha256)],
+        ) {
+            let d = Digest { algorithm, bytes };
+            prop_assert_eq!(d.to_string().parse::<Digest>(), Ok(d));
+        }
     }
 
     #[rstest]
@@ -168,15 +244,46 @@ mod tests {
         assert_eq!(d.to_string(), format!("{algorithm}:{}", "ab".repeat(32)));
     }
 
+    #[rstest]
+    #[case(DigestAlgorithm::Sha256, "sha256")]
+    #[case(DigestAlgorithm::Blake3, "blake3")]
+    fn algorithm_names_round_trip(#[case] algorithm: DigestAlgorithm, #[case] name: &str) {
+        assert_eq!(algorithm.as_str(), name);
+        assert_eq!(algorithm.as_str().parse::<DigestAlgorithm>(), Ok(algorithm));
+    }
+
+    #[test]
+    fn algorithm_names_are_case_sensitive() {
+        assert_eq!(
+            "Blake3".parse::<DigestAlgorithm>(),
+            Err(DigestParseError::UnknownAlgorithm { algorithm: "Blake3".to_string() })
+        );
+    }
+
     #[test]
     fn bare_hex_without_separator_is_rejected() {
         assert_eq!(EMPTY_BLAKE3.parse::<Digest>(), Err(DigestParseError::MissingSeparator));
     }
 
     #[rstest]
+    #[case(String::new(), DigestParseError::MissingSeparator)]
+    #[case(HEX64.to_string(), DigestParseError::MissingSeparator)]
+    #[case("md5:zz".to_string(), DigestParseError::UnknownAlgorithm { algorithm: "md5".to_string() })]
+    #[case(format!(":{HEX64}"), DigestParseError::UnknownAlgorithm { algorithm: String::new() })]
+    #[case(format!(" blake3:{HEX64}"), DigestParseError::UnknownAlgorithm { algorithm: " blake3".to_string() })]
+    #[case(format!("blake3:{HEX64}\n"), DigestParseError::InvalidEncoding)]
+    fn parse_checks_separator_then_algorithm_then_encoding_without_trimming(
+        #[case] input: String,
+        #[case] expected: DigestParseError,
+    ) {
+        assert_eq!(input.parse::<Digest>(), Err(expected));
+    }
+
+    #[rstest]
     #[case("md5")]
+    #[case("sha512")]
     #[case("BLAKE3")]
-    #[case("")]
+    #[case("Sha256")]
     fn unknown_or_miscased_algorithm_is_rejected(#[case] algorithm: &str) {
         assert_eq!(
             format!("{algorithm}:{HEX64}").parse::<Digest>(),
@@ -185,40 +292,91 @@ mod tests {
     }
 
     #[rstest]
-    #[case(&HEX64[..63])]
-    #[case(&format!("{HEX64}0"))]
-    #[case("")]
-    #[case(&format!("A{}", &HEX64[1..]))]
-    #[case(&format!("g{}", &HEX64[1..]))]
-    #[case(&format!("ab:{}", &HEX64[3..]))]
-    fn malformed_hex_is_rejected(#[case] hex: &str) {
-        assert_eq!(format!("blake3:{hex}").parse::<Digest>(), Err(DigestParseError::InvalidEncoding));
+    fn malformed_hex_is_rejected(
+        #[values("blake3", "sha256")] algorithm: &str,
+        #[values(
+            HEX64[..63].to_string(),
+            format!("{HEX64}0"),
+            String::new(),
+            format!("A{}", &HEX64[1..]),
+            format!("g{}", &HEX64[1..]),
+            "\u{e9}".repeat(32),
+            format!("ab:{}", &HEX64[3..]),
+        )]
+        hex: String,
+    ) {
+        assert_eq!(format!("{algorithm}:{hex}").parse::<Digest>(), Err(DigestParseError::InvalidEncoding));
     }
 
     #[test]
     fn serde_uses_the_display_string() {
         let d = Digest::blake3(b"");
-        let json = serde_json::to_string(&d).unwrap();
-        assert_eq!(json, format!("\"blake3:{EMPTY_BLAKE3}\""));
-        assert_eq!(serde_json::from_str::<Digest>(&json).unwrap(), d);
+        let literal = "\"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\"";
+        assert_eq!(serde_json::to_string(&d).unwrap(), literal);
+        assert_eq!(serde_json::from_str::<Digest>(literal).unwrap(), d);
+        assert_eq!(serde_json::from_slice::<Digest>(literal.as_bytes()).unwrap(), d);
+        assert_eq!(serde_json::from_reader::<_, Digest>(literal.as_bytes()).unwrap(), d);
+        assert_eq!(serde_json::from_value::<Digest>(serde_json::to_value(d).unwrap()).unwrap(), d);
     }
 
     #[rstest]
-    #[case(&format!("\"{EMPTY_BLAKE3}\""))]
-    #[case(&format!("\"md5:{HEX64}\""))]
-    #[case(&format!("\"blake3:{}\"", HEX64.to_uppercase()))]
+    #[case(String::new(), DigestParseError::MissingSeparator)]
+    #[case(EMPTY_BLAKE3.to_string(), DigestParseError::MissingSeparator)]
+    #[case(format!("md5:{HEX64}"), DigestParseError::UnknownAlgorithm { algorithm: "md5".to_string() })]
+    #[case(format!("BLAKE3:{HEX64}"), DigestParseError::UnknownAlgorithm { algorithm: "BLAKE3".to_string() })]
+    #[case(format!("blake3:{}", &HEX64[..63]), DigestParseError::InvalidEncoding)]
+    #[case(format!("blake3:{}", HEX64.to_uppercase()), DigestParseError::InvalidEncoding)]
+    fn deserialize_reports_the_parse_error(#[case] text: String, #[case] expected: DigestParseError) {
+        let json = serde_json::to_string(&text).unwrap();
+        let err = serde_json::from_str::<Digest>(&json).unwrap_err();
+        assert!(err.to_string().contains(&expected.to_string()), "{err} does not contain {expected}");
+    }
+
+    #[rstest]
     #[case("null")]
-    #[case("42")]
+    #[case("1")]
     #[case("true")]
     #[case("[]")]
     #[case("{}")]
-    fn deserialize_rejects_invalid_digests_and_non_strings(#[case] json: &str) {
+    fn deserialize_rejects_non_strings(#[case] json: &str) {
         assert!(serde_json::from_str::<Digest>(json).is_err(), "accepted {json}");
     }
 
     #[test]
+    fn digest_keyed_map_round_trips_through_json() {
+        let (a, b) = (Digest::blake3(b"a"), Digest::blake3(b"b"));
+        let map = HashMap::from([(a, 1u32), (b, 2u32)]);
+        let value = serde_json::to_value(&map).unwrap();
+        let keys: HashSet<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, HashSet::from([a.to_string().as_str(), b.to_string().as_str()]));
+        assert_eq!(serde_json::from_value::<HashMap<Digest, u32>>(value).unwrap(), map);
+    }
+
+    #[test]
+    fn digest_keyed_map_rejects_an_invalid_key() {
+        assert!(serde_json::from_str::<HashMap<Digest, u32>>(r#"{"deadbeef":1}"#).is_err());
+    }
+
+    #[test]
+    fn same_bytes_under_different_algorithms_are_different_digests() {
+        let blake3 = Digest { algorithm: DigestAlgorithm::Blake3, bytes: [0xab; 32] };
+        let sha256 = Digest { algorithm: DigestAlgorithm::Sha256, bytes: [0xab; 32] };
+        assert_ne!(blake3, sha256);
+        assert_ne!(blake3.to_string(), sha256.to_string());
+        assert_eq!(HashSet::from([blake3, sha256]).len(), 2);
+    }
+
+    #[test]
     fn equal_digests_dedupe_as_hash_keys() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<Digest>();
+        assert_copy::<DigestAlgorithm>();
         let set: HashSet<Digest> = [Digest::blake3(b"x"), Digest::blake3(b"x"), Digest::blake3(b"y")].into();
         assert_eq!(set.len(), 2);
+        let mut map = HashMap::new();
+        map.insert(Digest::blake3(b"x"), 1);
+        map.insert(Digest::blake3(b"x"), 2);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[&Digest::blake3(b"x")], 2);
     }
 }
