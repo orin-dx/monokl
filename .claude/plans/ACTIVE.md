@@ -344,7 +344,32 @@ instruction. Awaiting that instruction.
 
 ---
 
+## Phases (agreed 2026-10-24)
+
+Ordered by payoff. The first goal is a working end-to-end `monokl search`; it needs neither import resolution nor a
+cache, because search only parses the files text search already matched.
+
+| Phase | Goal | Contents |
+| --- | --- | --- |
+| 0 | Clear the stack | Merge the open PRs in order and reset the main checkout. The owner merges. |
+| 1 | Runnable `monokl search` | TS analyzer part 1 (parse and extract, minimal `TsAnalyzer`); registry and core search pipeline; budget and response assembly; CLI (`main.rs`, clap) and black-box tests. With it: property tests against reference implementations, `#[non_exhaustive]` on enums that will grow. |
+| 2 | Harden | ADR 0003 architecture test (`core` never imports `agent`, no hash maps in output types); fuzz targets (query parser, `Digest`) with a CI compile check; a capacity-limits note for the walk, parse and rank; per-shape fixture tests; the global-git-excludes test (`temp-env`); decode our TOON with the reference decoder. |
+| 3 | Rest of the commands, and speed | `symbols`, `extract`; import resolution (typed outcomes) and `dependents`/`imports` with the indices; in-memory cache and `persist::v1` keyed by build; deterministic work-count tests and a benchmark. |
+| 4 | Ready to release | Flip `publish = false`, changeset, `CARGO_REGISTRY_TOKEN`; semver check; README quickstart doctest; `schemaVersion` on JSON output; weekly scorecard on pinned repos; spec §1/§2/§27/§28 catch-up; refresh SPEC-010; review SPEC-003; optional circular-imports diagnostic via `michi-graph`. |
+
+Deferred: MCP server, michi-pipeline, napi packaging, the Rust and other-language analyzers.
+
+Stack at the start of phase 1 (open PRs): #5 specs → #6 `Digest` → #7 ranking → #8 text search (+ gate fixes) → #10
+analyzer contract; #9 (lint and CI practices) and #11 (michi 0.7.1) branch from `main`.
+
 ## Pipeline Protocol (follow for every track, in order)
+
+**Revised 2026-10-24 (owner): scale the ceremony to the risk.** The default is a short spec (about 10 criteria or
+fewer), tests first, `just ci`, and a normal code review. Run the full gate chain below only for a spec with real
+design risk or one that changes a contract other tracks build on. Record decisions that matter for the future in
+`docs/spec/05-research-and-decisions.md` (a few bullets, with the rejected alternative); do not add records, helper
+harnesses or review rounds that carry no value. Commits and PRs are made on the owner's instruction, which for phase
+1 onward covers logical-chunk commits and stacked draft PRs.
 
 1. `canon:canon-drafter` — write spec@1 (fed by a `requirement@1` and, where the answer isn't
    already fully researched elsewhere in `docs/spec/`, a `trace`-produced `research-report@1`)
