@@ -519,3 +519,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod proptests;

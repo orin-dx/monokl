@@ -252,3 +252,6 @@ mod tests {
         assert_eq!(tokenize_source(input), expected);
     }
 }
+
+#[cfg(test)]
+mod proptests;

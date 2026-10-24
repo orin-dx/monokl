@@ -11,6 +11,7 @@ use crate::error::Result;
 ///
 /// Variants are ordered as declared, so a `BTreeSet<LanguageId>` iterates in that order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum LanguageId {
     TypeScript,
     Rust,
@@ -52,6 +53,7 @@ pub struct AnalyzerCapabilities {
 /// `Dependencies` fills only `dependencies`. `Structural` adds `symbols` and `exports`. `Full` adds `blocks` and the
 /// per-language entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnalysisProfile {
     Dependencies,
     Structural,
