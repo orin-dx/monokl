@@ -187,8 +187,15 @@ impl ToonProjection<7> for crate::types::SearchResponse {
             .collect()
     }
 
+    fn toon_total_count(&self) -> Option<usize> {
+        self.truncated.then_some(self.total_blocks_before_truncation)
+    }
+
     fn toon_hints(&self) -> Vec<michi::Hint> {
-        vec![michi::Hint::new("use extract with file/lineStart/lineEnd to retrieve a row's actual code content")]
+        let marker = self.truncation_marker.as_deref().map(michi::Hint::new);
+        let extract =
+            michi::Hint::new("use extract with file/lineStart/lineEnd to retrieve a row's actual code content");
+        marker.into_iter().chain(std::iter::once(extract)).collect()
     }
 }
 
@@ -306,6 +313,46 @@ mod projection_tests {
                 "\nhelp[1]: use extract with file/lineStart/lineEnd to retrieve a row's actual code content"
             ),
             "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn render_projection_budgeted_search_response_reports_the_cut() {
+        use crate::budget::{Budget, apply_budget};
+        use crate::types::{CodeBlock, RankedBlock, SymbolKind};
+        use camino::Utf8PathBuf;
+
+        let ranked: Vec<RankedBlock> = (1..=3)
+            .map(|rank| RankedBlock {
+                block: CodeBlock {
+                    file: Utf8PathBuf::from(format!("src/f{rank}.rs")),
+                    line_start: rank,
+                    line_end: rank + 1,
+                    node_kind: SymbolKind::Function,
+                    code: "fn a() {}".to_string(),
+                    symbol_signature: None,
+                    matched_lines: Vec::new(),
+                    matched_keywords: Vec::new(),
+                },
+                bm25_score: 1.0,
+                coverage_boost: 0.0,
+                node_type_boost: 0.0,
+                final_score: 0.5,
+                rank,
+                parent_context: None,
+            })
+            .collect();
+        let budget = Budget { max_results: 2, ..Budget::default() };
+
+        let rendered = render_projection(&apply_budget(ranked, 3, &budget, Vec::new())).expect("must render");
+        assert_eq!(
+            rendered,
+            "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n  \
+             src/f1.rs,1,2,function,null,1,0.5\n  \
+             src/f2.rs,2,3,function,null,2,0.5\n\
+             totalCount: 3\n\
+             help[2]: showing 2 of 3; refine the query with +term or -term,\
+             use extract with file/lineStart/lineEnd to retrieve a row's actual code content"
         );
     }
 
