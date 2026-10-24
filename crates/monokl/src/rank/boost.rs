@@ -30,7 +30,7 @@ pub fn coverage_boost(block: &CodeBlock) -> f64 {
         return 0.0;
     }
     let lines = block.line_start..=block.line_end;
-    let inside = block.matched_lines.iter().filter(|line| lines.contains(line)).count();
+    let inside = block.matched_lines.iter().filter(|line| lines.contains(*line)).count();
     round6(as_f64(inside) / as_f64(block.matched_lines.len()))
 }
 
