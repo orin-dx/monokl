@@ -399,17 +399,17 @@ this rigor level, not one sitting.
 | 8 | Text search | §7 | **IMPLEMENTED** — `SPEC-013.json`, `text_search.rs`; decisions in 05 §18 |
 | 9 | Ranking (BM25/boost/tokenize) | §8 | **IMPLEMENTED** — `SPEC-012.json`, `rank/`, total-order tie-break |
 | 10 | Dedup | §9 | **IMPLEMENTED** — `SPEC-012.json`, `dedup.rs` |
-| 11 | Budget | §10 | Not started — resolves the uncapped `max_results`/`max_tokens` gap |
+| 11 | Budget | §10 | **IMPLEMENTED** — `SPEC-017.json`, `budget.rs` (agent layer; Part 8) |
 | 12 | `LanguageAnalyzer` trait + capability model | §11 | **IMPLEMENTED** — `SPEC-014.json`, `analysis/lang.rs` |
 | 13 | `Digest` (was `ContentHash`) | §12, Part 8 §8.4 | **IMPLEMENTED** — `SPEC-011.json` (corrected to `Digest`), `crates/monokl/src/digest.rs`, ADR 0002 |
 | 14 | `FileAnalysis` | §13 | **IMPLEMENTED** — `SPEC-014.json`, `analysis/file_analysis.rs` |
 | 15 | `NodeKind` | §14 | Not started |
 | 16 | In-memory cache | §15 | Not started — resolves cache-architecture.md's Tier-1 content-hash gap |
 | 17 | Disk persistence | §16 | Not started — heavily overlaps SPEC-001/SPEC-002, reconcile when drafted |
-| 18 | `TsAnalyzer` | §17 | Not started — "most important" module per the spec's own framing; likely needs further splitting |
+| 18 | `TsAnalyzer` | §17 | **PART 1 of 3** — parse and extract, minimal `TsAnalyzer` (`SPEC-015.json`, `analysis/ts/`); import resolution and the full capability set are next |
 | 19 | `WorkspaceEnricher` | §18 | Not started |
 | 20 | Indices (`FileIdx`, `ImportGraph`, `SymbolIndex`, `WorkspaceIndex`) | §19 | Not started |
-| 21 | CLI / pipeline / main.rs | §20-22 | Not started |
+| 21 | CLI / pipeline / main.rs | §20-22 | **PART** — `monokl search` (`SPEC-016.json` pipeline, `cli.rs`, `main.rs`); `symbols`, `extract`, `dependents` are phase 3 |
 | 22 | napi FFI boundary | §26 | Not started |
 
 Design tenets/lints (§29) is project-wide policy, not really spec@1-shaped — handle as

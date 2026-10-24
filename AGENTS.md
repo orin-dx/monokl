@@ -24,7 +24,7 @@ Run one cargo command at a time; parallel cargo processes serialize on the `targ
 
 ## Current state
 
-One crate, `crates/monokl`, with the error types, core data types, query language and michi output adapter. Modules are declared in `lib.rs` as they are implemented, not ahead of time, and a dependency is listed only once code uses it. [`.claude/plans/ACTIVE.md`](.claude/plans/ACTIVE.md) tracks what's next.
+One crate, `crates/monokl`, with the error types, core data types, query language, text search, ranking, the TypeScript analyzer (parse and extract), the search pipeline and `monokl search`. Modules are declared in `lib.rs` as they are implemented, not ahead of time, and a dependency is listed only once code uses it. [`.claude/plans/ACTIVE.md`](.claude/plans/ACTIVE.md) tracks what's next.
 
 ## Non-negotiables
 
