@@ -1,0 +1,30 @@
+{
+  "id": "SPEC-017",
+  "spec_file_path": ".claude/specs/SPEC-017.json",
+  "purpose": "Turn a fully ranked, uncapped result into the budgeted SearchResponse the CLI prints, in the agent layer and never in core (docs/spec/08-library-session-api.md sections 7.5 and 9.1; 01-core-architecture.md section 10).",
+  "scope": "crates/monokl/src/budget.rs behind the cli feature: Budget, apply_budget, count_tokens, and the SearchResponse truncation rendering in output/agent.rs. Takes plain arguments; does not call the search pipeline.",
+  "non_goals": [
+    "The search pipeline and any ranking or re-ranking.",
+    "Budgeting other commands (symbols, dependents) or allocating one budget across a batch of operations.",
+    "Skipping an oversized block to keep filling with later smaller ones; the kept results are always a prefix in rank order.",
+    "Splitting or shortening a single block."
+  ],
+  "api_surface": [
+    { "name": "Budget", "signature": "pub struct Budget { pub max_results: usize, pub max_tokens: usize, pub max_bytes: usize }", "description": "The three caps. Default is 50 results, 20,000 tokens, 2 MiB.", "error_conditions": [] },
+    { "name": "apply_budget", "signature": "pub fn apply_budget(ranked: Vec<RankedBlock>, total_before: usize, budget: &Budget, diagnostics: Vec<Diagnostic>) -> SearchResponse", "description": "Keeps the longest rank-order prefix of blocks that fits all three caps and reports what was cut.", "error_conditions": [] },
+    { "name": "count_tokens", "signature": "pub fn count_tokens(text: &str) -> usize", "description": "Exact o200k_base token count, falling back to the byte length above a byte cap.", "error_conditions": [] }
+  ],
+  "acceptance_criteria": [
+    { "id": "AC-001", "criterion": "Empty input returns no results, truncated false, no marker, zero bytes and tokens, and passes diagnostics through unchanged.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-002", "criterion": "Blocks totalling exactly max_results, max_bytes or max_tokens are all kept with truncated false; one more block over any one limit keeps the prefix before it and sets truncated true.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-003", "criterion": "When several limits would trip, the cut falls at the earliest block that breaks any limit, and results stay in the input order.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-004", "criterion": "A first block larger than max_bytes yields zero results, truncated true and a marker; total_bytes and total_tokens are 0.", "is_error_case": true, "judgment_call": false },
+    { "id": "AC-005", "criterion": "total_bytes is the summed code length and total_tokens the exact o200k_base count of the kept blocks; the byte-bound shortcut and the tokenizer give the same count for the same blocks.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-006", "criterion": "A truncated response has total_blocks_before_truncation equal to total_before and a marker of the form 'showing K of N; refine the query with +term or -term' built from michi's truncation hint; an untruncated one has none.", "is_error_case": false, "judgment_call": false },
+    { "id": "AC-007", "criterion": "Rendering a truncated SearchResponse through render_projection reports totalCount N and the marker as a help line.", "is_error_case": false, "judgment_call": false }
+  ],
+  "linked_requirement": "REQ-017",
+  "linked_research": "docs/spec/01-core-architecture.md section 10; docs/spec/08-library-session-api.md sections 7.5 and 9.1. No requirement@1 REQ-017 exists.",
+  "revision_note": "2026-10-24: drafted.",
+  "reasoning": "Budgeting is an agent-layer step; core returns ranked results and counts only."
+}
