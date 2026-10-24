@@ -20,9 +20,11 @@ build:
 build-release:
     cargo build --workspace --release --locked
 
-# Run tests with nextest, plus doctests, which nextest does not run
+# Run tests with nextest, plus doctests, which nextest does not run. The default-features pass catches code that only
+# builds because --all-features turned something on.
 test:
     cargo nextest run --workspace --all-features --locked
+    cargo nextest run --workspace --locked
     cargo test --doc --workspace --all-features --locked
 
 # Line coverage; with a threshold, fails below it
@@ -61,6 +63,7 @@ fmt:
 # Documentation build, with warnings (including broken intra-doc links) as errors
 doc-check:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --locked
 
 # Licenses, advisories, bans and sources
 deny:
