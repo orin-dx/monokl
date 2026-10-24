@@ -5,6 +5,8 @@
 pub mod analysis;
 #[cfg(feature = "cli")]
 pub mod budget;
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod dedup;
 pub mod digest;
 pub mod error;
