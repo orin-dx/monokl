@@ -17,7 +17,10 @@ name = "monokl"
 path = "src/lib.rs"
 
 [features]
-default = ["cli"]
+default = ["cli", "lang-ts"]
+
+# The TypeScript/JavaScript analyzer, built on OXC.
+lang-ts = ["dep:oxc_parser", "dep:oxc_ast", "dep:oxc_ast_visit","dep:oxc_span", "dep:oxc_allocator"]
 
 # Agent-facing output via michi, and clap's ValueEnum on CLI-selectable types.
 cli = ["dep:clap", "dep:michi", "miette"]
@@ -39,6 +42,11 @@ thiserror.workspace = true
 clap = { workspace = true, optional = true }
 miette = { workspace = true, optional = true }
 michi = { workspace = true, optional = true }
+oxc_allocator = { workspace = true, optional = true }
+oxc_ast = { workspace = true, optional = true }
+oxc_ast_visit = { workspace = true, optional = true }
+oxc_parser = { workspace = true, optional = true }
+oxc_span = { workspace = true, optional = true }
 
 [lints]
 workspace = true
