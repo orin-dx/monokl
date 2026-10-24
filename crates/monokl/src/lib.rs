@@ -9,6 +9,7 @@ pub mod error;
 pub mod file_io;
 #[cfg(feature = "cli")]
 pub mod output;
+pub mod pipeline;
 /// `Lexer` and `Token` are internal to `query::lexer`. These doctests compile as an external crate would, so
 /// they prove the types are unreachable through the public path.
 ///
