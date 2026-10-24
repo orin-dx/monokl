@@ -29,6 +29,7 @@ miette = ["dep:miette", "michi?/miette"]
 blake3.workspace = true
 camino.workspace = true
 grep-regex.workspace = true
+grep-searcher.workspace = true
 ignore.workspace = true
 regex.workspace = true
 serde.workspace = true
@@ -43,4 +44,6 @@ michi = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 rstest.workspace = true
+tempfile.workspace = true

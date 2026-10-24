@@ -2,50 +2,145 @@
   "id": "SPEC-013",
   "spec_file_path": ".claude/specs/SPEC-013.json",
   "purpose": "Define monokl's text search -- the first search stage, which finds candidate files and matching lines -- per docs/spec/01-core-architecture.md Section 7, resolving the determinism and limit questions docs/architecture/query-and-ranking.md leaves open (#7, #10, #11) under Part 8's rule that core returns uncapped results and reports what any memory ceiling cut (docs/spec/08-library-session-api.md §7.3-§7.5).",
-  "scope": "crates/monokl/src/text_search.rs: TextSearchOptions, TextSearchResult, search_files, and the private test-path classifier. It walks a root, searches every file for any of the given regex patterns, and returns matching lines per file.",
+  "scope": "crates/monokl/src/text_search.rs: TextSearchOptions and its Default impl, DEFAULT_MAX_FILES, TextSearchResult, search_files, and the private test-path classifier. It walks a root directory, searches every regular file under it for any of the given regex patterns, and returns matching lines per file plus what it could not search. Depends on SPEC-006 LineHit deriving PartialEq and Eq.",
   "non_goals": [
     "Boolean evaluation of required and excluded terms, block retrieval, ranking and budgeting (Section 20 stages 4-8). They consume this stage's result in the search pipeline track.",
     "Query parsing. Open questions #8 (`+regex:` drops both modifier and regex semantics) and #16 (no per-term length cap) belong to the query language (SPEC-009) and are not changed here.",
     "Per-term highlighting regexes (Section 20 stage 5). Finding #7's second compile path is the pipeline track's; it must reuse this stage's failure policy (AC-004).",
     "Parallel walking. The walk is single-threaded so its order is deterministic; parallelism can come later if it keeps AC-005.",
-    "A diagnostics type. Unreadable files and non-UTF-8 paths are returned as data; the pipeline turns them into diagnostics."
+    "A diagnostics type. Unreadable paths, non-UTF-8 paths and pathless walk errors are returned as data; the pipeline turns them into diagnostics.",
+    "Part 8's max_bytes_per_op. This stage bounds only the number of stored file entries (AC-006); byte budgets are applied downstream.",
+    "Pipeline boundary, for the search-pipeline spec to own: files_total and ceiling_hit count files, not Part 8 items. That spec must map ceiling_hit to OpCost.ceiling_hit, each unreadable path to Diagnostic { kind: Skipped, path }, and a non-zero non_utf8_paths or walk_errors_without_path to one Diagnostic each, with serde round-trip criteria for those wire shapes. Its excluded-terms pass must not use a ceiling that drops excluded files, or must check ceiling_hit before trusting an exclusion."
   ],
   "api_surface": [
     {
       "name": "TextSearchOptions",
       "signature": "#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct TextSearchOptions { pub allow_tests: bool, pub respect_ignore_files: bool, pub max_files: usize }",
-      "description": "allow_tests: include test files. respect_ignore_files: honour .gitignore, .ignore and hidden-file rules (ignore's standard filters). max_files: memory ceiling on the number of files whose hits are kept. Default: allow_tests false, respect_ignore_files true, max_files 100_000 (Part 8's Limits default for items).",
+      "description": "allow_tests: include test files (AC-008). respect_ignore_files: honour hidden-file filtering and .gitignore/.ignore files inside root only (AC-009). max_files: memory ceiling on the number of file entries stored in hits (AC-006). Default: allow_tests false, respect_ignore_files true, max_files DEFAULT_MAX_FILES = 100_000 (Part 8's Limits default for items, provisional until Part 8 §13 benchmarks). impl Default for TextSearchOptions is public and gives allow_tests false, respect_ignore_files true and max_files DEFAULT_MAX_FILES.",
+      "error_conditions": []
+    },
+    {
+      "name": "DEFAULT_MAX_FILES",
+      "signature": "pub const DEFAULT_MAX_FILES: usize = 100_000;",
+      "description": "The default max_files, public so callers mapping Part 8 Limits can refer to it.",
       "error_conditions": []
     },
     {
       "name": "TextSearchResult",
-      "signature": "#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct TextSearchResult { pub hits: BTreeMap<Utf8PathBuf, Vec<LineHit>>, pub files_total: u64, pub ceiling_hit: bool, pub unreadable: Vec<Utf8PathBuf>, pub non_utf8_paths: u64 }",
-      "description": "hits: kept files, each with its matching lines in line order. files_total: every file with at least one match, kept or not. ceiling_hit: files_total exceeded max_files. unreadable: files that could not be read or decoded, in walk order. non_utf8_paths: how many paths were skipped because they are not UTF-8.",
+      "signature": "#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct TextSearchResult { pub hits: BTreeMap<Utf8PathBuf, Vec<LineHit>>, pub files_total: u64, pub ceiling_hit: bool, pub unreadable: Vec<Utf8PathBuf>, pub non_utf8_paths: u64, pub walk_errors_without_path: u64 }",
+      "description": "hits: kept files keyed by root.join(path below root), each with its matching lines in line order. files_total: every file with at least one matching line, kept or not. ceiling_hit: files_total > max_files. unreadable: paths keyed like hits, in walk order, each listed once -- files that could not be read or whose matching lines are not UTF-8 (AC-011), and every UTF-8 path a walk error below root names: directories that could not be listed, ignore files that could not be read or parsed (AC-012). non_utf8_paths: regular files skipped because their path is not UTF-8 (AC-013). walk_errors_without_path: walk errors below root that name no UTF-8 path (AC-012).",
       "error_conditions": []
     },
     {
       "name": "search_files",
       "signature": "pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions) -> crate::error::Result<TextSearchResult>",
-      "description": "Searches every file under root for lines matching any pattern, case-insensitively.",
-      "error_conditions": ["MonoklError::RegexBuild for any pattern that does not compile", "MonoklError::Walk when the walk yields an error entry, such as a missing root"]
+      "description": "Searches every regular file under root for lines matching any pattern, as regexes, case-insensitively with Unicode case folding. Checks run in this order: pattern compilation, root, empty patterns, walk.",
+      "error_conditions": [
+        "MonoklError::RegexBuild when any pattern fails to compile on its own, or the patterns fail to compile together; checked before root is touched (AC-004)",
+        "MonoklError::Walk { path: root, .. } when root does not exist, is not a directory, or cannot be listed, including when patterns is empty (AC-003, AC-012). Errors below root never fail the search."
+      ]
     }
   ],
   "acceptance_criteria": [
-    { "id": "AC-001", "criterion": "In a temp directory with a.ts containing lines \"alpha\", \"beta\", \"ALPHA beta\", search_files(root, [\"alpha\"], default) returns hits {a.ts: [LineHit{1, \"alpha\"}, LineHit{3, \"ALPHA beta\"}]} (matching is case-insensitive; line numbers are 1-based), files_total 1, ceiling_hit false.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-002", "criterion": "Patterns are alternatives: [\"alpha\", \"gamma\"] matches lines containing either. Line text has its trailing \"\\n\" or \"\\r\\n\" removed, so a CRLF file yields text without a trailing \"\\r\".", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-003", "criterion": "An empty pattern slice returns TextSearchResult::default() without walking, rather than joining to an empty regex that matches every line.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 joins patterns with `|`; an empty join is the empty regex, which matches everything. The search pipeline already returns early on an empty plan, so this only removes a footgun." },
-    { "id": "AC-004", "criterion": "If any pattern fails to compile (e.g. \"(\"), search_files returns Err(MonoklError::RegexBuild) before walking -- the whole query fails, never a silent drop of the bad term. This is the one failure policy for query regexes; any later per-term compile of the same patterns must fail the same way.", "is_error_case": true, "judgment_call": true, "rationale": "Resolves finding #7: Section 20 fails here but silently drops the same pattern in stage 5. Fail-fast is chosen because a dropped term silently changes the query's meaning." },
-    { "id": "AC-005", "criterion": "The walk visits entries sorted by file name, so for the same tree the hits map, unreadable list and which files are kept under the ceiling are identical across runs and machines.", "is_error_case": false, "judgment_call": true, "rationale": "Resolves finding #10: Section 7's unsorted walk made the candidate set above the cap filesystem-order-dependent." },
-    { "id": "AC-006", "criterion": "max_files is a memory ceiling, not a stop: once max_files files with matches are kept, later matching files are still searched and counted in files_total but their hits are not stored, and ceiling_hit is true. With max_files 2 and 3 matching files a.ts, b.ts, c.ts, hits holds a.ts and b.ts, files_total is 3 and ceiling_hit is true; with max_files 3, ceiling_hit is false. max_files 0 keeps no hits but still counts.", "is_error_case": false, "judgment_call": true, "rationale": "Part 8 §7.3-§7.4: core applies only a memory ceiling and always reports the pre-ceiling total. Section 7's `break` lost the total and, with an unsorted walk, made the kept set arbitrary." },
-    { "id": "AC-007", "criterion": "Files with no matching line never appear in hits and do not count toward files_total or max_files.", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-008", "criterion": "With allow_tests false, a file is excluded when its path relative to root (with a leading '/') contains /__tests__/, /test/, /tests/ or /spec/, or ends with .test.ts, .test.tsx, .test.js, .spec.ts, .spec.tsx or .spec.js. The root's own path is never considered, so searching a root located at /home/me/test/project still finds src/a.ts. With allow_tests true nothing is excluded for being a test.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 checks the absolute path, so a repository checked out under any test/ or spec/ directory would have every file excluded." },
-    { "id": "AC-009", "criterion": "With respect_ignore_files true, a file matched by a .gitignore or .ignore in the tree, and hidden files, are not searched; with it false they are. (Tests create the .ignore file, which ignore honours without a git repository.)", "is_error_case": false, "judgment_call": false },
-    { "id": "AC-010", "criterion": "A file containing a NUL byte is treated as binary and skipped: it appears in neither hits nor unreadable and is not counted.", "is_error_case": false, "judgment_call": true, "rationale": "Section 7 has no binary detection; ripgrep's convention (stop at the first NUL) keeps binary files out of results without reporting them as errors." },
-    { "id": "AC-011", "criterion": "A text file that fails to decode as UTF-8 in a matching line, or cannot be read, is listed in unreadable and contributes no hits; the search continues and returns Ok.", "is_error_case": true, "judgment_call": true, "rationale": "Section 7 logged and continued; the result now carries the paths so the pipeline can report them, since core does not log." },
-    { "id": "AC-012", "criterion": "A root that does not exist returns Err(MonoklError::Walk { path: root, .. }), with path equal to the root argument.", "is_error_case": true, "judgment_call": false },
-    { "id": "AC-013", "criterion": "Non-UTF-8 paths are skipped and counted in non_utf8_paths (tested only on platforms that allow creating one, i.e. not macOS or Windows).", "is_error_case": false, "judgment_call": false }
+    {
+      "id": "AC-001",
+      "criterion": "In a temp directory with a.ts containing lines \"alpha\", \"beta\", \"ALPHA beta\", search_files(root, [\"alpha\"], default) returns hits {root.join(\"a.ts\"): [LineHit{1, \"alpha\"}, LineHit{3, \"ALPHA beta\"}]} (matching is case-insensitive; line numbers are 1-based), files_total 1, ceiling_hit false, and every other field at its default. Keys in hits and unreadable are root.join(path below root).",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-002",
+      "criterion": "Patterns are regexes and alternatives: [\"alpha\", \"gamma\"] matches lines containing either; [\"a.c\"] matches \"abc\" and \"a.c\" but not \"ac\". Case-insensitivity uses Unicode simple case folding: [\"café\"] matches \"CAFÉ\" and not \"cafe\". Line text has one trailing \"\\n\" or \"\\r\\n\" removed: a CRLF file yields text without a trailing \"\\r\", and a \"\\r\" not followed by \"\\n\" stays in the text (\"alpha\\rbeta\\n\" yields \"alpha\\rbeta\"). Each pattern is matched against exactly that text (the line without its one terminator), never the terminator: [\"^alpha$\"] matches the line \"alpha\" in an LF file (\"alpha\\n\") and in a CRLF file (\"alpha\\r\\n\"), and does not match \"alpha beta\"; [\"^$\"] on \"alpha\\r\\n\\r\\n\" matches only line 2; [\"\\\\r\"] does not match \"alpha\\r\\n\"; [\"^alpha\\\\r$\"] matches \"alpha\\r\\r\\n\" (text \"alpha\\r\") and \"alpha\\r\" with no terminator at end of file; [\"^a.c$\"] matches \"a\\rc\\r\\n\" and [\"^beta\"] does not match \"alpha\\rbeta\\r\\n\" (a lone \"\\r\" is ordinary content, not a line boundary). [\"\\\\n\"] compiles and matches no line, so search_files(root, [\"\\\\n\"], default) returns Ok with every field at its default when root holds only text files. No byte-order mark is decoded or removed: a UTF-8 BOM stays at the start of line 1's text, so [\"^alpha\"] does not match line 1 of \"\\u{feff}alpha\\n\" and [\"alpha\"] reports its text as \"\\u{feff}alpha\".",
+      "is_error_case": false,
+      "judgment_call": true,
+      "rationale": "Owner's delegate, 2026-10-23 (05 §18, minor items): strip exactly one terminator so line text round-trips, and match patterns against that same text so anchors behave alike in LF and CRLF files; a lone \"\\r\" is content, as ripgrep treats it."
+    },
+    {
+      "id": "AC-003",
+      "criterion": "An empty pattern slice means nothing to search: after root passes the AC-012 checks, search_files(root, [], default) returns Ok(TextSearchResult::default()) without walking (a root holding an unparsable .gitignore still yields an empty unreadable). Root is checked first: search_files(nonexistent_root, [], default) and search_files(regular_file, [], default) return Err(MonoklError::Walk { path: root, .. }). A slice containing the empty pattern \"\" matches every line: [\"\"] on a file with lines \"alpha\", \"\", \"beta\" returns all three lines.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18, Walk errors): a bad root fails so a mistyped path is not silently empty, with or without patterns. Section 7's empty join of patterns is the empty regex, which matches every line; an empty slice instead returns nothing, because there is no pattern to search for."
+    },
+    {
+      "id": "AC-004",
+      "criterion": "Each pattern is compiled on its own, then all together, before root is touched; if either fails, search_files returns Err(MonoklError::RegexBuild) and the whole query fails, never a silent drop of the bad term. [\"(\"], [\"alpha\", \"(\"] and [\"(a\", \"b)\"] (halves that would compile once joined with `|`) all fail. search_files(nonexistent_root, [\"(\"], default) returns RegexBuild, not Walk.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18): resolves finding #7."
+    },
+    {
+      "id": "AC-005",
+      "criterion": "Within each directory, entries are visited in ascending byte order of their file name (ignore's sort_by_file_name), and a directory's contents are visited at the directory's own position. For a tree with b.ts, a/x.ts and a.ts (each with a matching line), the walk order is a/x.ts, a.ts, b.ts (\"a\" sorts before \"a.ts\"), so unreadable lists them in that order when all three are unreadable, and with max_files 2 hits holds a/x.ts and a.ts. This order equals Utf8PathBuf's component-wise Ord (the order of hits and of SPEC-012's file tie-break), not the order of the full path strings. For the same tree and the same ignore files inside root, every field of the result is identical across runs and machines.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18 #10). Resolves finding #10: Section 7's unsorted walk made the candidate set above the cap filesystem-order-dependent."
+    },
+    {
+      "id": "AC-006",
+      "criterion": "max_files bounds only the number of file entries stored in hits; it does not bound bytes, lines per file, the unreadable list or file size. Matching files past it are still searched and counted in files_total; the kept files are the first max_files matching files in walk order (AC-005). ceiling_hit is true if and only if files_total > max_files. With max_files 2 and 3 matching files a.ts, b.ts, c.ts: hits holds a.ts and b.ts, files_total 3, ceiling_hit true; with max_files 3 or 4, ceiling_hit false. With max_files 0 and one matching file: hits empty, files_total 1, ceiling_hit true; with no matching file: files_total 0, ceiling_hit false.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18 #11). Part 8 §7.3-§7.4: core applies only a memory ceiling and always reports the pre-ceiling total. Section 7's `break` lost the total and, with an unsorted walk, made the kept set arbitrary."
+    },
+    {
+      "id": "AC-007",
+      "criterion": "Files with no matching line never appear in hits and do not count toward files_total or max_files.",
+      "is_error_case": false,
+      "judgment_call": false
+    },
+    {
+      "id": "AC-008",
+      "criterion": "With allow_tests false, a file is excluded when its path below root, with components joined by '/' on every platform and a leading '/', contains /__tests__/, /test/, /tests/ or /spec/, or ends with .test.ts, .test.tsx, .test.js, .spec.ts, .spec.tsx or .spec.js. Matching is case-sensitive: \"Test/a.ts\", \"src/Spec/a.ts\" and \"src/a.Test.ts\" are not excluded. The root's own path is never considered, so a root at <tmp>/test/project still finds src/a.ts. With allow_tests true nothing is excluded for being a test. An excluded test file is never opened: when it is unreadable, binary or has a non-UTF-8 matching line, it appears in no field of the result. A walk error naming a test-named directory (e.g. root/test with chmod 000) is still recorded per AC-012.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18, found while speccing). Section 7 checks the absolute path, so a repository checked out under any test/ or spec/ directory would have every file excluded."
+    },
+    {
+      "id": "AC-009",
+      "criterion": "With respect_ignore_files true: files and directories below root whose name starts with '.' are skipped; patterns in a .gitignore or .ignore file in root or any directory below it exclude matching paths in that directory's subtree, whether or not a .git directory exists. Never read: .gitignore/.ignore files in directories above root, .git/info/exclude, and the user's global git excludes (core.excludesFile). Example: root/.ignore containing \"b.ts\", root/sub/.gitignore containing \"c.ts\", and a.ts, b.ts, sub/c.ts, sub/d.ts, .hidden.ts, .hidden/e.ts each containing \"alpha\": the default search keeps a.ts and sub/d.ts; with respect_ignore_files false all six are kept. A parent of root holding .ignore or .gitignore with \"b.ts\" (and a .git directory) does not exclude root/b.ts; root/.git/info/exclude containing \"b.ts\" does not exclude root/b.ts.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18): repository-only ignore sources, so the same tree gives the same result on every machine."
+    },
+    {
+      "id": "AC-010",
+      "criterion": "A file in which a NUL byte is read before any read error is binary and skipped: it appears in neither hits nor unreadable, is not counted in files_total, and any hits found before the NUL are discarded. Binary wins over a non-UTF-8 matching line: such a file is still skipped as binary when it also has a NUL, whether the NUL comes before or after that line, including a NUL more than 500 KiB later in the file. Files are not decoded by byte-order mark, so a UTF-16 file (e.g. BOM FF FE followed by UTF-16LE \"alpha\\n\") is binary because of its NUL bytes and is skipped.",
+      "is_error_case": false,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18): skip binaries silently. The bytes-read precedence between binary and unreadable is the owner's delegate's (05 §18, minor items)."
+    },
+    {
+      "id": "AC-011",
+      "criterion": "A file that cannot be opened, whose read fails before any NUL byte is read, or that has a matching line that is not UTF-8 and no NUL byte, is listed in unreadable, contributes no hits (including its valid matching lines) and is not counted in files_total; the search continues and returns Ok. A file that cannot be opened is unreadable even if its contents contain a NUL: a chmod-000 file containing a NUL is listed in unreadable (not testable when running as a user that can still read it). Invalid UTF-8 on a non-matching line has no effect. A file past the ceiling is still searched and still listed when unreadable.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18): unreadable files are reported as data, since core does not log. The bytes-read precedence between binary and unreadable is the owner's delegate's (05 §18, minor items)."
+    },
+    {
+      "id": "AC-012",
+      "criterion": "An error on root itself returns Err(MonoklError::Walk { path: root, .. }) with path equal to the root argument: root does not exist, root is a regular file, or root cannot be listed (a chmod 000 directory; the test is skipped when running as a user that can still list it). Walk errors below root never fail the search: each UTF-8 path the error names (found through Partial, WithPath, WithDepth, WithLineNumber and Loop's child) is appended to unreadable unless already listed, and an error naming no UTF-8 path adds 1 to walk_errors_without_path. Example: root with a.ts, locked/b.ts and z.ts each containing \"alpha\", locked chmod 000: Ok with hits a.ts and z.ts, files_total 2, unreadable [root.join(\"locked\")]. A .gitignore with an unparsable line (\"[z-a]\") is listed in unreadable once, and its valid lines still apply.",
+      "is_error_case": true,
+      "judgment_call": false,
+      "rationale": "Owner decision 2026-10-23 (05 §18): record and continue below root; a bad root still fails so a mistyped path is not silently empty."
+    },
+    {
+      "id": "AC-013",
+      "criterion": "Every regular file the walk yields (after ignore and hidden-file filtering) whose path is not UTF-8 is skipped and adds 1 to non_utf8_paths, including regular files below a directory whose name is not UTF-8, whether or not the file would match or would be excluded as a test. Directories are not counted. Tested only on platforms that allow creating such a path (not macOS or Windows).",
+      "is_error_case": false,
+      "judgment_call": true,
+      "rationale": "Owner's delegate, 2026-10-23 (05 §18, minor items): count rather than fail, so one odd file name does not hide the rest of the tree."
+    },
+    {
+      "id": "AC-014",
+      "criterion": "Symbolic links are not followed: a symlink to a file, a symlink to a directory, or a dangling symlink below root is neither searched nor counted in any field. Example: root with a.ts and dir/b.ts containing \"alpha\" plus file-link.ts -> a.ts, dir-link -> dir and dangling.ts -> missing.ts returns hits a.ts and dir/b.ts, files_total 2, and every other field at its default. A root that is itself a symlink to a directory is searched, with keys joined onto the root argument as given.",
+      "is_error_case": false,
+      "judgment_call": true,
+      "rationale": "Owner's delegate, 2026-10-23 (05 §18, minor items): a followed link would search a file twice or leave root, and needs loop handling."
+    }
   ],
   "linked_requirement": "REQ-013",
-  "linked_research": "docs/spec/01-core-architecture.md Sections 7 and 20; docs/architecture/query-and-ranking.md findings #7, #10, #11; docs/spec/08-library-session-api.md §7.3-§7.5.",
-  "reasoning": "Section 7's behavior is kept where it is sound: one combined case-insensitive matcher, ignore's standard filters, the test-path list, LineHit shape, Walk errors. Every change is marked judgment_call with its reason: deterministic walk order, a counting memory ceiling instead of a break, fail-fast regex policy, root-relative test classification, binary skipping, and returning unreadable files instead of logging. max_candidates is renamed max_files because it counts files with matches, and its default follows Part 8's Limits."
+  "linked_research": "docs/spec/01-core-architecture.md Sections 7 and 20; docs/architecture/query-and-ranking.md findings #7, #10, #11; docs/spec/08-library-session-api.md §7.3-§7.5; docs/spec/05-research-and-decisions.md §18.",
+  "revision_note": "2026-10-23: applied review findings and the owner's ratified decisions (05 §18). Behavior changes: walk errors below root are recorded (unreadable, new walk_errors_without_path) instead of failing; a root that is a file fails; ignore sources limited to .gitignore/.ignore inside root (no parent, global or .git/info/exclude, .gitignore honoured without .git); binary always wins over an invalid-UTF-8 matching line. Added AC-014 (symlinks); sharpened AC-001 to AC-013 with examples.\n2026-10-23: exit-gate round 1 blockers fixed. AC-003: a bad root now fails even with no patterns (checks run compile, root, empty patterns, walk). AC-002: patterns are matched against the line text without its terminator, so ^/$ anchor alike in LF and CRLF files and \"\\\\n\" matches no line (behavior change: CRLF lines were matched with their \"\\r\"). AC-005, AC-006, AC-008 cite their ratified decisions and are no longer judgment calls; AC-008 states that excluded test files are never opened. 2026-10-23: exit-gate round 2: AC-010/AC-011 state binary vs unreadable by bytes actually read; Default and DEFAULT_MAX_FILES are public API; byte-order marks are not decoded (code fixed to match), and an unlistable root fails even with no patterns (code fixed to match AC-003).",
+  "reasoning": "Section 7's behavior is kept where it is sound: one combined case-insensitive matcher, ignore's hidden and ignore-file filters, the test-path list, LineHit shape, Walk errors for the root. Changes: deterministic walk order, a counting memory ceiling instead of a break, fail-fast regex policy, root-relative test classification, binary skipping, repository-only ignore sources, and returning unreadable files and walk errors instead of logging or failing. max_candidates is renamed max_files because it counts files with matches, and its default follows Part 8's Limits."
 }
