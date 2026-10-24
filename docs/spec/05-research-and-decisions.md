@@ -254,7 +254,7 @@ The crate could not build: `io-errors` came from a private `orin-cargo` registry
 - **Lints.** Added rustc `unused_must_use` and `let_underscore_drop`, and clippy `let_underscore_must_use`, `let_underscore_untyped` and `map_err_ignore`, all deny. rustfmt `max_width` is 120.
 - **Releases.** Callisto 0.14.0 (pinned in `.prototools`) owns versioning: `callisto.toml`, `.changeset/`, a generated `callisto-release.yml`, and a CI Changesets check. `monokl` stays `publish = false`, so nothing releases until that is a deliberate change.
 - **Organization.** orin-axi is now orin-dx: repository URLs and the npm scope (`@orin-dx/monokl`).
-- **michi from crates.io.** michi is `michi-core` 0.6.0 from crates.io, renamed to `michi` in `Cargo.toml` so code paths are unchanged. The git pin it replaces was AGPL-3.0-or-later. michi now escapes line breaks itself (TOON 4.4), so `cell` no longer pre-escapes them; null and empty-string cells now render distinctly (`null` vs `""`). An error's source chain goes into michi's `causes` via `DomainError::from_error`, not into hints, and a multi-line message stays whole.
+- **michi from crates.io.** michi is `michi-core` 0.7.1 from crates.io, renamed to `michi` in `Cargo.toml` so code paths are unchanged. The git pin it replaces was AGPL-3.0-or-later. michi now escapes line breaks itself (TOON 4.4), so `cell` no longer pre-escapes them; null and empty-string cells now render distinctly (`null` vs `""`). An error's source chain goes into michi's `causes` via `DomainError::from_error`, not into hints, and a multi-line message stays whole.
 
 ---
 
