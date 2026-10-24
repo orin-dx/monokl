@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Most variants apply to every language analyzer; `Impl` and `Macro` are Rust-specific, and `Other` is the catch-all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum SymbolKind {
     Function,
     Method,
@@ -30,6 +31,7 @@ pub enum SymbolKind {
 /// There is no `Super` variant: Rust's `pub(super)` and `pub(in ...)` map to [`Visibility::Module`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum Visibility {
     Public,
     Crate,
@@ -59,6 +61,7 @@ pub struct SymbolEntry {
 /// The kind of a single import binding within a [`DependencyBinding`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum BindingKind {
     Named,
     Default,
@@ -258,6 +261,7 @@ pub struct RankedBlock {
 /// The kind of a [`Diagnostic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum DiagnosticKind {
     Degraded,
     Skipped,
@@ -286,6 +290,7 @@ pub struct LineHit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[non_exhaustive]
 pub enum Language {
     #[cfg_attr(feature = "cli", value(name = "typescript"))]
     TypeScript,
