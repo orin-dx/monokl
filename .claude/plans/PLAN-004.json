@@ -1,0 +1,602 @@
+{
+  "goal": "Scaffold monokl's compilable v0.1.0 skeleton for the first time: the workspace root Cargo.toml (Section 28), the monokl crate's own Cargo.toml (Section 1), and lib.rs's module declarations (Section 2), exactly as SPEC-004 locks them.",
+  "architecture": "Two files are built bottom-up, section by section, each addition verified by an offline text-exactness test (grep/diff against the verbatim source block) rather than a live `cargo build`, because two documented gaps in this spec's own corpus (AC-008B: no `.cargo/config.toml [registries.orin-cargo]` entry anywhere in docs/spec/*.md; and io-errors, the ../io-errors path dependency, not existing anywhere in this workspace) make `cargo metadata`/`build`/`check` against the real crate manifest permanently unable to resolve once AC-008's `registry = \"orin-cargo\"` line is written -- confirmed empirically: `cargo metadata --no-deps` fails at manifest *parse* time with `registry index was not found in any configuration: \\`orin-cargo\\`` the instant that key is present, before dependency resolution even begins, regardless of whether io-errors exists on disk. The four behavioral acceptance criteria (AC-001B, AC-003B, AC-008B, AC-025) are instead verified against fully isolated, network-free `/tmp` fixture crates purpose-built to reproduce just the Cargo mechanism in question (required-features gating, publish allow-lists, workspace-inheritance failure, registry resolution) -- every expected error string embedded in this plan's test steps was captured from a real `cargo 1.96.0` run during planning, not guessed. AC-025's positive case (inheritance succeeding) is verified with a self-contained /tmp copy of the finished root Cargo.toml plus a transient probe crate, so the check has no ordering dependency on whether crates/monokl exists yet in the real repo. A final supplementary task (T-023) additionally proves the real assembled manifests parse structurally end-to-end, via a throwaway /tmp copy with only the registry key and io-errors version requirement stripped (both blocked strictly by the two out-of-scope gaps) and a minimal stub io-errors sibling used purely as a path-resolution target. lib.rs's 15 module declarations name 14 pub modules (analysis, budget, cli, dedup, enrich, error, indices, output, pipeline, query, rank, text_search, tokens, types) plus one #[cfg(test)] module (tests_types), none of which exist as files yet -- creating them is explicitly out of this track's scope per SPEC-004's own non_goals (\"whose only obligation to this track is to exist as the module lib.rs declares\" is a future obligation on those modules' own tracks, not this one), so lib.rs is verified by content-exactness only, never by compiling it.",
+  "tech_stack": [
+    "Rust 2024 edition",
+    "Cargo 1.96 workspaces",
+    "TOML"
+  ],
+  "linked_spec": "SPEC-004",
+  "spec_file_path": ".claude/specs/SPEC-004.json",
+  "spec_hash": "sha256:69e2e595003cbe9d039946393689c90beed86d27d04f6505239719d137a9fcfd",
+  "linked_requirement": "REQ-004",
+  "reasoning": "BLOCKING ASSUMPTIONS (stated explicitly per instructions, not deferred): (1) AC-008B documents that no docs/spec/*.md file supplies a `.cargo/config.toml [registries.orin-cargo]` entry -- I independently re-confirmed this is fatal to tooling, not just to `cargo publish`: even `cargo metadata --no-deps` fails at TOML-parse time the moment `registry = \"orin-cargo\"` appears in any manifest in the workspace, with zero network access attempted. I did NOT fabricate a fake registry config to work around this (that would silently resolve a gap the spec explicitly says is out of corpus and out of this track's scope) -- instead every task touching the real crate/root manifests uses grep/diff text-exactness tests, and every task that needs a live `cargo` process uses an isolated /tmp fixture with no io-errors/registry involvement at all. (2) io-errors itself (the ../io-errors path dependency AC-008 locks) does not exist anywhere in this workspace and creating it is out of scope (non_goals: 'io-errors, or any sibling orin-axi tool' is explicitly excluded) -- so no task in this plan ever runs a real `cargo build`/`check`/`install` against crates/monokl's actual manifest; that only becomes possible once a later, separate track scaffolds crates/io-errors. (3) lib.rs's 14 pub-mod referenced modules (including error/types, whose own tracks SPEC-001/SPEC-003 are already gated) plus the #[cfg(test)] tests_types module do not exist as files; this plan does not create stub files for them since SPEC-004's own non_goals assigns that obligation to each module's own track, not this manifest-locking track -- lib.rs is therefore verified as text only, never compiled, in this plan. VERIFICATION METHODOLOGY: content-locking criteria (AC-001..AC-025 minus the four behavioral/gap ones) are tested via `diff`/`grep -F` against the exact verbatim block quoted in this plan's steps -- offline, deterministic, no cargo invocation, so neither blocking assumption above affects them. The four behavioral criteria (AC-001B, AC-003B, AC-008B, AC-025) and the two cross-file-consistency criteria (AC-015, AC-016) use real `cargo` runs in throwaway /tmp fixtures (AC-001B/003B/008B/025) or grep-based cross-checks between the two real files or the two real docs (AC-015/AC-016) -- every expected error string quoted in those tasks' test steps was reproduced live against cargo 1.96.0 during planning, not invented. Tasks are ordered: workspace root Cargo.toml first (T-001..T-006, since AC-025 proves the crate manifest cannot resolve `.workspace = true` without it), then the crate's own Cargo.toml section-by-section in source order (T-007..T-016), then lib.rs (T-017), then the cross-file consistency checks that need both finished files as reference (T-018 for AC-015, T-019 for AC-016), then the three remaining pure-behavioral criteria in isolated /tmp fixtures (T-020 AC-008B, T-021 AC-001B, T-022 AC-003B) which only need the finished manifest's *content* (already locked by T-001..T-016) as a reference, not the manifest itself, and finally a supplementary structural-parse gate (T-023) that has no covers_criteria of its own since every criterion it touches is already assigned to an earlier task.",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Root Cargo.toml: [workspace] resolver/members + [workspace.package] (amended: correct rust-version/license per AC-020 revision)",
+      "files": {
+        "modify": [
+          "Cargo.toml"
+        ],
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "steps": [
+        "Write the failing test (this is a correction to an already-existing, already-committed file -- not a fresh create -- so the test targets the two specific field values AC-020's revision corrects, not file existence). Run: `test -f /Users/gabe/Projects/monokl/Cargo.toml && echo EXISTS || echo MISSING`. Expected output: `EXISTS` (confirms the file this task modifies is already present, per this plan's own execution history). MISSING is an unrecoverable precondition failure for this amended task: the amended T-001 no longer creates the file from scratch, only corrects two lines in an existing one -- if MISSING, stop and report; do not attempt the sed below against a nonexistent file. Then run: `grep -n '^rust-version = \\|^license = ' /Users/gabe/Projects/monokl/Cargo.toml`. Expected output before the fix: `8:rust-version = \"1.85\"` and `9:license = \"MIT\"`.",
+        "Confirm red: run the grep command above now, from /Users/gabe/Projects/monokl. It prints `8:rust-version = \"1.85\"` and `9:license = \"MIT\"`, confirming the file currently has the WRONG, pre-correction values -- this is trivially true right now, since T-001 was already executed and committed against the old spec.",
+        "Write the minimal implementation. Modify the existing /Users/gabe/Projects/monokl/Cargo.toml (a targeted 2-line fix, not a fresh create) so line 8 changes from `rust-version = \"1.85\"` to `rust-version = \"1.96\"`, and line 9 changes from `license = \"MIT\"` to `license = \"AGPL-3.0-or-later\"`, with no other line touched. Run: `sed -i '' 's/^rust-version = \"1.85\"$/rust-version = \"1.96\"/; s/^license = \"MIT\"$/license = \"AGPL-3.0-or-later\"/' /Users/gabe/Projects/monokl/Cargo.toml` (macOS/BSD `sed -i ''` in-place syntax -- on GNU sed use `-i` with no trailing argument). Both patterns are exact, `^...$`-anchored literals matching only these two specific lines -- no dependency pin, lint entry, or profile key can match either pattern.",
+        "Confirm green (the file now has the corrected values, and nothing else in the file moved). The file already carries T-002 through T-023's accumulated content (67 lines total: workspace/workspace.package, lints, profile.release, all 26 workspace.dependencies pins), so the PRIMARY check is scoped to exactly the 14 lines this task owns, not the whole file: `diff <(head -14 /Users/gabe/Projects/monokl/Cargo.toml) - <<'EOF'\n[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\n[workspace.package]\nversion = \"0.0.0\"\nedition = \"2024\"\nrust-version = \"1.96\"\nlicense = \"AGPL-3.0-or-later\"\nrepository = \"https://github.com/orin-axi/monokl\"\nauthors = [\"Orin-Axi Contributors\"]\nkeywords = [\"orin-axi\", \"developer-tools\"]\ncategories = [\"development-tools\"]\npublish = false\nEOF`. Expected: no output, exit 0 (process substitution gives diff two real file operands; a piped `head | diff -` form only gives diff one operand and errors -- use the `<(...)` form as written). SEPARATELY, prove the remaining 53 lines (lints, profile, dependency pins) were not disturbed by the in-place sed rewrite, since git diff shows the edit's exact blast radius directly: `git diff --numstat -- Cargo.toml`. Expected output exactly `2\\t2\\tCargo.toml` (2 insertions, 2 deletions, this file only) -- any other count means the sed touched more than the two intended lines. Also confirm the two corrected literal values are grounded in the real files AC-020 cites -- this is an ADVISORY check on a sibling repository, not a blocking gate on whether monokl's own file was correctly edited (if michi is absent, moved, or has since changed its own MSRV, report the mismatch but do not fail this task on it): `test -f /Users/gabe/Projects/michi/Cargo.toml && grep -Fx 'rust-version = \"1.96\"' /Users/gabe/Projects/michi/Cargo.toml || echo 'ADVISORY: michi Cargo.toml not found or MSRV differs -- provenance for AC-020s rust-version unverified, not a T-001 failure'`, and `head -2 /Users/gabe/Projects/monokl/LICENSE` expect the first line to contain `GNU AFFERO GENERAL PUBLIC LICENSE` (this one is monokl's own repository file, so it IS a blocking check). The 7 unaffected fields (version, edition, repository, authors, keywords, categories, publish) are still pattern-anchored against docs/spec/01-core-architecture.md's own text, with the two corrected lines excluded from that specific comparison since this spec now intentionally diverges from that source text for rust-version/license: `awk '/^\\[workspace\\.package\\]$/{f=1} f{print} f&&/^publish = false$/{exit}' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md | grep -v '^rust-version = \\|^license = ' | diff - <(sed -n '/^\\[workspace.package\\]$/,/^publish = false$/p' /Users/gabe/Projects/monokl/Cargo.toml | grep -v '^rust-version = \\|^license = ')`. Expected: no output, exit 0. Separately, explicitly confirm the two corrected lines no longer match the source document's literal (now-superseded) text, proving this is a deliberate divergence rather than a leftover: `grep -c '^rust-version = \"1.85\"$\\|^license = \"MIT\"$' /Users/gabe/Projects/monokl/Cargo.toml` expect `0`. Also ground AC-021's resolver/members claim in the source prose (unaffected by this correction): `grep -cF 'Workspace \\`resolver = \"3\"\\`, \\`members = [\"crates/*\"]\\`.' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md` expect `1`.",
+        "Commit."
+      ],
+      "commit_message": "fix(workspace): correct workspace.package rust-version and license to 1.96/AGPL-3.0-or-later\n\nAmends SPEC-004 AC-020: rust-version changes from \"1.85\" to \"1.96\"\n(matching michi's own MSRV, a dependency of monokl) and license\nchanges from \"MIT\" to \"AGPL-3.0-or-later\" (matching the repository's\nactual LICENSE file). Both are intentional, gate-confirmed divergences\nfrom docs/spec/01-core-architecture.md:3055-3065's literal source\ntext. The other 7 [workspace.package] fields, and AC-021's\nresolver/members declaration, are unchanged.",
+      "covers_criteria": [
+        "AC-020",
+        "AC-021"
+      ]
+    },
+    {
+      "id": "T-002",
+      "title": "Root Cargo.toml: append [workspace.lints.clippy] + [workspace.lints.rust]",
+      "files": {
+        "modify": [
+          "Cargo.toml"
+        ],
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-001"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c 'workspace.lints.clippy' /Users/gabe/Projects/monokl/Cargo.toml`. Expected output before implementation: `0` (grep finds no match; with -c and no match, grep exits 1 and prints `0`).",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n[workspace.lints.clippy]\npedantic = { level = \"warn\", priority = -1 }\nunwrap_used = \"deny\"\nexpect_used = \"deny\"\npanic = \"deny\"\nunreachable = \"deny\"\nunimplemented = \"deny\"\ndbg_macro = \"deny\"\ntodo = \"deny\"\nprint_stdout = \"warn\"\nprint_stderr = \"warn\"\nawait_holding_lock = \"deny\"\nmodule_name_repetitions = \"allow\"\nmust_use_candidate = \"allow\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\n\n[workspace.lints.rust]\nunsafe_code = \"deny\"\n```",
+        "Confirm green. Run: `grep -A15 '^\\[workspace.lints.clippy\\]$' /Users/gabe/Projects/monokl/Cargo.toml | diff - <(cat <<'EOF'\n[workspace.lints.clippy]\npedantic = { level = \"warn\", priority = -1 }\nunwrap_used = \"deny\"\nexpect_used = \"deny\"\npanic = \"deny\"\nunreachable = \"deny\"\nunimplemented = \"deny\"\ndbg_macro = \"deny\"\ntodo = \"deny\"\nprint_stdout = \"warn\"\nprint_stderr = \"warn\"\nawait_holding_lock = \"deny\"\nmodule_name_repetitions = \"allow\"\nmust_use_candidate = \"allow\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\nEOF\n)` and `grep -A1 '^\\[workspace.lints.rust\\]$' /Users/gabe/Projects/monokl/Cargo.toml | diff - <(printf '[workspace.lints.rust]\\nunsafe_code = \"deny\"\\n')`. Expected: both produce no output, exit 0.",
+        "Commit."
+      ],
+      "commit_message": "feat(workspace): add workspace.lints.clippy and workspace.lints.rust tables\n\nLocks SPEC-004 AC-017/AC-018 -- the 15-entry clippy lint table\n(including the post-research unreachable/unimplemented deny additions)\nand the single unsafe_code=\"deny\" rust lint that monokl's own\n[lints] workspace = true (AC-013) inherits in full.",
+      "covers_criteria": [
+        "AC-017",
+        "AC-018"
+      ]
+    },
+    {
+      "id": "T-003",
+      "title": "Root Cargo.toml: append [profile.release]",
+      "files": {
+        "modify": [
+          "Cargo.toml"
+        ],
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-002"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[profile.release\\]$' /Users/gabe/Projects/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n[profile.release]\nlto = true\ncodegen-units = 1\nstrip = true\n```",
+        "Confirm green. Run: `grep -A3 '^\\[profile.release\\]$' /Users/gabe/Projects/monokl/Cargo.toml | diff - <(printf '[profile.release]\\nlto = true\\ncodegen-units = 1\\nstrip = true\\n')`. Expected: no output, exit 0. This diffs the written file only against a heredoc re-typed inside T-002/T-003, which proves internal self-consistency but not fidelity to the source document -- also diff the combined [workspace.lints.clippy]/[workspace.lints.rust]/[profile.release] block against docs/spec/01-core-architecture.md's own text, anchored by pattern rather than a hardcoded line range: `awk '/^\\[workspace\\.lints\\.clippy\\]$/{f=1} f{print} f&&/^strip = true$/{exit}' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md | diff - <(sed -n '/^\\[workspace.lints.clippy\\]$/,/^strip = true$/p' /Users/gabe/Projects/monokl/Cargo.toml)`. Expected: no output, exit 0.",
+        "Commit."
+      ],
+      "commit_message": "feat(workspace): add profile.release table\n\nLocks SPEC-004 AC-019 -- lto/codegen-units/strip settings applied to\nany --release build in the workspace, monokl included, independent of\nthe .workspace = true inheritance mechanism.",
+      "covers_criteria": [
+        "AC-019"
+      ]
+    },
+    {
+      "id": "T-004",
+      "title": "Root Cargo.toml: append [workspace.dependencies] -- first 16 crates (AC-022)",
+      "files": {
+        "modify": [
+          "Cargo.toml"
+        ],
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-003"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[workspace.dependencies\\]$' /Users/gabe/Projects/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/Cargo.toml (preceded by one blank line). This is a concrete design decision: the source document (01-core-architecture.md:3069-3078) states these 26 version pins as markdown prose bullets, not a fenced [workspace.dependencies] TOML block -- writing them under a literal [workspace.dependencies] table header is the only mechanism by which Cargo actually resolves any `{ workspace = true }` reference (AC-022's own text: \"This is what every { workspace = true } entry ... concretely resolves to\"), so that is the exact table header and per-crate TOML syntax used here, each line reproducing the version/features exactly as the corresponding bullet states:\n```toml\n\n[workspace.dependencies]\nthiserror = \"2\"\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = { version = \"1\", features = [\"preserve_order\"] }\ncamino = { version = \"1\", features = [\"serde1\"] }\nrustc-hash = \"2\"\nignore = \"0.4\"\noxc_parser = \"0.128\"\noxc_ast = \"0.128\"\noxc_span = \"0.128\"\noxc_allocator = \"0.128\"\noxc_resolver = \"11\"\nrayon = \"1\"\nregex = \"1\"\nblake3 = \"1\"\ndashmap = \"5\"\ntiktoken-rs = \"0.6\"\n```",
+        "Confirm green. Run: `grep -A16 '^\\[workspace.dependencies\\]$' /Users/gabe/Projects/monokl/Cargo.toml | diff - <(cat <<'EOF'\n[workspace.dependencies]\nthiserror = \"2\"\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = { version = \"1\", features = [\"preserve_order\"] }\ncamino = { version = \"1\", features = [\"serde1\"] }\nrustc-hash = \"2\"\nignore = \"0.4\"\noxc_parser = \"0.128\"\noxc_ast = \"0.128\"\noxc_span = \"0.128\"\noxc_allocator = \"0.128\"\noxc_resolver = \"11\"\nrayon = \"1\"\nregex = \"1\"\nblake3 = \"1\"\ndashmap = \"5\"\ntiktoken-rs = \"0.6\"\nEOF\n)`. Expected: no output, exit 0.",
+        "Commit."
+      ],
+      "commit_message": "feat(workspace): add first 16 workspace.dependencies version pins\n\nLocks SPEC-004 AC-022 -- the concrete version each { workspace = true }\nentry for these 16 crates (spanning AC-009/AC-010) resolves to.",
+      "covers_criteria": [
+        "AC-022"
+      ]
+    },
+    {
+      "id": "T-005",
+      "title": "Root Cargo.toml: append [workspace.dependencies] -- remaining 10 crates (AC-023) + two-way completeness check",
+      "files": {
+        "modify": [
+          "Cargo.toml"
+        ],
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-004"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^grep-regex = ' /Users/gabe/Projects/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/Cargo.toml (no leading blank line -- it continues the [workspace.dependencies] table started in T-004):\n```toml\ngrep-regex = \"0.1\"\ngrep-searcher = \"0.1\"\nclap = { version = \"4\", features = [\"derive\", \"env\"] }\nmiette = { version = \"7\", features = [\"fancy\"] }\ntracing = \"0.1\"\ninsta = { version = \"1.47\", features = [\"yaml\", \"json\"] }\npretty_assertions = \"1\"\nproptest = \"1\"\ntempfile = \"3\"\ncriterion = { version = \"0.7\", features = [\"html_reports\"] }\n```",
+        "Confirm green. Run: `sed -n '/^\\[workspace.dependencies\\]$/,$p' /Users/gabe/Projects/monokl/Cargo.toml | grep -cE '^[A-Za-z0-9_-]+ ='`. Expected output: `26` (16 from T-004 + 10 from this task = every distinct crate AC-022+AC-023 name -- the character class must include digits, since `blake3` and `oxc_resolver`'s `11` line both have a bare-number-adjacent name; `[a-zA-Z_-]` alone would silently miss `blake3`). This is only the root-side count; AC-023's full two-way match (root pins vs. crate `{ workspace = true }` entries) is completed later by T-023, once crates/monokl/Cargo.toml's dependency tables exist. This count alone cannot distinguish a correct version pin from a wrong one (e.g. insta pinned to 1.4 instead of 1.47) -- also diff the full assembled 26-crate table against the source document's own prose bullets, which state every pin as a backtick-delimited TOML fragment: `diff <(awk '/^Relevant workspace dependencies for monokl \\(versions\\):/{f=1;next} f&&/^- /{gsub(/`/,\"\\n\");print} f&&/^$/&&seen{exit} f&&/^- /{seen=1}' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md | grep -E '^[A-Za-z0-9_-]+ = ' | sort) <(sed -n '/^\\[workspace.dependencies\\]$/,$p' /Users/gabe/Projects/monokl/Cargo.toml | grep -E '^[A-Za-z0-9_-]+ = ' | sort)`. Expected: no output, exit 0 -- verified working against the current source document, and verified to genuinely catch a wrong pin (injecting insta=1.4/criterion=0.8 into a simulated table produces a 2-hunk diff).",
+        "Commit."
+      ],
+      "commit_message": "feat(workspace): add remaining 10 workspace.dependencies version pins\n\nLocks SPEC-004 AC-023 -- completes the 26-crate version-pin list\n(27 { workspace = true } entries once serde_json's two-table use is\ncounted) that Section 1's manifest depends on to resolve.",
+      "covers_criteria": [
+        "AC-023"
+      ]
+    },
+    {
+      "id": "T-006",
+      "title": "Verify workspace-inheritance failure without a root, and success with the completed root (AC-025)",
+      "files": {
+        "test": [
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-005"
+      ],
+      "steps": [
+        "Write the failing test (negative case, isolated fixture -- no real files touched; every command that must run inside the fixture uses a `(cd /tmp/ac025_fail && ...)` subshell, never a bare `cd`, so the implementer's shell working directory is never left pointed at a directory this task later deletes). Run: `rm -rf /tmp/ac025_fail && mkdir -p /tmp/ac025_fail/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition.workspace = true\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n' > /tmp/ac025_fail/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac025_fail/src/lib.rs && out=$( (cd /tmp/ac025_fail && cargo metadata --no-deps --format-version 1) 2>&1); echo \"$out\" | tail -3`. This is run BEFORE any positive assertion, to establish the failure mode exists and is deterministic. Expected output: three lines ending in `Caused by:\\n  failed to find a workspace root` (a crate using `.workspace = true` with no reachable workspace root Cargo.toml cannot resolve). Clean up when done: `rm -rf /tmp/ac025_fail`.",
+        "Confirm red (i.e. confirm the failure reproduces exactly as SPEC-004 AC-025 states): run the command above now. Cargo's real output (captured live against cargo 1.96.0) ends with:\n```\nCaused by:\n  error inheriting `edition` from workspace root manifest's `workspace.package.edition`\n\nCaused by:\n  failed to find a workspace root\n```\n(the leading `error: failed to parse manifest at ...` line's exact path is not asserted here, since on some hosts /tmp is a symlink -- e.g. macOS canonicalizes it to /private/tmp -- and cargo reports the canonical path, which the fixture's own `mkdir`/`cd` invocation does not control). Confirm the tail matches `failed to find a workspace root`.",
+        "Write the minimal implementation: none -- T-001..T-005 already wrote the real root Cargo.toml. This task proves that root now supplies working inheritance, using a fully self-contained /tmp copy so the check has no ordering dependency on whether crates/monokl exists yet in the real repo (a probe run directly against the real repo would break the moment crates/monokl/Cargo.toml exists, since that file's `registry = \"orin-cargo\"` line makes `cargo metadata` fail for the whole workspace regardless of the probe -- see AC-008B/T-020). Run: `rm -rf /tmp/ac025_ok && mkdir -p /tmp/ac025_ok/crates/_probe/src && cp /Users/gabe/Projects/monokl/Cargo.toml /tmp/ac025_ok/Cargo.toml && printf '[package]\\nname = \"ac025-probe\"\\nversion = \"0.1.0\"\\nedition.workspace = true\\nrust-version.workspace = true\\nlicense.workspace = true\\n\\n[lib]\\nname = \"ac025_probe\"\\npath = \"src/lib.rs\"\\n' > /tmp/ac025_ok/crates/_probe/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac025_ok/crates/_probe/src/lib.rs`.",
+        "Confirm green. Run: `(cd /tmp/ac025_ok && cargo metadata --no-deps --format-version 1) | python3 -c \"import json,sys; d=json.load(sys.stdin); p=[p for p in d['packages'] if p['name']=='ac025-probe'][0]; assert p['edition']=='2024', p['edition']; assert p['rust_version']=='1.96', p['rust_version']; assert p['license']=='AGPL-3.0-or-later', p['license']; print('OK')\"`. Expected output: `OK` (the probe crate's `.workspace = true` fields resolved to the exact values T-001 wrote, proving the real root Cargo.toml is a working inheritance source; the subshell `(cd ... && ...)` means the outer shell's working directory is untouched, so the next steps run from wherever they started). Clean up: `rm -rf /tmp/ac025_ok`.",
+        "Commit. Run from /Users/gabe/Projects/monokl (this task produces no permanent file change beyond what T-001..T-005 already committed): `cd /Users/gabe/Projects/monokl && git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit."
+      ],
+      "commit_message": "test(workspace): verify AC-025 workspace-inheritance failure and success (no file changes)",
+      "covers_criteria": [
+        "AC-025"
+      ]
+    },
+    {
+      "id": "T-007",
+      "title": "Crate Cargo.toml: [package] section",
+      "files": {
+        "create": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-005"
+      ],
+      "steps": [
+        "Write the failing test. Run: `test -f /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml && echo EXISTS || echo MISSING`. Expected output before implementation: `MISSING`.",
+        "Confirm red: run the command above now. It prints `MISSING`.",
+        "Write the minimal implementation. Create /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml with exactly this content:\n```toml\n[package]\nname        = \"monokl\"\nversion     = \"0.1.0\"\nedition.workspace     = true\nrust-version.workspace = true\nlicense.workspace     = true\nrepository.workspace  = true\nauthors.workspace     = true\ncategories.workspace  = true\nkeywords    = [\"monokl\", \"search\", \"ast\", \"semantic\", \"typescript\"]\ndescription = \"AST-aware semantic code search for TypeScript/JavaScript and Rust.\"\npublish     = [\"orin-cargo\"]\n```",
+        "Confirm green. Run: `diff /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml - <<'EOF'\n[package]\nname        = \"monokl\"\nversion     = \"0.1.0\"\nedition.workspace     = true\nrust-version.workspace = true\nlicense.workspace     = true\nrepository.workspace  = true\nauthors.workspace     = true\ncategories.workspace  = true\nkeywords    = [\"monokl\", \"search\", \"ast\", \"semantic\", \"typescript\"]\ndescription = \"AST-aware semantic code search for TypeScript/JavaScript and Rust.\"\npublish     = [\"orin-cargo\"]\nEOF`. Expected: no output, exit 0.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add crate Cargo.toml with [package] section\n\nLocks SPEC-004 AC-001 -- the 11-line [package] section, 6 of which are\n.workspace = true references resolved by T-001's [workspace.package].",
+      "covers_criteria": [
+        "AC-001"
+      ]
+    },
+    {
+      "id": "T-008",
+      "title": "Crate Cargo.toml: append [lib] and [[bin]] sections",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-007"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[lib\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n[lib]\nname       = \"monokl\"\npath       = \"src/lib.rs\"\n\n[[bin]]\nname              = \"monokl\"\npath              = \"src/main.rs\"\nrequired-features = [\"cli\"]\n```",
+        "Confirm green. Run: `grep -A2 '^\\[lib\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '[lib]\\nname       = \"monokl\"\\npath       = \"src/lib.rs\"\\n')` and `grep -A3 '^\\[\\[bin\\]\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '[[bin]]\\nname              = \"monokl\"\\npath              = \"src/main.rs\"\\nrequired-features = [\"cli\"]\\n')`. Expected: both produce no output, exit 0. (The [lib] block is 3 lines total so `-A2` captures the header plus its 2 content lines; the [[bin]] block is 4 lines so `-A3` is correct there.)",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add [lib] and [[bin]] sections to crate Cargo.toml\n\nLocks SPEC-004 AC-002 (lib target name/path) and AC-003 (bin target\nname/path/required-features=[\"cli\"]).",
+      "covers_criteria": [
+        "AC-002",
+        "AC-003"
+      ]
+    },
+    {
+      "id": "T-009",
+      "title": "Crate Cargo.toml: append [features] table -- default + lang-ts",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-008"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[features\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n[features]\ndefault = [\"lang-ts\", \"cli\"]\n\n# TypeScript/JavaScript analysis via OXC parser + AST + resolver.\nlang-ts = [\n    \"dep:oxc_parser\",\n    \"dep:oxc_ast\",\n    \"dep:oxc_span\",\n    \"dep:oxc_allocator\",\n    \"dep:oxc_resolver\",\n]\n```",
+        "Confirm green. Run: `grep -A10 '^\\[features\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(cat <<'EOF'\n[features]\ndefault = [\"lang-ts\", \"cli\"]\n\n# TypeScript/JavaScript analysis via OXC parser + AST + resolver.\nlang-ts = [\n    \"dep:oxc_parser\",\n    \"dep:oxc_ast\",\n    \"dep:oxc_span\",\n    \"dep:oxc_allocator\",\n    \"dep:oxc_resolver\",\n]\nEOF\n)`. Expected: no output, exit 0. (The block is 11 lines including the header, so `-A10` is required to capture the closing `]`.)",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add default and lang-ts feature flags\n\nLocks SPEC-004 AC-004 (exactly 4 feature keys will exist once this and\nT-010 land; default=[\"lang-ts\",\"cli\"]) and AC-005 (lang-ts activates\nexactly the 5 named oxc_* dep: entries, in order).",
+      "covers_criteria": [
+        "AC-004",
+        "AC-005"
+      ]
+    },
+    {
+      "id": "T-010",
+      "title": "Crate Cargo.toml: append [features] cli + miette",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-009"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^cli = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n# CLI binary \u2014 clap + miette diagnostics.\ncli = [\"dep:clap\", \"miette\"]\n\n# Miette Diagnostic derive on MonoklError \u2014 forwarded to io-errors for full chain rendering.\nmiette = [\"dep:miette\", \"io-errors/miette\"]\n```",
+        "Confirm green. Run: `tail -5 /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '# CLI binary \u2014 clap + miette diagnostics.\\ncli = [\"dep:clap\", \"miette\"]\\n\\n# Miette Diagnostic derive on MonoklError \u2014 forwarded to io-errors for full chain rendering.\\nmiette = [\"dep:miette\", \"io-errors/miette\"]\\n')` (5 lines: the block has no leading blank line captured by tail here since it's exactly the last 5 lines of the file at this point) and `sed -n '/^\\[features\\]$/,/^\\[dependencies\\]$/p' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | grep -cE '^(default|lang-ts|cli|miette) = \\['` (confirms exactly 4 feature keys now exist: default, lang-ts, cli, miette -- scoped to the [features] table so it does not also match [[bin]]'s `required-features = [\"cli\"]` line). Expected: diff produces no output; the count check prints `4`.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add cli and miette feature flags\n\nLocks SPEC-004 AC-006 (cli=[\"dep:clap\",\"miette\"] -- the second element\nis the bare feature name, not dep:miette), AC-007\n(miette=[\"dep:miette\",\"io-errors/miette\"]), and completes AC-004's\n'exactly 4 feature keys' count (T-009 wrote 2 of the 4; this task's own\ngreen check counts all 4).",
+      "covers_criteria": [
+        "AC-004",
+        "AC-006",
+        "AC-007"
+      ]
+    },
+    {
+      "id": "T-011",
+      "title": "Crate Cargo.toml: append [dependencies] header + io-errors path dependency",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml",
+          "Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-010",
+        "T-005"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[dependencies\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by two blank lines):\n```toml\n\n\n[dependencies]\nio-errors = { path = \"../io-errors\", version = \"0.1\", registry = \"orin-cargo\", default-features = false }\n```",
+        "Confirm green. Run: `grep -A1 '^\\[dependencies\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '[dependencies]\\nio-errors = { path = \"../io-errors\", version = \"0.1\", registry = \"orin-cargo\", default-features = false }\\n')` (AC-008) and `grep -c '^io-errors' /Users/gabe/Projects/monokl/Cargo.toml` (AC-024: io-errors must NOT appear among the root's [workspace.dependencies] entries, since it resolves via its own explicit path/version, not workspace inheritance). Expected: the diff produces no output; the second command prints `0`.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add [dependencies] table with io-errors path dependency\n\nLocks SPEC-004 AC-008 (io-errors as a 4-key path dependency, no\nfeatures list) and AC-024 (io-errors correctly has no corresponding\nentry in the root's [workspace.dependencies] -- it resolves via its\nown explicit path/version, not workspace inheritance).",
+      "covers_criteria": [
+        "AC-008",
+        "AC-024"
+      ]
+    },
+    {
+      "id": "T-012",
+      "title": "Crate Cargo.toml: append 14 always-compiled core dependencies",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-011"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^blake3        = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\nblake3        = { workspace = true }\ncamino        = { workspace = true }\ndashmap       = { workspace = true }\ngrep-regex    = { workspace = true }\ngrep-searcher = { workspace = true }\nignore        = { workspace = true }\nrayon         = { workspace = true }\nregex         = { workspace = true }\nrustc-hash    = { workspace = true }\nserde         = { workspace = true }\nserde_json    = { workspace = true }\nthiserror     = { workspace = true }\ntiktoken-rs   = { workspace = true }\ntracing       = { workspace = true }\n```",
+        "Confirm green. Run: `grep -A13 '^blake3        = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(cat <<'EOF'\nblake3        = { workspace = true }\ncamino        = { workspace = true }\ndashmap       = { workspace = true }\ngrep-regex    = { workspace = true }\ngrep-searcher = { workspace = true }\nignore        = { workspace = true }\nrayon         = { workspace = true }\nregex         = { workspace = true }\nrustc-hash    = { workspace = true }\nserde         = { workspace = true }\nserde_json    = { workspace = true }\nthiserror     = { workspace = true }\ntiktoken-rs   = { workspace = true }\ntracing       = { workspace = true }\nEOF\n)` and confirm none of these 14 lines contains the substring `optional`: `grep -A13 '^blake3        = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | grep -c optional` expected `0`. Expected: diff produces no output; the optional-count check prints `0`.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add 14 always-compiled core dependencies\n\nLocks SPEC-004 AC-009 -- blake3 through tracing, each { workspace =\ntrue } with no optional flag, always compiled regardless of features.",
+      "covers_criteria": [
+        "AC-009"
+      ]
+    },
+    {
+      "id": "T-013",
+      "title": "Crate Cargo.toml: append 5 lang-ts-gated optional OXC dependencies",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-012"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^oxc_parser    = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n# lang-ts feature-gated OXC deps.\noxc_parser    = { workspace = true, optional = true }\noxc_ast       = { workspace = true, optional = true }\noxc_span      = { workspace = true, optional = true }\noxc_allocator = { workspace = true, optional = true }\n# Versioned independently from OXC 0.128 suite \u2014 own 11.x line.\noxc_resolver  = { workspace = true, optional = true }\n```",
+        "Confirm green. Run: `grep -A6 '^# lang-ts feature-gated OXC deps\\.$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(cat <<'EOF'\n# lang-ts feature-gated OXC deps.\noxc_parser    = { workspace = true, optional = true }\noxc_ast       = { workspace = true, optional = true }\noxc_span      = { workspace = true, optional = true }\noxc_allocator = { workspace = true, optional = true }\n# Versioned independently from OXC 0.128 suite \u2014 own 11.x line.\noxc_resolver  = { workspace = true, optional = true }\nEOF\n)`. Expected: no output, exit 0 -- confirming both the block-level comment (scoped to all 5) and the oxc_resolver-only comment are each in their exact, distinct position.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add 5 lang-ts-gated optional OXC dependencies\n\nLocks SPEC-004 AC-010 -- oxc_parser/oxc_ast/oxc_span/oxc_allocator/\noxc_resolver, each { workspace = true, optional = true }, matching the\n5 dep: entries lang-ts activates (AC-005), with the oxc_resolver-only\nversioning-note comment distinct from the shared block header.",
+      "covers_criteria": [
+        "AC-010"
+      ]
+    },
+    {
+      "id": "T-014",
+      "title": "Crate Cargo.toml: append clap + miette optional dependencies",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-013"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^clap   = ' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n# CLI feature-gated deps.\nclap   = { workspace = true, optional = true }\nmiette = { workspace = true, optional = true }\n```",
+        "Confirm green. Run: `tail -3 /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '# CLI feature-gated deps.\\nclap   = { workspace = true, optional = true }\\nmiette = { workspace = true, optional = true }\\n')`. Expected: no output, exit 0.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add clap and miette optional dependencies\n\nLocks SPEC-004 AC-011 -- clap and miette, in that order, each\n{ workspace = true, optional = true }.",
+      "covers_criteria": [
+        "AC-011"
+      ]
+    },
+    {
+      "id": "T-015",
+      "title": "Crate Cargo.toml: append [dev-dependencies] table",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-014"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[dev-dependencies\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by two blank lines):\n```toml\n\n\n[dev-dependencies]\ninsta             = { workspace = true }\npretty_assertions = { workspace = true }\nproptest          = { workspace = true }\nserde_json        = { workspace = true }\ntempfile          = { workspace = true }\ncriterion         = { workspace = true }\n```",
+        "Confirm green. Run: `grep -A6 '^\\[dev-dependencies\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(cat <<'EOF'\n[dev-dependencies]\ninsta             = { workspace = true }\npretty_assertions = { workspace = true }\nproptest          = { workspace = true }\nserde_json        = { workspace = true }\ntempfile          = { workspace = true }\ncriterion         = { workspace = true }\nEOF\n)` and confirm serde_json now appears exactly twice in the whole file (once in [dependencies] from T-012, once here): `grep -c '^serde_json' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expected `2`. Expected: diff produces no output; the count prints `2`.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add [dev-dependencies] table\n\nLocks SPEC-004 AC-012 -- insta/pretty_assertions/proptest/serde_json/\ntempfile/criterion, each { workspace = true }; serde_json legitimately\nappears in both [dependencies] and [dev-dependencies].",
+      "covers_criteria": [
+        "AC-012"
+      ]
+    },
+    {
+      "id": "T-016",
+      "title": "Crate Cargo.toml: append [[bench]] and [lints] entries",
+      "files": {
+        "modify": [
+          "crates/monokl/Cargo.toml"
+        ],
+        "test": [
+          "crates/monokl/Cargo.toml"
+        ]
+      },
+      "depends_on": [
+        "T-015"
+      ],
+      "steps": [
+        "Write the failing test. Run: `grep -c '^\\[\\[bench\\]\\]$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected output before implementation: `0`.",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation. Append exactly this block to the end of /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml (preceded by one blank line):\n```toml\n\n[[bench]]\nname    = \"pipeline\"\nharness = false\n\n[lints]\nworkspace = true\n```",
+        "Confirm green. Run: `tail -6 /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | diff - <(printf '[[bench]]\\nname    = \"pipeline\"\\nharness = false\\n\\n[lints]\\nworkspace = true\\n')`. Expected: no output, exit 0. This completes the crate Cargo.toml's content-locked sections (AC-001..AC-012 excluding cross-file/behavioral criteria).",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add [[bench]] and [lints] entries\n\nLocks SPEC-004 AC-013 -- the single pipeline/harness=false bench entry\nand [lints] workspace = true, inheriting T-002's lint tables rather\nthan declaring any lint level locally.",
+      "covers_criteria": [
+        "AC-013"
+      ]
+    },
+    {
+      "id": "T-017",
+      "title": "lib.rs: create crate-level attribute + 15 module declarations",
+      "files": {
+        "create": [
+          "crates/monokl/src/lib.rs"
+        ],
+        "test": [
+          "crates/monokl/src/lib.rs"
+        ]
+      },
+      "depends_on": [
+        "T-016"
+      ],
+      "steps": [
+        "Write the failing test. Run: `test -f /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs && echo EXISTS || echo MISSING`. Expected output before implementation: `MISSING`.",
+        "Confirm red: run the command above now. It prints `MISSING`.",
+        "Write the minimal implementation. Create /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs with exactly this content:\n```rust\n// Test modules use `.unwrap()` / `.expect()` liberally \u2014 conventional in tests because\n// a failing assertion should panic, and the workspace-level `deny unwrap_used` / `expect_used`\n// lint is intended for production code only. Scope the allow to `#[cfg(test)]` so prod code\n// stays covered.\n#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]\n\npub mod analysis;\npub mod budget;\n#[cfg(feature = \"cli\")]\npub mod cli;\npub mod dedup;\n#[cfg(feature = \"lang-ts\")]\npub mod enrich;\npub mod error;\n#[cfg(feature = \"lang-ts\")]\npub mod indices;\n#[cfg(feature = \"cli\")]\npub mod output;\n#[cfg(feature = \"lang-ts\")]\npub mod pipeline;\npub mod query;\npub mod rank;\npub mod text_search;\npub mod tokens;\npub mod types;\n\n#[cfg(test)]\nmod tests_types;\n```\nNote: this task does not create analysis.rs/budget.rs/etc. -- per SPEC-004's own non_goals, those files' existence is each named module's own separate track's obligation, not this manifest-locking track's.",
+        "Confirm green. Run: `diff /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs - <<'EOF'\n// Test modules use `.unwrap()` / `.expect()` liberally \u2014 conventional in tests because\n// a failing assertion should panic, and the workspace-level `deny unwrap_used` / `expect_used`\n// lint is intended for production code only. Scope the allow to `#[cfg(test)]` so prod code\n// stays covered.\n#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]\n\npub mod analysis;\npub mod budget;\n#[cfg(feature = \"cli\")]\npub mod cli;\npub mod dedup;\n#[cfg(feature = \"lang-ts\")]\npub mod enrich;\npub mod error;\n#[cfg(feature = \"lang-ts\")]\npub mod indices;\n#[cfg(feature = \"cli\")]\npub mod output;\n#[cfg(feature = \"lang-ts\")]\npub mod pipeline;\npub mod query;\npub mod rank;\npub mod text_search;\npub mod tokens;\npub mod types;\n\n#[cfg(test)]\nmod tests_types;\nEOF` and `grep -c '^pub mod ' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs` (expect `14`) and `grep -c '^mod tests_types;$' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs` (expect `1`). Expected: diff produces no output; counts are `14` and `1` (15 total, 14 pub + 1 non-pub, matching AC-014). Also confirm feature-gate cross-consistency between this file and Cargo.toml's [features] table (grounds AC-015, verified further by T-018's fixture): `grep -c '^cli = \\[' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expect `1`; `grep -c '^lang-ts = \\[' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expect `1`; `grep -c 'cfg(feature = \"lang-ts\")' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs` expect `3`; `grep -c 'cfg(feature = \"cli\")' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs` expect `2`. This diffs the written file only against a heredoc re-typed inside this task, which proves internal self-consistency but not fidelity to the source document -- also diff the whole file against docs/spec/01-core-architecture.md's own Section 2, anchored by pattern rather than a hardcoded line range, with a length guard (arithmetic comparison, tolerant of BSD wc -l padding) so a moved section fails loudly instead of silently diffing against the wrong content: `lb=$(awk '/^# Section 2: /{f=1;next} f&&/^```rust$/{c=1;next} c&&/^```$/{exit} c' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md); n=$(printf '%s\\n' \"$lb\" | wc -l | tr -d ' '); [ \"$n\" -eq 28 ] || echo \"SOURCE BLOCK MOVED -- got $n lines, expected 28\"; printf '%s\\n' \"$lb\" | diff - /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs`. Expected: no SOURCE BLOCK MOVED line, no diff output, exit 0. Additionally, this task (not just T-018) grounds AC-015's own gate-distribution claim, by module NAME not just count, since T-018's fixture never reads this repo's actual lib.rs/Cargo.toml: `diff <(grep -A1 'cfg(feature = \"lang-ts\")' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs | grep '^pub mod') <(printf 'pub mod enrich;\\npub mod indices;\\npub mod pipeline;\\n')` expect no output; `diff <(grep -A1 'cfg(feature = \"cli\")' /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs | grep '^pub mod') <(printf 'pub mod cli;\\npub mod output;\\n')` expect no output; and cross-check the source's own summary sentence verbatim: `grep -c '^Modules gated on .lang-ts.: .enrich., .indices., .pipeline.\\. Modules gated on .cli.: .cli., .output.\\. Everything else is always compiled\\.$' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md` expect `1`.",
+        "Commit."
+      ],
+      "commit_message": "feat(monokl): add lib.rs with crate attribute and 15 module declarations\n\nLocks SPEC-004 AC-014 -- the cfg_attr(test, ...) crate attribute and\nall 15 module declarations (14 pub mod, 1 #[cfg(test)] mod) with their\nexact source order and cfg gates, verbatim per\ndocs/spec/01-core-architecture.md:157-186.",
+      "covers_criteria": [
+        "AC-014",
+        "AC-015"
+      ]
+    },
+    {
+      "id": "T-018",
+      "title": "Verify the unexpected_cfgs consequence AC-015 describes (isolated fixture)",
+      "files": {
+        "test": []
+      },
+      "depends_on": [
+        "T-017"
+      ],
+      "steps": [
+        "Write the failing test (isolated /tmp fixture; every command that must run inside it uses a `(cd /tmp/ac015_fixture && ...)` subshell, never a bare `cd`, so the implementer's shell working directory is never left pointed at a directory this task later deletes). Build a fixture with NO undeclared-feature cfg yet: `rm -rf /tmp/ac015_fixture && mkdir -p /tmp/ac015_fixture/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n' > /tmp/ac015_fixture/Cargo.toml && printf 'pub fn x(){}\\n' > /tmp/ac015_fixture/src/lib.rs`. Assert: `out=$( (cd /tmp/ac015_fixture && cargo build) 2>&1); echo \"$out\" | grep -c unexpected_cfgs`. Expected output before the fixture references an undeclared feature: `0` (no cfg(feature=...) referencing an undeclared feature exists yet, so no warning).",
+        "Confirm red: run the command above now. It prints `0`.",
+        "Write the minimal implementation (in the fixture, not the real repo -- T-016/T-017 already wrote consistent, agreeing content there, per T-017's own cross-check). Rewrite the fixture's lib.rs to reference an undeclared feature, exercising AC-015's claimed consequence: `printf '#[cfg(feature = \"nonexistent-feature\")]\\npub mod ghost;\\n' > /tmp/ac015_fixture/src/lib.rs`.",
+        "Confirm green. Run: `out=$( (cd /tmp/ac015_fixture && cargo clean >/dev/null 2>&1 && cargo build) 2>&1); rc=$?; echo \"$out\"; echo \"exit=$rc\"`. `cargo clean` first forces the warning to actually be re-emitted (a cached build silently skips it). The fixture build's real output (captured live against cargo 1.96.0) contains `warning: unexpected \\`cfg\\` condition value: \\`nonexistent-feature\\`` and `note: \\`#[warn(unexpected_cfgs)]\\` on by default`, and `exit=0` (a warning, not a build failure) -- confirming AC-015's claim that an unexpected_cfgs mismatch is warn-by-default and does not escalate to deny under the locked lint table (T-002's [workspace.lints.clippy] does not list unexpected_cfgs). Assert precisely: `echo \"$out\" | grep -q 'unexpected_cfgs' && echo WARNED` expect `WARNED`; `echo \"$out\" | grep -q '^error'` expect no match (grep exits 1); `[ \"$rc\" = 0 ] && echo EXIT_OK` expect `EXIT_OK`. Clean up: `rm -rf /tmp/ac015_fixture`.",
+        "Commit (no file changes in the real repo; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): verify AC-015's unexpected_cfgs warn-not-deny consequence via an isolated /tmp fixture (no file changes; AC-015's own gate-distribution claim against this repo's real lib.rs/Cargo.toml is verified directly by T-017)",
+      "covers_criteria": [
+        "AC-015"
+      ]
+    },
+    {
+      "id": "T-019",
+      "title": "Verify the AC-016 cross-document dependency discrepancy and its two differing consequences",
+      "files": {
+        "test": [
+          "crates/monokl/Cargo.toml",
+          "docs/spec/03-multi-language-platform.md"
+        ]
+      },
+      "depends_on": [
+        "T-012",
+        "T-015"
+      ],
+      "steps": [
+        "Write the failing test. Locate the 03-multi-language-platform.md 'new dependencies' list by pattern instead of a hardcoded line range (a hardcoded range breaks silently if unrelated content shifts it): `awk '/^New runtime dependencies introduced relative to Phase 1:/{f=1;next} f&&/^$/&&seen{exit} f&&/^- /{seen=1;print}' /Users/gabe/Projects/monokl/docs/spec/03-multi-language-platform.md | grep -cE 'dashmap|rustc-hash|tempfile'`. Expected output: `3` (all three names appear in that later document's 'new dependencies' list) -- this fact is already true today and has no red/green transition of its own; the genuine red/green transition for this task is the fixture built in the following steps.",
+        "Confirm the discrepancy is real against the two real, already-written files. Run: `grep -c '^dashmap       = { workspace = true }$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` (expect `1`, from T-012's [dependencies]), `grep -c '^rustc-hash    = { workspace = true }$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` (expect `1`, from T-012's [dependencies]), and `grep -c '^tempfile          = { workspace = true }$' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` (expect `1`, from T-015's [dev-dependencies] only -- confirm it is NOT also in [dependencies]: `sed -n '/^\\[dependencies\\]$/,/^\\[dev-dependencies\\]$/p' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | grep -c tempfile` expect `0`).",
+        "Build the duplicate-key fixture and confirm its red state first (isolated /tmp fixture; every command that must run inside it uses a `(cd <dir> && ...)` subshell, never a bare `cd`): a single dashmap key parses cleanly. `rm -rf /tmp/ac016_dup && mkdir -p /tmp/ac016_dup/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n\\n[dependencies]\\ndashmap = \"5\"\\n' > /tmp/ac016_dup/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac016_dup/src/lib.rs`. Assert: `out=$( (cd /tmp/ac016_dup && cargo metadata --no-deps --format-version 1) 2>&1); rc=$?; [ \"$rc\" = 0 ] && echo SINGLE_KEY_OK`. Expected: `SINGLE_KEY_OK` -- this is the red state: a single dashmap key is valid TOML, so the fixture does not yet reproduce AC-016's claimed failure.",
+        "Confirm red-to-green transition: append the second dashmap key (matching what 03-multi-language-platform.md's list literally implies if naively appended alongside T-012's existing entry), and confirm it now fails exactly as AC-016 states. `printf 'dashmap = \"6\"\\n' >> /tmp/ac016_dup/Cargo.toml`. Assert: `out1=$( (cd /tmp/ac016_dup && cargo metadata --no-deps --format-version 1) 2>&1); rc1=$?; echo \"$out1\" | head -2; echo \"exit=$rc1\"`. Expected (captured live against cargo 1.96.0): `error: duplicate key` on line 1, `  --> Cargo.toml:12:1` on line 2, `exit=101`. Assert precisely: `echo \"$out1\" | grep -q '^error: duplicate key' && echo DUPKEY` expect `DUPKEY`; `[ \"$rc1\" = 101 ] && echo EXIT_101` expect `EXIT_101`.",
+        "Build and confirm the second, contrasting fixture (legal cross-table promotion for tempfile, showing the same 'append the doc's list literally' approach behaves differently for a name already present in a different table): `rm -rf /tmp/ac016_promo && mkdir -p /tmp/ac016_promo/src && printf '[package]\\nname = \"repro2\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro2\"\\npath = \"src/lib.rs\"\\n\\n[dependencies]\\ntempfile = \"3\"\\n\\n[dev-dependencies]\\ntempfile = \"3\"\\n' > /tmp/ac016_promo/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac016_promo/src/lib.rs`. Assert: `out2=$( (cd /tmp/ac016_promo && cargo metadata --no-deps --format-version 1) 2>&1); rc2=$?; [ \"$rc2\" = 0 ] && echo EXIT_OK`. Expected: `EXIT_OK` -- confirming that following the same list literally for tempfile parses successfully (a different table, not a duplicate key), the silent semantic-promotion consequence AC-016 also states. Clean up: `rm -rf /tmp/ac016_dup /tmp/ac016_promo`.",
+        "Commit (no file changes; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): verify AC-016 cross-document dependency discrepancy and its two consequences (no file changes)",
+      "covers_criteria": [
+        "AC-016"
+      ]
+    },
+    {
+      "id": "T-020",
+      "title": "Verify the AC-008B registry-configuration gap",
+      "files": {
+        "test": []
+      },
+      "depends_on": [
+        "T-011"
+      ],
+      "steps": [
+        "Write the failing test (isolated fixture, no real files touched; every command that must run inside the fixture uses a `(cd /tmp/ac008b_fixture && ...)` subshell, never a bare `cd`, so the implementer's shell working directory is never left pointed at a directory this task later deletes). Run: `rm -rf /tmp/ac008b_fixture && mkdir -p /tmp/ac008b_fixture/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n\\n[dependencies]\\nio-errors = { path = \"../io-errors\", version = \"0.1\", registry = \"orin-cargo\", default-features = false }\\n' > /tmp/ac008b_fixture/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac008b_fixture/src/lib.rs`. The fixture must declare a [lib] section with a real src/lib.rs -- without one, cargo reports a different, earlier error ('no targets specified in the manifest') before it ever reaches the registry check, which would not exercise AC-008B at all.",
+        "Confirm red. Run: `out=$( (cd /tmp/ac008b_fixture && cargo metadata --no-deps --format-version 1) 2>&1); rc=$?; echo \"$out\" | tail -2; echo \"exit=$rc\"`. Cargo's real output (captured live against cargo 1.96.0) ends with:\n```\nCaused by:\n  registry index was not found in any configuration: `orin-cargo`\n```\nwith `exit=101` (the leading `error: failed to parse manifest at ...` line's exact path is not asserted, since /tmp may be a symlink cargo canonicalizes -- e.g. to /private/tmp on macOS). Assert: `echo \"$out\" | grep -q 'registry index was not found in any configuration: .orin-cargo.' && echo REGISTRY_ERR` expect `REGISTRY_ERR`; `[ \"$rc\" = 101 ] && echo EXIT_101` expect `EXIT_101`. This reproduces exactly AC-008B's claim: the failure happens at manifest *parse* time (before any dependency resolution or network access), not merely when actually publishing -- and it is unrelated to whether the io-errors path target exists on disk (this fixture's ../io-errors does not exist, and that is not the reported cause). Also assert this directly against the real, already-written manifest, not only the synthetic /tmp lookalike above (T-011 already wrote the `registry = \"orin-cargo\"` line into crates/monokl/Cargo.toml, so the real workspace now exhibits this same failure): `out_real=$( (cd /Users/gabe/Projects/monokl && cargo metadata --no-deps --format-version 1) 2>&1); rc_real=$?; echo \"$out_real\" | grep -q 'registry index was not found in any configuration: .orin-cargo.' && echo REAL_REGISTRY_ERR; [ \"$rc_real\" = 101 ] && echo REAL_EXIT_101`. Expected: `REAL_REGISTRY_ERR` and `REAL_EXIT_101` -- this proves AC-008B on the actual artifact this track locks, not merely on a synthetic lookalike; the /tmp fixture above remains useful as an isolated control showing the failure is manifest-parse-time and independent of whether ../io-errors exists on disk. If neither REAL_REGISTRY_ERR nor REAL_EXIT_101 prints, the command did not run against the monokl workspace -- stop and re-check the path rather than reading silence as a pass.",
+        "Write the minimal implementation: none. This is a documented, confirmed, out-of-corpus gap (non_goals explicitly excludes resolving it) -- there is no `.cargo/config.toml [registries.orin-cargo]` entry to write as part of this track. AC-008B's obligation is fully discharged by T-011 (the io-errors dependency line already states `registry = \"orin-cargo\"` verbatim) plus this task's confirmed reproduction of the consequence.",
+        "Confirm green: the reproduction in step 2 IS the passing assertion for this criterion (there is no code state to make 'pass' -- the criterion is a statement about a confirmed environmental gap, and the test's job is confirming that gap is real and behaves exactly as claimed). Clean up: `rm -rf /tmp/ac008b_fixture`.",
+        "Commit (no file changes; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): verify AC-008B registry-configuration gap (no file changes)",
+      "covers_criteria": [
+        "AC-008B"
+      ]
+    },
+    {
+      "id": "T-021",
+      "title": "Verify AC-001B publish-registry restriction behavior",
+      "files": {
+        "test": []
+      },
+      "depends_on": [
+        "T-007"
+      ],
+      "steps": [
+        "Write the failing test (isolated fixture; every command that must run inside it uses a `(cd /tmp/ac001b_fixture && ...)` subshell, never a bare `cd`, so the implementer's shell working directory is never left pointed at a directory this task later deletes). Run: `rm -rf /tmp/ac001b_fixture && mkdir -p /tmp/ac001b_fixture/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\npublish = [\"orin-cargo\"]\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n' > /tmp/ac001b_fixture/Cargo.toml && echo 'pub fn x(){}' > /tmp/ac001b_fixture/src/lib.rs`. Expected: fixture created; no assertions yet.",
+        "Confirm red (explicit --registry case). Run: `out1=$( (cd /tmp/ac001b_fixture && cargo publish --dry-run --allow-dirty --registry crates-io) 2>&1); rc1=$?; echo \"$out1\" | tail -3; echo \"exit=$rc1\"`. Cargo's real output (captured live against cargo 1.96.0) is:\n```\nerror: `repro` cannot be published.\nThe registry `crates-io` is not listed in the `package.publish` value in Cargo.toml.\n```\nwith `rc1=101`. Assert: `echo \"$out1\" | grep -q 'is not listed in the .package.publish. value in Cargo.toml' && echo DENIED` expect `DENIED`; `[ \"$rc1\" = 101 ] && echo EXIT_101` expect `EXIT_101`.",
+        "Write the minimal implementation: none -- verify the two remaining stated behaviors on the same fixture. Run: `out2=$( (cd /tmp/ac001b_fixture && cargo publish --dry-run --allow-dirty) 2>&1); rc2=$?; echo \"$out2\" | tail -3; echo \"exit=$rc2\"` (no --registry flag). Expected output (captured live): `note: found \\`orin-cargo\\` as only allowed registry. Publishing to it automatically.` followed by `error: registry index was not found in any configuration: \\`orin-cargo\\`` with `rc2=101` -- confirming cargo auto-selects orin-cargo (no ambiguous-registry error) but then fails for the separate, AC-008B reason. Assert: `echo \"$out2\" | grep -q 'found .orin-cargo. as only allowed registry' && echo AUTOSELECTED` expect `AUTOSELECTED`; `echo \"$out2\" | grep -q 'registry index was not found in any configuration' && echo THEN_INDEX_ERR` expect `THEN_INDEX_ERR`.",
+        "Confirm green: both reproductions in steps 2 and 3 match AC-001B's claims exactly -- an explicit disallowed --registry fails on the publish allow-list check; an omitted --registry auto-selects the sole allowed registry (orin-cargo) and only then fails on the registry-index-not-found gap. Clean up: `rm -rf /tmp/ac001b_fixture`.",
+        "Commit (no file changes; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): verify AC-001B publish-registry restriction behavior (no file changes)",
+      "covers_criteria": [
+        "AC-001B"
+      ]
+    },
+    {
+      "id": "T-022",
+      "title": "Verify AC-003B required-features build behavior under explicit, implicit, and bare-install target selection",
+      "files": {
+        "test": []
+      },
+      "depends_on": [
+        "T-008",
+        "T-009",
+        "T-010"
+      ],
+      "steps": [
+        "Write the failing test (two isolated fixtures reproducing AC-003/AC-004's required-features + default-features shape without io-errors/oxc dependencies; every command that must run inside a fixture uses a `(cd <dir> && ...)` subshell, never a bare `cd`, so the implementer's shell working directory is never left pointed at a directory this task later deletes). Fixture A (default disabled, for cases 1-3): `rm -rf /tmp/ac003b_fixture && mkdir -p /tmp/ac003b_fixture/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro\"\\npath = \"src/lib.rs\"\\n\\n[[bin]]\\nname = \"repro\"\\npath = \"src/main.rs\"\\nrequired-features = [\"cli\"]\\n\\n[features]\\ndefault = []\\ncli = []\\n' > /tmp/ac003b_fixture/Cargo.toml && echo 'fn main(){}' > /tmp/ac003b_fixture/src/main.rs && echo 'pub fn x(){}' > /tmp/ac003b_fixture/src/lib.rs`. Fixture B (cli in default, for case 4): `rm -rf /tmp/ac003b_fixture2 && mkdir -p /tmp/ac003b_fixture2/src && printf '[package]\\nname = \"repro2\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"repro2\"\\npath = \"src/lib.rs\"\\n\\n[[bin]]\\nname = \"repro2\"\\npath = \"src/main.rs\"\\nrequired-features = [\"cli\"]\\n\\n[features]\\ndefault = [\"cli\"]\\ncli = []\\n' > /tmp/ac003b_fixture2/Cargo.toml && echo 'fn main(){}' > /tmp/ac003b_fixture2/src/main.rs && echo 'pub fn x(){}' > /tmp/ac003b_fixture2/src/lib.rs`. Expected: both fixtures created; no assertions yet.",
+        "Confirm case 1 (explicit target selection, cli disabled, fixture A) -- run: `out=$( (cd /tmp/ac003b_fixture && cargo build --bin repro --no-default-features) 2>&1); rc=$?; echo \"$out\" | tail -2; echo \"exit=$rc\"`. Note the exit code is captured from cargo itself via `$?` immediately after command substitution, not from a downstream `tail` in a pipeline (piping to tail directly would report tail's exit status, always 0, masking a real cargo failure). Expected output (captured live against cargo 1.96.0): `error: target \\`repro\\` in package \\`repro\\` requires the features: \\`cli\\`` followed by `Consider enabling them by passing, e.g., \\`--features=\"cli\"\\``, and `exit=101` (non-zero).",
+        "Confirm case 2 (implicit target selection, cli disabled, fixture A) -- run: `out=$( (cd /tmp/ac003b_fixture && cargo build --no-default-features) 2>&1); rc=$?; echo \"$out\" | tail -2; echo \"exit=$rc\"`. Expected output: `Finished \\`dev\\` profile [unoptimized + debuginfo] target(s) in ...s` with `exit=0` and no mention of the bin target at all (silent skip, no diagnostic).",
+        "Confirm case 3 (bare cargo install, no --bin, cli disabled, fixture A) -- run: `out=$( (cd /tmp/ac003b_fixture && cargo install --path . --no-default-features --root ./instroot) 2>&1); rc=$?; echo \"$out\" | tail -3; echo \"exit=$rc\"`. Expected output: `warning: none of the package's binaries are available for install using the selected features` followed by `bin \"repro\" requires the features: \\`cli\\`` and `Consider enabling some of the needed features by passing, e.g., \\`--features=\"cli\"\\``, with `exit=0` -- a third, distinct case: succeeds like case 2, but unlike case 2 is not fully silent.",
+        "Confirm case 4 (bare build, cli supplied only via default features, fixture B -- standing in for the real crate's default=[\"lang-ts\",\"cli\"] which supplies cli automatically) -- run: `out=$( (cd /tmp/ac003b_fixture2 && cargo build) 2>&1); rc=$?; echo \"$out\" | tail -1; echo \"exit=$rc\"; test -x /tmp/ac003b_fixture2/target/debug/repro2 && echo BIN_BUILT`. Expected output: `Finished ...`, `exit=0`, and `BIN_BUILT` -- confirming AC-003B's closing clause that with cli enabled via default features (no --features flag passed at all), the bin target builds with no special invocation. Clean up: `rm -rf /tmp/ac003b_fixture /tmp/ac003b_fixture2`.",
+        "Confirm green: all four reproductions in steps 2-5 match AC-003B's stated behaviors exactly (this criterion has no code to implement in the real crate -- T-008's required-features=[\"cli\"] and T-009's default=[\"lang-ts\",\"cli\"] already lock the content that produces these behaviors; this task only confirms the consequence is real).",
+        "Commit (no file changes; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): verify AC-003B required-features build behavior across explicit/implicit/bare-install/default-enabled target selection (no file changes)",
+      "covers_criteria": [
+        "AC-003B"
+      ]
+    },
+    {
+      "id": "T-023",
+      "title": "Structurally validate the assembled real manifests via an offline /tmp copy (supplementary gate)",
+      "files": {
+        "test": [
+          "Cargo.toml",
+          "crates/monokl/Cargo.toml",
+          "crates/monokl/src/lib.rs"
+        ]
+      },
+      "depends_on": [
+        "T-017",
+        "T-019"
+      ],
+      "steps": [
+        "Write the failing test. Confirm this task's own verification method (cargo metadata) can actually FAIL on a structurally broken manifest before checking it can succeed on the real one -- a vacuous 'it parses' result wouldn't prove anything, since every prior task (T-001..T-019) verified content only with line-oriented grep/diff windows, which are blind to table structure: a block appended under the wrong preceding header, or a duplicated table header, would satisfy every one of those checks while producing a manifest Cargo itself rejects. (Caveat, scoped precisely: cargo metadata also silently drops a [[bench]] target whose source file does not exist, with no warning -- so this task's parse gate does NOT independently validate [[bench]]'s structural placement; that remains covered only by T-016's line-window diff and this task's own whole-file source diff in the green step below, not by parsing.) Build a deliberately broken copy to prove the gate can fail: `rm -rf /tmp/mk_struct_broken && mkdir -p /tmp/mk_struct_broken/src && printf '[package]\\nname = \"repro\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[package]\\nname = \"repro-dup\"\\n' > /tmp/mk_struct_broken/Cargo.toml && echo 'pub fn x(){}' > /tmp/mk_struct_broken/src/lib.rs`. Assert: `out=$( (cd /tmp/mk_struct_broken && cargo metadata --no-deps --format-version 1) 2>&1); rc=$?; [ \"$rc\" != 0 ] && echo BROKEN_REJECTED`. Expected: `BROKEN_REJECTED`.",
+        "Confirm red: run the command above now. It prints `BROKEN_REJECTED`, proving the parse gate genuinely discriminates a broken structure from a valid one. Clean up: `rm -rf /tmp/mk_struct_broken`.",
+        "Write the minimal implementation. Copy the real files into a throwaway workspace, stripping only the two keys that require environment configuration this track's non_goals excludes (`registry = \"orin-cargo\"` and the io-errors `version` req, since no real io-errors crate exists to satisfy a version requirement), and add a minimal stub io-errors sibling purely as a path-resolution target (not a specification of io-errors' own content, which is explicitly out of scope): `rm -rf /tmp/mk_struct && mkdir -p /tmp/mk_struct/crates/io-errors/src /tmp/mk_struct/crates/monokl/src && cp /Users/gabe/Projects/monokl/Cargo.toml /tmp/mk_struct/Cargo.toml && sed 's#^io-errors = .*#io-errors = { path = \"../io-errors\", default-features = false }#' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml > /tmp/mk_struct/crates/monokl/Cargo.toml && cp /Users/gabe/Projects/monokl/crates/monokl/src/lib.rs /tmp/mk_struct/crates/monokl/src/lib.rs && printf '[package]\\nname = \"io-errors\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n\\n[lib]\\nname = \"io_errors\"\\npath = \"src/lib.rs\"\\n\\n[features]\\nmiette = []\\n' > /tmp/mk_struct/crates/io-errors/Cargo.toml && echo 'pub fn y(){}' > /tmp/mk_struct/crates/io-errors/src/lib.rs`.",
+        "Confirm green. Run: `( (cd /tmp/mk_struct && cargo metadata --no-deps --format-version 1) > /tmp/mk_meta.json 2>&1 ); echo \"exit=$?\"` -- expect `exit=0` (the whole assembled manifest -- [package], [lib], [[bin]], [features], [dependencies], [dev-dependencies], [[bench]] as a mechanical table (not independently structure-validated, per the caveat above), [lints], and the root's [workspace.package]/[workspace.lints.*]/[workspace.dependencies] -- parses and resolves offline with no network access). Then assert its content: `python3 -c \"import json; d=json.load(open('/tmp/mk_meta.json')); p=[p for p in d['packages'] if p['name']=='monokl'][0]; assert set(p['features'].keys())=={'default','lang-ts','cli','miette'}, p['features'].keys(); assert p['edition']=='2024', p['edition']; assert p['rust_version']=='1.96', p['rust_version']; assert p['license']=='AGPL-3.0-or-later', p['license']; nondev=[d for d in p['dependencies'] if d['kind'] is None]; assert len(nondev)==22, len(nondev); print('OK')\"`. Expected: `OK` (22 = 14 always-on core crates + io-errors + 5 optional oxc_* + clap + miette). Also re-confirm whole-file exactness on the real crate manifest against its source document, anchored by pattern rather than a hardcoded line range so the check survives unrelated edits elsewhere in that 3000+ line document, with a length guard so a moved/renamed section fails loudly instead of silently diffing against the wrong content: `block=$(awk '/^# Section 1: Cargo\\.toml/{f=1;next} f&&/^```toml$/{c=1;next} c&&/^```$/{exit} c' /Users/gabe/Projects/monokl/docs/spec/01-core-architecture.md); n=$(echo \"$block\" | wc -l | tr -d ' '); [ \"$n\" -eq 86 ] || echo 'SOURCE BLOCK MOVED -- re-derive extraction pattern, got '\"$n\"' lines, expected 86'; echo \"$block\" | diff - /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml`. Expected: no SOURCE BLOCK MOVED line, and the diff produces no output, exit 0. Finally, complete AC-023's two-way completeness match on the crate side (T-005 only checked the root side): `grep -cE '^[A-Za-z0-9_-]+ +=  *\\{ workspace = true' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml` expect `27` (26 distinct crates, serde_json counted twice across [dependencies]/[dev-dependencies]), and `diff <(grep -E '^[A-Za-z0-9_-]+ +=  *\\{ workspace = true' /Users/gabe/Projects/monokl/crates/monokl/Cargo.toml | awk '{print $1}' | sort -u) <(sed -n '/^\\[workspace.dependencies\\]$/,$p' /Users/gabe/Projects/monokl/Cargo.toml | grep -E '^[A-Za-z0-9_-]+ =' | awk '{print $1}' | sort -u)` expect no output, exit 0 (every crate the crate manifest marks `{ workspace = true }` has a root pin, and vice versa). Clean up: `rm -rf /tmp/mk_struct /tmp/mk_meta.json`.",
+        "Commit (no file changes; run `git commit --allow-empty -m \"$COMMIT_MSG\"` using this task's commit_message, recording the verification as an empty commit)."
+      ],
+      "commit_message": "test(monokl): structurally validate assembled Cargo.toml/lib.rs via offline /tmp parse, and complete AC-023's two-way dependency match (no file changes)",
+      "covers_criteria": [
+        "AC-023"
+      ]
+    }
+  ]
+}

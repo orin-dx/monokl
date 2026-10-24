@@ -243,20 +243,25 @@ pub enum MonoklError {
     #[error("internal lock poisoned in {context} — a prior panic left shared state possibly \
              inconsistent; this is a bug, please report")]
     LockPoisoned { context: &'static str },
+
+    #[error("ambiguous dependency resolution requires at least one candidate")]
+    EmptyAmbiguousPaths,
 }
 
 pub type Result<T> = std::result::Result<T, MonoklError>;
 ```
 
-> **Post-research correction.** `InvalidGitRef`/`Git`/`SymlinkRejected`/`FileTooLarge` are added here — Part 3's `git_scope.rs` and `io_safety.rs` construct all four, but an earlier draft never declared them on the enum, a second genuine compile-breaking gap caught alongside §11's. Two variants from that earlier draft are removed: `Parse { path, details: String }` and `Query { input, message: String }` are never constructed anywhere in this document — parse failures are surfaced via `FileAnalysis::had_parse_errors` + `tracing::warn!` (§17), and query failures only ever raise `TooManyTerms`. `#[non_exhaustive]` means downstream `match` arms must already use a wildcard, so removing genuinely dead variants is a clean cut, not a breaking one.
+> **Post-research correction.** `InvalidGitRef`/`Git`/`SymlinkRejected`/`FileTooLarge` are added here — Part 3's `git_scope.rs` and `io_safety.rs` construct all four, but an earlier draft never declared them on the enum, a second genuine compile-breaking gap caught alongside §11's. `EmptyAmbiguousPaths` supports the validated dependency-resolution constructor added in §4. Two variants from that earlier draft are removed: `Parse { path, details: String }` and `Query { input, message: String }` are never constructed anywhere in this document — parse failures are surfaced via `FileAnalysis::had_parse_errors` + `tracing::warn!` (§17), and query failures only ever raise `TooManyTerms`. `#[non_exhaustive]` means downstream `match` arms must already use a wildcard, so removing genuinely dead variants is a clean cut, not a breaking one.
 
 # Section 4: types.rs — all public types verbatim
 
 ```rust
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use camino::Utf8PathBuf;
-use serde::{Deserialize, Serialize};
+use camino::{Utf8Path, Utf8PathBuf};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::error::MonoklError;
 
 // ── Symbol kind ───────────────────────────────────────────────────────────────
 
@@ -342,19 +347,78 @@ pub enum BindingKind {
 pub enum DependencyTarget {
     File {
         specifier: String,
-        resolved: Option<Utf8PathBuf>,
+        resolution: DependencyResolution,
         is_relative: bool,
     },
     RustPath {
         segments: Vec<String>,
         anchor: RustPathAnchor,
-        resolved: Option<Utf8PathBuf>,
+        resolution: DependencyResolution,
     },
     Namespace {
         segments: Vec<String>,
         is_static: bool,
         alias: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbiguousPaths {
+    first: Utf8PathBuf,
+    additional: BTreeSet<Utf8PathBuf>,
+}
+
+impl AmbiguousPaths {
+    pub fn try_new(candidates: Vec<Utf8PathBuf>) -> std::result::Result<Self, MonoklError> {
+        let mut candidates: BTreeSet<_> = candidates.into_iter().collect();
+        let Some(first) = candidates.iter().next().cloned() else {
+            return Err(MonoklError::EmptyAmbiguousPaths);
+        };
+        candidates.remove(&first);
+        Ok(Self { first, additional: candidates })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Utf8Path> {
+        std::iter::once(self.first.as_path())
+            .chain(self.additional.iter().map(Utf8PathBuf::as_path))
+    }
+}
+
+impl<'de> Deserialize<'de> for AmbiguousPaths {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            first: Utf8PathBuf,
+            additional: BTreeSet<Utf8PathBuf>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let mut candidates: Vec<_> = wire.additional.into_iter().collect();
+        candidates.push(wire.first);
+        Self::try_new(candidates).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Resolution is lossless: callers must not silently select the first candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+#[non_exhaustive]
+pub enum DependencyResolution {
+    Resolved { path: Utf8PathBuf },
+    Ambiguous { candidates: AmbiguousPaths, diagnostic: Diagnostic },
+    Unresolved { diagnostic: Diagnostic },
+    External,
+}
+
+impl DependencyResolution {
+    pub fn resolved_path(&self) -> Option<&Utf8Path> {
+        match self {
+            Self::Resolved { path } => Some(path.as_path()),
+            Self::Ambiguous { .. } | Self::Unresolved { .. } | Self::External => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -637,6 +701,10 @@ pub struct ExtractRequest {
     pub line_end: Option<usize>,
 }
 ```
+
+Serde fixtures lock `DependencyResolution`'s tagged wire shape and behavioral
+fixtures cover all four outcomes, including the non-empty/sorted/deduplicated
+ambiguous-candidate invariant.
 
 # Section 5: query/ — lexer, parser, plan verbatim
 
@@ -1717,10 +1785,11 @@ use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions,
 use oxc_span::{GetSpan, SourceType};
 use io_errors::FileIoError;
 use tracing::warn;
-use crate::error::Result;
+use crate::error::{MonoklError, Result};
 use crate::types::{
-    BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord,
-    JsxAttribute, JsxElementEntry, LangData, SymbolEntry, SymbolKind, TsData, TsconfigMode, WorkspaceOptions,
+    BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyResolution, DependencyTarget,
+    Diagnostic, DiagnosticKind, ExportRecord, JsxAttribute, JsxElementEntry, LangData, SymbolEntry,
+    SymbolKind, TsData, TsconfigMode, WorkspaceOptions,
 };
 use super::cache;
 use super::content_hash::ContentHash;
@@ -1731,14 +1800,16 @@ use super::persist;
 
 pub struct TsAnalyzer {
     resolver: Resolver,
+    workspace_root: Utf8PathBuf,
 }
 
 impl TsAnalyzer {
-    // `Result<Self>` even though `Resolver::new` can't currently fail: deliberate, not an
-    // oversight (unlike RustAnalyzer::from_workspace_opts, which is genuinely infallible and
-    // returns bare `Self`). Kept fallible so a future oxc_resolver version that validates
-    // tsconfig eagerly doesn't force a breaking signature change across every call site.
-    pub fn new(tsconfig: Option<&Utf8Path>) -> Result<Self> {
+    // The resolver constructor is infallible today, but normalizing the workspace boundary is not.
+    pub fn new(workspace_root: &Utf8Path, tsconfig: Option<&Utf8Path>) -> Result<Self> {
+        let raw_root = std::fs::canonicalize(workspace_root.as_std_path())
+            .map_err(|e| MonoklError::Io(FileIoError::read(workspace_root, e)))?;
+        let workspace_root = Utf8PathBuf::from_path_buf(raw_root)
+            .map_err(|path| MonoklError::NonUtf8Path { path })?;
         let tsconfig_opt = tsconfig.map(|p| {
             TsconfigDiscovery::Manual(TsconfigOptions {
                 config_file: p.as_std_path().to_owned(),
@@ -1755,7 +1826,7 @@ impl TsAnalyzer {
             condition_names: vec!["import".into(), "require".into(), "node".into(), "default".into()],
             ..ResolveOptions::default()
         });
-        Ok(Self { resolver })
+        Ok(Self { resolver, workspace_root })
     }
 
     pub fn from_workspace_opts(opts: &WorkspaceOptions) -> Result<Self> {
@@ -1764,7 +1835,7 @@ impl TsAnalyzer {
             TsconfigMode::Manual(p) => Some(p.clone()),
             TsconfigMode::Skip => None,
         };
-        Self::new(tsconfig_path.as_deref())
+        Self::new(&opts.root, tsconfig_path.as_deref())
     }
 
     pub fn config_hash_for(opts: &WorkspaceOptions) -> String {
@@ -1779,11 +1850,37 @@ impl TsAnalyzer {
         format!("monokl-{}-oxc-{}-lang-ts-{}", env!("CARGO_PKG_VERSION"), OXC_VERSION, tsconfig_fragment)
     }
 
-    fn resolve_import(&self, importer: &Utf8Path, specifier: &str) -> Option<Utf8PathBuf> {
-        let dir = importer.parent()?;
+    fn resolve_import(&self, importer: &Utf8Path, specifier: &str) -> DependencyResolution {
+        let Some(dir) = importer.parent() else {
+            return DependencyResolution::Unresolved {
+                diagnostic: Diagnostic {
+                    kind: DiagnosticKind::Degraded,
+                    path: Some(importer.to_owned()),
+                    message: "importer has no parent directory".to_owned(),
+                },
+            };
+        };
         match self.resolver.resolve(dir, specifier) {
-            Ok(resolution) => Utf8PathBuf::from_path_buf(resolution.full_path().clone()).ok(),
-            Err(_) => None,
+            Ok(resolution) => match Utf8PathBuf::from_path_buf(resolution.full_path().clone()) {
+                Ok(path) if path.starts_with(&self.workspace_root) => {
+                    DependencyResolution::Resolved { path }
+                }
+                Ok(_) => DependencyResolution::External,
+                Err(_) => DependencyResolution::Unresolved {
+                    diagnostic: Diagnostic {
+                        kind: DiagnosticKind::Degraded,
+                        path: Some(importer.to_owned()),
+                        message: format!("resolved import path is not UTF-8: {specifier}"),
+                    },
+                },
+            },
+            Err(error) => DependencyResolution::Unresolved {
+                diagnostic: Diagnostic {
+                    kind: DiagnosticKind::Degraded,
+                    path: Some(importer.to_owned()),
+                    message: format!("unable to resolve workspace import {specifier}: {error}"),
+                },
+            },
         }
     }
 
@@ -1870,8 +1967,12 @@ fn parse_full(
     drop(allocator);
     let unresolved_aliases: Vec<String> = dependencies.iter()
         .filter_map(|dep| match &dep.target {
-            crate::types::DependencyTarget::File { specifier, resolved, .. }
-                if resolved.is_none() && TsAnalyzer::looks_like_workspace_alias(specifier)
+            crate::types::DependencyTarget::File {
+                specifier,
+                resolution: DependencyResolution::Unresolved { .. },
+                ..
+            }
+                if TsAnalyzer::looks_like_workspace_alias(specifier)
                 => Some(specifier.clone()),
             _ => None,
         }).collect();
@@ -1908,7 +2009,7 @@ fn parse_full(
 - `ImportDefaultSpecifier(def)` → `DependencyBinding { imported: local.clone(), local, kind: BindingKind::Default }`
 - `ImportNamespaceSpecifier(ns)` → `DependencyBinding { imported: "*".to_string(), local, kind: BindingKind::Namespace }`
 
-Push `DependencyRecord { line, bindings, target: DependencyTarget::File { specifier, resolved, is_relative } }`.
+Push `DependencyRecord { line, bindings, target: DependencyTarget::File { specifier, resolution: analyzer.resolve_import(path, specifier), is_relative } }`. Resolver failures are `Unresolved { diagnostic }`; a successfully resolved target outside the indexed workspace is `External`; a successful in-workspace UTF-8 path is `Resolved`. The current resolver produces no ambiguous set, but the stored shape retains validated `AmbiguousPaths` for analyzers that do.
 
 For each declaration emit a SymbolEntry as in the source. Note: bare `FunctionDeclaration` uses `first_line_signature(code_slice)` for `signature`; bare `ClassDeclaration`/`TSInterfaceDeclaration`/`TSTypeAliasDeclaration`/`TSEnumDeclaration`/`VariableDeclaration` use `signature: None`.
 
@@ -2019,7 +2120,7 @@ pub mod symbol_index;
 use camino::Utf8PathBuf;
 use crate::analysis::file_analysis::FileAnalysis;
 use crate::indices::{FileIdx, WorkspaceIndex};
-use crate::types::{DependencyRecord, DependencyTarget};
+use crate::types::{DependencyRecord, DependencyResolution, DependencyTarget};
 use super::WorkspaceEnricher;
 
 pub struct ImportGraphEnricher {
@@ -2036,7 +2137,14 @@ impl Default for ImportGraphEnricher {
 
 fn target_resolved(dep: &DependencyRecord) -> Option<&Utf8PathBuf> {
     match &dep.target {
-        DependencyTarget::File { resolved, .. } | DependencyTarget::RustPath { resolved, .. } => resolved.as_ref(),
+        DependencyTarget::File { resolution, .. } | DependencyTarget::RustPath { resolution, .. } => {
+            match resolution {
+                DependencyResolution::Resolved { path } => Some(path),
+                DependencyResolution::Ambiguous { .. }
+                | DependencyResolution::Unresolved { .. }
+                | DependencyResolution::External => None,
+            }
+        }
         DependencyTarget::Namespace { .. } => None,
     }
 }
@@ -2187,6 +2295,7 @@ use super::symbol_index::SymbolIndex;
 pub struct WorkspaceIndex {
     pub(crate) files: Vec<Utf8PathBuf>,
     pub(crate) file_index: FxHashMap<Utf8PathBuf, FileIdx>,
+    pub(crate) analyses: Vec<Arc<FileAnalysis>>,
     pub import_graph: ImportGraph,
     pub symbol_index: SymbolIndex,
 }
@@ -2248,7 +2357,7 @@ impl WorkspaceIndex {
         }
         // Phase 3: finalize enrichers
         let mut index = WorkspaceIndex {
-            files, file_index,
+            files, file_index, analyses,
             import_graph: ImportGraph::new(),
             symbol_index: SymbolIndex::new(),
         };
@@ -2262,6 +2371,15 @@ impl WorkspaceIndex {
     }
     pub(crate) fn idx_to_path(&self, idx: FileIdx) -> Option<&Utf8Path> {
         self.files.get(idx.0 as usize).map(Utf8PathBuf::as_path)
+    }
+
+    pub(crate) fn analysis(&self, path: &Utf8Path) -> Option<Arc<FileAnalysis>> {
+        let idx = self.path_to_idx(path)?;
+        self.analyses.get(idx.0 as usize).cloned()
+    }
+
+    pub(crate) fn analyses(&self) -> impl Iterator<Item = (&Utf8Path, &Arc<FileAnalysis>)> {
+        self.files.iter().map(Utf8PathBuf::as_path).zip(self.analyses.iter())
     }
 
     pub fn build_standard(opts: &crate::types::WorkspaceOptions) -> Result<Self> {
