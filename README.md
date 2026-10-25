@@ -6,46 +6,97 @@
 </p>
 
 <p align="center">
-  <b>AST-aware semantic code search for TypeScript, JavaScript, and Rust.</b><br />
+  <b>AST-aware code search for TypeScript and JavaScript.</b><br />
   <i>Built for AI coding agents, not humans reading a terminal.</i>
 </p>
 
-> **Status: spec-stage — no runnable binary.** No code exists yet. The full design lives in [`docs/spec/`](docs/spec/README.md); this repo is where that spec gets implemented. See [CONTRIBUTING.md](CONTRIBUTING.md) for where things stand.
+> **Status: early.** `monokl search` works today for TypeScript and JavaScript. Symbol lookup, references, definitions and dependents are designed (see [`docs/spec/`](docs/spec/README.md)) but not built yet.
 
 ---
 
-## What it does
+## What you get
 
-Grep finds text. Embeddings find _vibes_. monokl parses code with a compiler-grade parser ([OXC](https://oxc.rs) for TS/JS, [`ra_ap_syntax`](https://crates.io/crates/ra_ap_syntax) for Rust) and answers structural questions:
+Grep finds text. Embeddings find _vibes_. monokl parses your code with a compiler-grade parser ([OXC](https://oxc.rs)), so a search returns the **function, class, interface or type** that matches, not a line number to open and read.
+
+- **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching.
+- **A small query language.** Plain words, `"quoted phrases"`, `+required` and `-excluded` terms, and `regex:` patterns. See [Writing a query](#writing-a-query).
+- **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files and binary files are skipped by default, and each has a flag to include it.
+- **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped at 50 results, 20,000 tokens and 2 MiB by default. When something is cut, the output says how many more matched and suggests narrowing the query.
+- **Predictable.** The same search on the same files gives the same output, in the same order, every time. A bad pattern fails the whole search with a clear error instead of being quietly dropped.
+- **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is skipped instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
+
+## Try it
+
+monokl isn't on crates.io yet; build it from source:
 
 ```
-mnkl search "validatePrice" --path src/
-mnkl refs Button --root . --include-tests
-mnkl definition useCart --root .
-mnkl dependents src/utils/format.ts --root .
-mnkl explain src/components/Button.tsx
+cargo build --release
 ```
 
-- **Text search** ranks by BM25 and node-type relevance, not string distance.
-- **`refs`/`definition`** resolve real bindings, not name matches.
-- **`dependents`** walks an actual import graph.
-- **Output** is structured JSON by default, with a JSON Schema per result type — a tool an agent calls, not a report a human scrolls through.
+Then search a directory (the default is the current one):
 
-## Why
+```
+$ monokl search "format price" src/ --max-results 3
+search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
+  src/utils/format.ts,1,3,function,"function formatCurrency(amount: number, currency: string = 'USD'): string",1,3.950647
+  src/utils/validation.ts,8,12,function,"function validatePrice(price: number): ValidationResult",2,3.07557
+  src/index.ts,3,3,other,null,3,2.345138
+totalCount: 10
+help[2]: showing 3 of 10; refine the query with +term or -term,use extract with file/lineStart/lineEnd to retrieve a row's actual code content
+```
 
-Existing code-search-for-agents tools fall into two camps: fast-but-fuzzy (grep, embeddings) or precise-but-heavyweight (a full language server, a persistent daemon). monokl aims at the middle — real AST parsing without the cost of running a language server, no persistent index to keep warm, cache-friendly enough that repeat queries in one session don't re-pay the parse cost. See [ARCHITECTURE.md](ARCHITECTURE.md) for how, and [PRINCIPLES.md](PRINCIPLES.md) for why it's built this way instead of the alternatives.
+Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
+
+The last line suggests an `extract` command to read a row's code. That command is planned but not built yet; for now, open the file at `lineStart`–`lineEnd`.
+
+## Writing a query
+
+| You write | It means |
+| --- | --- |
+| `format price` | Code that mentions either word, ranked by how well it matches |
+| `"format price"` | The exact phrase |
+| `+cart` | Files must mention `cart` |
+| `-Button` | Skip files that mention `Button` |
+| `regex:use[A-Z]\w+` | Lines matching a regular expression |
+| `--exact` | Treat the whole query as one literal, operators and quotes included |
+
+Matching ignores case. A `-term` removes whole files, not single results. If one query mixes terms, `+cart -Button` finds code in files that mention `cart` but never `Button`:
+
+```
+$ monokl search "+cart -Button" .
+search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
+  src/hooks/useCart.ts,11,25,function,function useCart(),1,1.453107
+  src/hooks/useCart.ts,5,9,interface,null,2,1.30166
+```
+
+## Options
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--max-results N` | 50 | Most results to print |
+| `--max-tokens N` | 20,000 | Most tokens of code to print |
+| `--max-bytes N` | 2 MiB | Most bytes of code to print |
+| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.ts`, `*.test.tsx`, `*.test.js` and the `.spec` equivalents |
+| `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude |
+| `--language L` | all | Search one language only: `typescript`, `javascript` (`rust` and `python` are accepted but not supported yet) |
+
+## Errors and exit codes
+
+- **0:** the search ran, even if nothing matched (you get `search: []`).
+- **1:** the search failed, for example an invalid regular expression or a directory that doesn't exist. The error is printed on stderr in the same compact format, with the cause.
+- **2:** the command line itself was wrong.
 
 ## Language support
 
-| Language | Parser | Status |
-| --- | --- | --- |
-| TypeScript / JavaScript | OXC | Fully specified |
-| Rust | `ra_ap_syntax` | Fully specified |
-| Python | tree-sitter-python | Specified, not implemented |
-| Go | [`gosyn`](https://github.com/chikaku/gosyn) | Specified, not implemented |
-| Java | tree-sitter-java | Specified, not implemented |
+| Language | Status |
+| --- | --- |
+| TypeScript, JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`; not `.d.ts`) | Search works today |
+| Rust | Designed, not built |
+| Python, Go, Java | Designed, not built |
 
-Unsupported operations degrade explicitly — a `Skipped`/`Warning` diagnostic in the response — rather than failing silently or crashing. See the capability model in [ARCHITECTURE.md](ARCHITECTURE.md).
+## Why
+
+Existing code-search-for-agents tools are either fast but fuzzy (grep, embeddings) or precise but heavy (a full language server, a persistent daemon). monokl aims at the middle: real AST parsing without a language server, and no persistent index to keep warm. See [ARCHITECTURE.md](ARCHITECTURE.md) for how, and [PRINCIPLES.md](PRINCIPLES.md) for why.
 
 ## Docs
 
@@ -53,13 +104,13 @@ Unsupported operations degrade explicitly — a `Skipped`/`Warning` diagnostic i
 | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built, in prose |
 | [PRINCIPLES.md](PRINCIPLES.md) | Design tenets and non-goals |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Project status, how to work on this repo |
-| [`docs/spec/`](docs/spec/README.md) | The full reconstruction-grade specification |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to work on this repo |
+| [`docs/spec/`](docs/spec/README.md) | The full specification, including what's still to build |
 | [AGENTS.md](AGENTS.md) | Guidance for AI coding agents working in this repo |
 
 ## Name
 
-Monokl (MON-oh-kl) — from _monocle_, a single precision lens for close examination. CLI binary is `monokl`, short alias `mnkl`.
+Monokl (MON-oh-kl) — from _monocle_, a single precision lens for close examination. The binary is `monokl`.
 
 ## License
 
