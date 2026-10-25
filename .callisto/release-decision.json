@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "entries": [
+    {
+      "package": "cargo/monokl",
+      "targetVersion": "0.2.0",
+      "reasons": [
+        {
+          "kind": "changeset"
+        }
+      ]
+    }
+  ],
+  "digest": "0c4df79a7b72737a9330f1870d8b10a28e0fdd43ca8fdde4f5afc69a49172f4b"
+}
