@@ -13,7 +13,6 @@ homepage = "https://orin-dx.com"
 authors = ["Orin DX Contributors"]
 keywords = ["orin-dx", "developer-tools"]
 categories = ["development-tools"]
-publish = false
 
 [workspace.lints.rust]
 # deny rather than forbid so the future napi crate can #[allow] it at the FFI boundary.

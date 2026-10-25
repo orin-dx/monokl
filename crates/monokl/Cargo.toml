@@ -10,7 +10,6 @@ authors.workspace = true
 categories.workspace = true
 keywords = ["monokl", "search", "ast", "semantic", "typescript"]
 description = "AST-aware semantic code search for TypeScript/JavaScript and Rust."
-publish = false
 
 [lib]
 name = "monokl"
