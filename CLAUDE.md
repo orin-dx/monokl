@@ -13,3 +13,7 @@ This file adds only what's specific to Claude Code.
 ## Verification
 
 Before claiming a command or module works, run it against the fixtures in `docs/spec/01-core-architecture.md`'s "Test fixtures" section, not just `cargo check`.
+
+<!-- entire-agent:begin -->
+<!-- Entire agent instructions are inherited through AGENTS.md. -->
+<!-- entire-agent:end -->

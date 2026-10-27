@@ -7,6 +7,7 @@ projects:
 vcs:
   client: git
   defaultBranch: main
+  provider: "github"
   sync: true
   hooks:
     # Defined in the justfile so the hooks and `just ci` share one definition.

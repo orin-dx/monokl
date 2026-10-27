@@ -1,0 +1,78 @@
+# Global tasks inherited by every project (all crates use the rust toolchain uniformly).
+#
+# build/test/lint/format/format-check are kept `-p $project`-scoped ONLY for targeted
+# single-project dev-loop use (e.g. `moon run monokl:test`) -- that's safe, since targeting
+# exactly one project never contends with itself. They are deliberately marked
+# `runInCI: false` so `moon ci`/`moon run :build` (the "every project" form) never fans out
+# into one `cargo <cmd> -p <crate>` process per crate: every such process locks the same
+# shared workspace `target/` directory, so N crates serialize behind that one lock instead of
+# actually running in parallel -- moonrepo's own Rust handbook documents this interaction.
+# Full-workspace and affected-scoped runs go through the `justfile` instead (`just ci`,
+# `just build`/`lint`/`test`, `just build-affected`/`lint-affected`/`test-affected`), which
+# issue exactly one `cargo --workspace` (or one multi-`-p`) invocation no matter how many
+# crates exist.
+tasks:
+  build:
+    command: "cargo"
+    args: ["build", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "Cargo.toml"
+    options:
+      runInCI: false
+
+  test:
+    command: "cargo"
+    args: ["test", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+      - "**/*.snap"
+      - "**/*.trycmd"
+    options:
+      runInCI: false
+
+  lint:
+    command: "cargo"
+    args: ["clippy", "-p", "$project", "--all-targets", "--", "-D", "warnings"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+    options:
+      runInCI: false
+
+  format:
+    command: "cargo"
+    args: ["fmt", "-p", "$project"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+    options:
+      runInCI: false
+
+  format-check:
+    command: "cargo"
+    args: ["fmt", "-p", "$project", "--", "--check"]
+    inputs:
+      - "src/**/*"
+      - "tests/**/*"
+      - "Cargo.toml"
+    options:
+      runInCI: false
+
+  audit:
+    command: "cargo-deny"
+    args: ["check", "advisories"]
+    inputs:
+      - "Cargo.lock"
+      - "Cargo.toml"
+
+  publish:
+    command: "cargo"
+    args: ["publish", "-p", "$project", "--no-verify"]
+    inputs:
+      - "src/**/*"
+      - "Cargo.toml"

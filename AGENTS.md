@@ -64,3 +64,8 @@ When the spec itself is wrong, fix the spec file and add an entry to [`05-resear
 - Never hard-wrap Markdown, commit messages or PR descriptions.
 - Comments explain only the non-obvious why, carry no history (the commit records it), and fill to 120 columns.
 - Commits: Conventional Commits, imperative subject, at most one or two sentences of why. Skip the body when the subject says it all.
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
