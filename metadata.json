@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.3-nightly.202610261136.c4f103d8d",
+  "checkpoint_id": "01M5XVZ4VTH7ADXDYT3WV13ZWB",
+  "strategy": "manual-commit",
+  "branch": "docs/library-session-api-fsl",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docs/spec/01-core-architecture.md",
+    "docs/spec/02-inspection-and-analysis.md",
+    "docs/spec/03-multi-language-platform.md",
+    "docs/spec/05-research-and-decisions.md",
+    "docs/spec/06-daemon-architecture.md",
+    "docs/spec/08-library-session-api.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 996,
+    "cache_creation_tokens": 6894673,
+    "cache_read_tokens": 229506925,
+    "output_tokens": 403832,
+    "api_call_count": 464,
+    "subagent_tokens": {
+      "input_tokens": 1348,
+      "cache_creation_tokens": 3114313,
+      "cache_read_tokens": 69182893,
+      "output_tokens": 162096,
+      "api_call_count": 676
+    }
+  },
+  "redaction": {
+    "replacements": 48,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
