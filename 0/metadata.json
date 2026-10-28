@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.12.3-nightly.202610261136.c4f103d8d",
+  "checkpoint_id": "01M61RHYV1DAAGBVT368SBJZ8W",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-28T17:22:54.982345Z",
+  "branch": "fix/drop-floating-toolchain",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "rust-toolchain.toml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "b37890911c22",
+  "checkpoint_transcript_start": 8826,
+  "transcript_lines_at_start": 8826,
+  "compact_transcript_start": 576,
+  "token_usage": {
+    "input_tokens": 364,
+    "cache_creation_tokens": 2274388,
+    "cache_read_tokens": 49644143,
+    "output_tokens": 110252,
+    "api_call_count": 169,
+    "subagent_tokens": {
+      "input_tokens": 750,
+      "cache_creation_tokens": 1069848,
+      "cache_read_tokens": 25438450,
+      "output_tokens": 214014,
+      "api_call_count": 290
+    }
+  },
+  "redaction": {
+    "replacements": 48,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  }
+}
