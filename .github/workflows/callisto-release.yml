@@ -283,32 +283,3 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-
-  # Separate from `execute` so the tap App key never shares a job with the registry token.
-  notify-tap:
-    needs: execute
-    if: needs.execute.result == 'success'
-    runs-on: ubuntu-latest
-    permissions: {contents: read}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {fetch-depth: 0, persist-credentials: false}
-      # Callisto tags the release commit; a run that released no monokl version has no tag here.
-      - name: Find the release tag
-        id: tag
-        run: |
-          set -euo pipefail
-          tag=$(git tag --points-at HEAD --list 'monokl@*' | head -n 1)
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          [[ -n "$tag" ]] || echo 'This run released no monokl version; the Homebrew tap is not notified.'
-      # The tap also checks daily, so a failed notification never fails the release.
-      - name: Notify the Homebrew tap
-        if: steps.tag.outputs.tag != ''
-        continue-on-error: true
-        uses: orin-dx/actions/notify-homebrew-tap@687b60169775ae9e9270af098a4cabb5e1c2a08e # main
-        with:
-          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
-          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
-          tap-repository: orin-dx/homebrew-tap
-          tool: monokl
-          release-tag: ${{ steps.tag.outputs.tag }}
