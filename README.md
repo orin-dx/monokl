@@ -27,13 +27,25 @@ Grep finds text. Embeddings find _vibes_. monokl parses your code with a compile
 
 ## Try it
 
-monokl isn't on crates.io yet; build it from source:
+## Install
+
+**Prebuilt binary** (from 0.3.0), from [GitHub Releases](https://github.com/orin-dx/monokl/releases) (tag `monokl@<version>`):
 
 ```
-cargo build --release
+curl -sL "https://github.com/orin-dx/monokl/releases/download/monokl@<version>/monokl-<target>.tar.gz" | tar -xz
 ```
 
-Then search a directory (the default is the current one):
+Targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`.
+
+**cargo**, built from source:
+
+```
+cargo install monokl
+```
+
+## Try it
+
+Search a directory (the default is the current one):
 
 ```
 $ monokl search "format price" src/ --max-results 3

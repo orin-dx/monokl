@@ -1,1 +1,30 @@
 # callisto configuration
+
+[[package]]
+match = "cargo/monokl"
+publish-to = ["crates-io", "github-release"]
+tag-template = "monokl@{version}"
+
+[release]
+product-package = "cargo/monokl"
+forge-repository = "orin-dx/monokl"
+
+[[release.artifact]]
+package = "cargo/monokl"
+target = "aarch64-apple-darwin"
+asset-name = "monokl-aarch64-apple-darwin.tar.gz"
+
+[[release.artifact]]
+package = "cargo/monokl"
+target = "x86_64-apple-darwin"
+asset-name = "monokl-x86_64-apple-darwin.tar.gz"
+
+[[release.artifact]]
+package = "cargo/monokl"
+target = "aarch64-unknown-linux-gnu"
+asset-name = "monokl-aarch64-unknown-linux-gnu.tar.gz"
+
+[[release.artifact]]
+package = "cargo/monokl"
+target = "x86_64-unknown-linux-gnu"
+asset-name = "monokl-x86_64-unknown-linux-gnu.tar.gz"
