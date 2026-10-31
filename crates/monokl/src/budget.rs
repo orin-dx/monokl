@@ -68,7 +68,7 @@ pub fn count_tokens(text: &str) -> usize {
     if text.len() > TOKENIZE_BYTE_CAP {
         return text.len();
     }
-    tiktoken_rs::o200k_base_singleton().lock().encode_with_special_tokens(text).len()
+    tiktoken_rs::o200k_base_singleton().encode_with_special_tokens(text).len()
 }
 
 /// Keeps the longest rank-order prefix of `ranked` that fits `budget` and reports what was cut.
