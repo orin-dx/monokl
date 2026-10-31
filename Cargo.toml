@@ -67,11 +67,11 @@ dashmap = "6.1"
 blake3 = "1"
 
 # OXC (released in lockstep; bump together)
-oxc_parser = "0.151"
-oxc_ast = "0.151"
-oxc_ast_visit = "0.151"
-oxc_span = "0.151"
-oxc_allocator = "0.151"
+oxc_parser = "0.152"
+oxc_ast = "0.152"
+oxc_ast_visit = "0.152"
+oxc_span = "0.152"
+oxc_allocator = "0.152"
 oxc_resolver = "11"
 
 # Search
