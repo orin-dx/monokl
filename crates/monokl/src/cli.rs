@@ -83,14 +83,16 @@ where
     };
     let Command::Search(args) = cli.command;
     match run_search(&args) {
-        Ok(text) => {
-            let _written = writeln!(out, "{text}");
-            ExitCode::SUCCESS
-        }
-        Err(text) => {
-            let _written = writeln!(err, "{text}");
-            ExitCode::FAILURE
-        }
+        Ok(text) => exit_code(writeln!(out, "{text}"), ExitCode::SUCCESS),
+        Err(text) => exit_code(writeln!(err, "{text}"), ExitCode::FAILURE),
+    }
+}
+
+/// `ok` unless the write failed. A closed reader (`| head`) is not a failure.
+fn exit_code(written: std::io::Result<()>, ok: ExitCode) -> ExitCode {
+    match written {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => ExitCode::FAILURE,
+        Ok(()) | Err(_) => ok,
     }
 }
 
@@ -169,6 +171,28 @@ mod tests {
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(out.contains("Searches a directory"), "got: {out}");
         assert_eq!(err, "");
+    }
+
+    struct FailingWriter(std::io::ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
+        }
+    }
+
+    #[test]
+    fn a_failed_stdout_write_fails_the_command_but_a_closed_pipe_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = ["monokl", "search", "zzzqqqxx", dir.path().to_str().unwrap()];
+        let failed = run(args, &mut FailingWriter(std::io::ErrorKind::StorageFull), &mut Vec::new());
+        assert_eq!(failed, ExitCode::FAILURE);
+        let closed = run(args, &mut FailingWriter(std::io::ErrorKind::BrokenPipe), &mut Vec::new());
+        assert_eq!(closed, ExitCode::SUCCESS);
     }
 
     #[test]

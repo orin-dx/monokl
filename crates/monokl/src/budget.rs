@@ -169,6 +169,16 @@ mod tests {
     }
 
     #[test]
+    fn search_limits_default_carries_the_budget_default() {
+        let limits = SearchLimits::default();
+        let budget = Budget::default();
+        assert_eq!(
+            (limits.max_results, limits.max_tokens, limits.max_bytes),
+            (Some(budget.max_results), Some(budget.max_tokens), budget.max_bytes)
+        );
+    }
+
+    #[test]
     fn budget_from_search_limits_fills_defaults_and_clamps_bytes() {
         let unset = SearchLimits { max_results: None, max_bytes: 10_000_000, max_tokens: None, max_candidates: 1 };
         assert_eq!(Budget::from(&unset), caps(50, 20_000, 2_097_152));

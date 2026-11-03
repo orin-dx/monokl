@@ -1,25 +1,39 @@
+use std::sync::LazyLock;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use proptest::prelude::*;
 
 use super::*;
 
-const KINDS: [SymbolKind; 15] = [
-    SymbolKind::Function,
-    SymbolKind::Method,
-    SymbolKind::Constructor,
-    SymbolKind::Class,
-    SymbolKind::Struct,
-    SymbolKind::Enum,
-    SymbolKind::Interface,
-    SymbolKind::TypeAlias,
-    SymbolKind::Property,
-    SymbolKind::Field,
-    SymbolKind::Variable,
-    SymbolKind::Module,
-    SymbolKind::Impl,
-    SymbolKind::Macro,
-    SymbolKind::Other,
-];
+/// Every `SymbolKind`, in declaration order. Built by walking `successor`, whose exhaustive match fails to compile when a
+/// variant is added, so the oracle list cannot silently miss one.
+static KINDS: LazyLock<Vec<SymbolKind>> = LazyLock::new(|| {
+    let mut kinds = vec![SymbolKind::Function];
+    while let Some(next) = successor(kinds[kinds.len() - 1]) {
+        kinds.push(next);
+    }
+    kinds
+});
+
+fn successor(kind: SymbolKind) -> Option<SymbolKind> {
+    match kind {
+        SymbolKind::Function => Some(SymbolKind::Method),
+        SymbolKind::Method => Some(SymbolKind::Constructor),
+        SymbolKind::Constructor => Some(SymbolKind::Class),
+        SymbolKind::Class => Some(SymbolKind::Struct),
+        SymbolKind::Struct => Some(SymbolKind::Enum),
+        SymbolKind::Enum => Some(SymbolKind::Interface),
+        SymbolKind::Interface => Some(SymbolKind::TypeAlias),
+        SymbolKind::TypeAlias => Some(SymbolKind::Property),
+        SymbolKind::Property => Some(SymbolKind::Field),
+        SymbolKind::Field => Some(SymbolKind::Variable),
+        SymbolKind::Variable => Some(SymbolKind::Module),
+        SymbolKind::Module => Some(SymbolKind::Impl),
+        SymbolKind::Impl => Some(SymbolKind::Macro),
+        SymbolKind::Macro => Some(SymbolKind::Other),
+        SymbolKind::Other => None,
+    }
+}
 
 const TERMS: [&str; 3] = ["user", "name", "foo"];
 

@@ -252,7 +252,7 @@ The crate could not build: `io-errors` came from a private `orin-cargo` registry
 - **Versions.** oxc 0.128 to 0.151, dashmap 5 to 6.1, criterion 0.7 to 0.8, insta 1.47 to 1.48, matching caliper.
 - **Toolchain.** proto pins Rust 1.98.1 in `.prototools`; `rust-toolchain.toml` and its `wasm32-unknown-unknown` target are gone, since nothing builds for wasm. MSRV stays 1.96 and CI checks it.
 - **Lints.** Added rustc `unused_must_use` and `let_underscore_drop`, and clippy `let_underscore_must_use`, `let_underscore_untyped` and `map_err_ignore`, all deny. rustfmt `max_width` is 120.
-- **Releases.** Callisto 0.17.0 (pinned in `.prototools`) owns versioning: `callisto.toml`, `.changeset/`, a generated `callisto-release.yml`, and a CI Changesets check. `monokl` stays `publish = false`, so nothing releases until that is a deliberate change.
+- **Releases.** Callisto (version pinned in `.prototools`, which `just check-drift` enforces against the workflows) owns versioning: `callisto.toml`, `.changeset/`, a generated `callisto-release.yml`, and a CI Changesets check. Originally `monokl` stayed `publish = false`, so nothing would release; that was reversed once the crate reached 0.2.0, and `callisto.toml` now publishes to crates.io and GitHub releases.
 - **Organization.** orin-axi is now orin-dx: repository URLs and the npm scope (`@orin-dx/monokl`).
 - **michi from crates.io.** michi is `michi-core` 0.7.1 from crates.io, renamed to `michi` in `Cargo.toml` so code paths are unchanged. The git pin it replaces was AGPL-3.0-or-later. michi now escapes line breaks itself (TOON 4.4), so `cell` no longer pre-escapes them; null and empty-string cells now render distinctly (`null` vs `""`). An error's source chain goes into michi's `causes` via `DomainError::from_error`, not into hints, and a multi-line message stays whole.
 
@@ -283,7 +283,7 @@ Status: proposed 2026-10-23, ratified by the owner 2026-10-23.
 - **Ignore scope.** `respect_ignore_files` honours hidden-file filtering and `.gitignore`/`.ignore` files inside the root, with or without a `.git` directory. It never reads ignore files above the root, `.git/info/exclude`, or the user's global excludes (`core.excludesFile`). `.git/info/exclude` is excluded because it is never committed, and for a worktree or submodule the `ignore` crate reads it from the common git directory outside the root. Rejected: honouring global and parent ignores, because results would differ by machine for the same tree.
 - **Minor, by the owner's delegate.** Binary versus unreadable is decided by bytes actually read: a NUL read before any read error makes a file binary; a file that cannot be opened, or fails before a NUL, is unreadable. Byte-order marks are not decoded, so UTF-16 files are binary and a UTF-8 BOM stays in line 1's text. One trailing `\n` or `\r\n` is stripped from line text; a lone `\r` is content. A pattern is matched against that same stripped text, so `^` and `$` anchor at line start and end in LF and CRLF files alike (`^alpha$` matches the line `alpha` in both, not `alpha beta`), a `\r` from a CRLF terminator is never seen, and a pattern for `\n` compiles and matches no line. Regular files with non-UTF-8 paths are counted in `non_utf8_paths`, not failed. Symbolic links below the root are not followed.
 - **Found while speccing.** Section 7's test-path filter checked the absolute path, so a checkout under any `test/` or `spec/` directory excluded every file; it now checks the root-relative path.
-- **Still open.** #8 (`+regex:` loses both modifier and regex semantics) and #16 (no per-term length cap) belong to the query language and are unchanged. #21 (exclusion-only queries return empty silently) belongs to the search pipeline.
+- **Still open.** #16 (no per-term length cap) belongs to the query language and is unchanged. #8 (`+regex:` loses its modifier) is closed in §23; #21 (exclusion-only queries return empty silently) is closed in §21.
 
 ## 19. Part 8 governs core; one crate (2026-10-23)
 
@@ -304,15 +304,23 @@ Decisions made while building the first end-to-end command, with the departures 
 
 - **#21, query with only excluded terms.** Returns an empty result with one `Skipped` diagnostic ("query has no positive terms"). Empty and operator-only queries stay silent. Rejected: silent empty, which looks like "matched nothing".
 - **BM25 terms.** Each non-excluded literal term goes through `tokens::tokenize`, deduplicated, in query order; regex terms add matched lines and keywords but no BM25 terms. One case-insensitive, fail-fast regex engine serves text search and per-term matching, so the two stages cannot disagree (§18 #7). The excluded-terms pass searches with no file ceiling so a file past the ceiling still excludes.
-- **Budget (agent layer).** Defaults 50 results / 20,000 tokens / 2 MiB. Blocks over 32 KiB are counted by byte length, an upper bound, instead of tokenized, so `total_tokens` can overcount for them. The cut is a prefix in rank order: a first block larger than the budget leaves an empty, truncated result. The marker is michi's `TruncationOutcome` hint.
+- **Budget (agent layer).** Defaults are `Budget::default()` (documented in the README's Options table). Blocks over 32 KiB are counted by byte length, an upper bound, instead of tokenized, so `total_tokens` can overcount for them. The cut is a prefix in rank order: a first block larger than the budget leaves an empty, truncated result. The marker is michi's `TruncationOutcome` hint.
 - **TypeScript analyzer, part 1.** The nesting-depth guard is 256, not caliper's 2000: a 2000-deep file overflowed a 2 MiB thread stack, and a stack overflow aborts the process, so `catch_unwind` cannot save it. A too-deep file, a fatal parse error and a contained panic all return the same degraded analysis (`had_parse_errors`, empty extraction). `resolved_import_graph` is `Unsupported` and `classified_imports` false until resolution lands, instead of Part 3's values. Departures from Section 17: a default import's `imported` is `"default"`; a function's signature is the text up to its body, not to the first `{`; `.js` files parse with JSX; and the export code follows OXC 0.151's split `ExportDeclaration`/`ExportNamedDeclaration`/`ExportFromDeclaration` AST.
 - **CLI.** Results print on stdout; errors are structured michi errors on stderr with exit 1; usage errors exit 2. Paths print relative to the working directory when under it. Reaching the file ceiling adds a `Warning` diagnostic.
 - **Property tests.** Reference-implementation properties for ranking, dedup, tokenizing and the query parser found no bugs. `#[non_exhaustive]` is on the enums that will grow and on `TextSearchResult`; `Digest`, `CapabilityPrecision`, option structs and `Modifier` are left exact on purpose.
-- **Still open.** `+regex:`/`-regex:` lose their modifier (#8), and there is no per-term length cap (#16).
+- **Still open.** There is no per-term length cap (#16). `+regex:`/`-regex:` losing their modifier (#8) is closed in §23.
 
-## 22. Queries match the README (2026-11-02)
+## 22. Search output tells the truth (2026-11-02)
+
+- **Diagnostics render as `help` lines.** One line per distinct diagnostic message, counted when tied to files ("2 files skipped: ..."), after the truncation marker. Rejected: a new `diagnostics` section, because michi hints already carry short advice and a second block costs every agent more tokens.
+- **Empty and operator-only queries are no longer silent.** They get the same `Skipped` diagnostic as exclusion-only queries (supersedes the "stay silent" line in §21). Rejected: an error, because an empty query is a valid request that matches nothing.
+- **Empty results say what is searched.** One hint: only top-level declarations are searched; use rg for text elsewhere. Rejected: saying it on every result, which spends tokens when rows are present.
+- **Advice names only what exists.** The `extract` hint and the `maxTerms` recovery are gone until those exist. A file as the search root is `invalid_input`, and a failed stdout write exits 1 unless the reader closed the pipe.
+
+## 23. Queries match the README (2026-11-02)
 
 - **`+regex:`/`-regex:` (closes #8).** The modifier applies to the regex term. Rejected: leaving the degrade to an optional literal, which ranked the files a `-regex:` meant to exclude.
 - **Quoted regex.** `regex:"a b"` already lexed as one pattern; only the README lacked it. No new syntax.
 - **`--language` goes by file extension.** The TypeScript analyzer owns all eight extensions, so the filter compares the path extension. Rejected: a `LanguageId::JavaScript` variant, which would split one analyzer for a filter.
 - **Declaration and test files.** `.d.mts`/`.d.cts` are skipped like `.d.ts`; `.test`/`.spec` cover every analyzable extension.
+- **Empty quoted phrase.** `""` produces no term, like an empty query, so `foo ""` behaves as `foo` and `""` alone gets the no-positive-terms diagnostic.
