@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01BhtHVjxMTwpAp6pp6KPHsa",
+  "agent_id": "aaf28206e4a0ecabe",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix copy drift: one owner per fact",
+  "started_at": "2026-11-02T17:17:46.989252-08:00"
+}
