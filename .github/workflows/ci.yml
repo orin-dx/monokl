@@ -89,7 +89,7 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: just,cargo-nextest,cargo-llvm-cov
-      - run: just coverage 90
+      - run: just coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -107,7 +107,7 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: just,cargo-deny,zizmor@1.29.0
-      - run: just deny zizmor
+      - run: just deny zizmor check-drift
 
   changesets:
     name: Changesets
