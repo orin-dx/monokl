@@ -134,9 +134,6 @@ fn search_with_ceiling(
         parse(query)?
     };
     let plan = QueryPlan::from_terms(terms);
-    if plan.is_empty() {
-        return Ok(SearchResult::empty());
-    }
     let patterns = plan.search_patterns();
     if patterns.is_empty() {
         return Ok(SearchResult::skipped("query has no positive terms; add a term without a leading `-`"));
@@ -537,18 +534,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_operator_only_queries_return_an_empty_result_without_diagnostics() {
+    fn empty_and_operator_only_queries_return_one_skipped_diagnostic() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
+        let expected =
+            [(DiagnosticKind::Skipped, None, "query has no positive terms; add a term without a leading `-`")];
         for query in ["", "   ", "+", "-", "regex:"] {
             let result = search(&whole_file_registry(), &request(&root, query)).unwrap();
             assert!(result.ranked.is_empty(), "{query:?}");
             assert_eq!((result.files_total, result.ceiling_hit), (0, false), "{query:?}");
-            assert!(result.diagnostics.is_empty(), "{query:?}");
+            assert_eq!(summary(&result.diagnostics), expected, "{query:?}");
         }
         let exact = SearchRequest { exact: true, ..request(&root, "  ") };
         let result = search(&whole_file_registry(), &exact).unwrap();
         assert!(result.ranked.is_empty());
-        assert!(result.diagnostics.is_empty());
+        assert_eq!(summary(&result.diagnostics), expected);
     }
 
     #[test]
