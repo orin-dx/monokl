@@ -650,6 +650,8 @@ mod tests {
     #[case("x = /[/(]/ + (", 1)]
     #[case("x = /\\/(/ + (", 1)]
     #[case("x = /(\n((", 2)]
+    #[case("x = /((", 0)]
+    #[case("x = '((", 0)]
     #[case("(a) / ((b)) / 2", 2)]
     #[case("1 /* ( */ / ((", 2)]
     fn nesting_depth_ignores_comments_and_literals(#[case] source: &str, #[case] depth: usize) {
