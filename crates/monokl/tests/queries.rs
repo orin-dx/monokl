@@ -70,4 +70,6 @@ fn declaration_and_test_files_in_every_extension_are_skipped() {
 fn empty_phrase_is_ignored() {
     assert_eq!(matched(&TWO_FILES, &["foo \"\"", "."]), ["src/a.ts"]);
     assert_eq!(matched(&TWO_FILES, &["\"\"", "."]), Vec::<String>::new());
+    assert_eq!(matched(&TWO_FILES, &["foo regex:\"\"", "."]), ["src/a.ts"]);
+    assert_eq!(matched(&TWO_FILES, &["regex:\"\"", "."]), Vec::<String>::new());
 }

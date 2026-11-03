@@ -22,7 +22,7 @@ pub struct ParsedTerm {
 
 /// Parses a query string into terms.
 ///
-/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:`, or an empty phrase, yields no term. A `+` or `-`
+/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:`, or an empty phrase or `regex:""` pattern, yields no term. A `+` or `-`
 /// before `regex:` makes the regex term required or excluded. Regex syntax is not validated here.
 ///
 /// # Errors
@@ -67,9 +67,11 @@ fn push_literal(modifier: Modifier, text: &str, terms: &mut Vec<ParsedTerm>) {
     }
 }
 
-/// Reads the pattern after a `regex:` prefix. A dangling prefix yields no term.
+/// Reads the pattern after a `regex:` prefix. A dangling prefix or an empty pattern yields no term: it would match every line.
 fn push_regex(lexer: &mut Lexer<'_>, modifier: Modifier, terms: &mut Vec<ParsedTerm>) {
-    if let Token::Word(pattern) | Token::QuotedString(pattern) = lexer.next_token() {
+    if let Token::Word(pattern) | Token::QuotedString(pattern) = lexer.next_token()
+        && !pattern.is_empty()
+    {
         terms.push(ParsedTerm { modifier, pattern, is_regex: true });
     }
 }
@@ -325,6 +327,13 @@ mod tests {
         assert!(!terms[0].is_regex);
         assert_eq!(terms[1].modifier, Modifier::Optional);
         assert_eq!(terms[1].pattern, "a\\.b");
+    }
+
+    #[test]
+    fn empty_regex_pattern_produces_no_term() {
+        assert!(parse("regex:\"\"").unwrap().is_empty());
+        assert!(parse("-regex:\"\"").unwrap().is_empty());
+        assert!(parse("+regex:\"\"").unwrap().is_empty());
     }
 
     #[test]

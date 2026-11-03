@@ -48,6 +48,8 @@ fn expected(terms: &[Written]) -> Vec<(Modifier, String, bool)> {
             // An empty phrase yields no term.
             Written::Literal(_, text) if text.is_empty() => None,
             Written::Literal(modifier, text) => Some((modifier.clone(), regex::escape(text), false)),
+            // An empty regex pattern yields no term.
+            Written::Regex(_, text) if text.is_empty() => None,
             Written::Regex(modifier, text) => Some((modifier.clone(), text.clone(), true)),
         })
         .collect()
