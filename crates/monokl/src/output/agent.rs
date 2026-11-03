@@ -704,7 +704,17 @@ impl ToDomainError for MonoklError {
             MonoklError::InvalidGitRef { ref_, reason } => {
                 domain_err.hint(format!("{ref_:?} is not a valid git ref: {reason}"))
             }
-            _ => domain_err,
+            MonoklError::Io(_)
+            | MonoklError::Walk { .. }
+            | MonoklError::RegexBuild(_)
+            | MonoklError::NonUtf8Path { .. }
+            | MonoklError::TokenizerInit
+            | MonoklError::Json(_)
+            | MonoklError::PathOutsideRoot { .. }
+            | MonoklError::StaleDiskCache
+            | MonoklError::Git { .. }
+            | MonoklError::SymlinkRejected { .. }
+            | MonoklError::LockPoisoned { .. } => domain_err,
         };
 
         domain_err

@@ -50,7 +50,7 @@ Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (co
 - `cargo nextest` plus `cargo test --doc`. `insta` for snapshots: accept a snapshot change only after confirming the new output is correct, not just different.
 - Assert content, not presence: `assert_eq!` on the exact value over `contains`/`is_some`.
 - Sibling-path parity: a function that mirrors an already-tested one gets a test asserting the same contract.
-- CI gates line coverage at 90%.
+- CI gates line coverage; the threshold is the `coverage` recipe's default in the justfile.
 
 ## Fixing bugs
 

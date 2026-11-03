@@ -27,15 +27,12 @@ test:
     cargo nextest run --workspace --locked
     cargo test --doc --workspace --all-features --locked
 
-# Line coverage; with a threshold, fails below it
-coverage threshold="":
+# Line coverage; fails below the threshold, which this default owns
+coverage threshold="90":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo llvm-cov nextest --workspace --all-features --locked --lcov --output-path lcov.info
-    cargo llvm-cov report --summary-only
-    if [[ -n "{{ threshold }}" ]]; then
-      cargo llvm-cov report --summary-only --fail-under-lines "{{ threshold }}"
-    fi
+    cargo llvm-cov report --summary-only --fail-under-lines "{{ threshold }}"
 
 # Coverage report, opened in the browser
 coverage-html:
@@ -89,6 +86,10 @@ changeset bump summary:
 zizmor:
     zizmor --offline --strict-collection .
 
+# Fails when a duplicated fact disagrees with its owner, e.g. the Callisto pin in the workflows against .prototools
+check-drift:
+    scripts/check-drift.sh
+
 # Mutation testing. Slow, so on demand only, not part of `just ci`.
 mutants:
     cargo mutants --workspace
@@ -110,4 +111,4 @@ pre-commit:
 pre-push: pre-commit lint-affected
 
 # Everything the CI jobs run
-ci: lint test doc-check deny machete typos zizmor changesets (coverage "90")
+ci: lint test doc-check deny machete typos zizmor check-drift changesets coverage

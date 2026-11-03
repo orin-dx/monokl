@@ -19,7 +19,8 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just test` | nextest plus doctests |
 | `just lint` | `cargo fmt --check` and clippy with `-D warnings`, all features and no default features |
 | `just doc-check` | `cargo doc` with warnings as errors |
-| `just coverage 90` | Line coverage, failing below the threshold |
+| `just coverage` | Line coverage, failing below the justfile's threshold |
+| `just check-drift` | Fails when a duplicated fact (the Callisto pin) disagrees with its owner |
 | `just deny` | Licenses, advisories, bans and sources |
 | `just machete` | Unused dependencies |
 | `just mutants` | Mutation testing, on demand only |
@@ -28,7 +29,7 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 
 ## Where things stand
 
-One crate, `crates/monokl`, with the error types, core data types, query language and michi output adapter. The rest of the design is in [`docs/spec/`](docs/spec/README.md); start at its README. [`docs/architecture/`](docs/architecture/README.md) has topic docs per subsystem, and [`docs/adr/`](docs/adr/README.md) records decisions made since the spec.
+See [AGENTS.md](AGENTS.md#current-state).
 
 ## Proposing a change
 
@@ -40,7 +41,7 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 
 ## Pull requests
 
-- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, 90% line coverage, and audit.
+- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, and audit.
 - Keep a PR to one topic.
 
 ## Filing an issue

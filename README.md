@@ -21,7 +21,7 @@ Grep finds text. Embeddings find _vibes_. monokl parses your code with a compile
 - **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching.
 - **A small query language.** Plain words, `"quoted phrases"`, `+required` and `-excluded` terms, and `regex:` patterns. See [Writing a query](#writing-a-query).
 - **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files and binary files are skipped by default, and each has a flag to include it.
-- **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped at 50 results, 20,000 tokens and 2 MiB by default. When something is cut, the output says how many more matched and suggests narrowing the query.
+- **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests narrowing the query.
 - **Predictable.** The same search on the same files gives the same output, in the same order, every time. A bad pattern fails the whole search with a clear error instead of being quietly dropped.
 - **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is skipped instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
 
