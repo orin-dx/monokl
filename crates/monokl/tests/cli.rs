@@ -77,6 +77,23 @@ fn an_invalid_regex_fails_with_a_structured_error() {
 }
 
 #[test]
+fn a_file_too_deeply_nested_to_parse_does_not_stop_the_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let hostile = format!("export const needle = /'/;\nexport const x = {}1{};\n", "(".repeat(5000), ")".repeat(5000));
+    std::fs::write(dir.path().join("hostile.ts"), hostile).unwrap();
+    std::fs::write(dir.path().join("normal.ts"), "export function needle() {}\n").unwrap();
+
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_monokl")).args(["search", "needle", "."]).current_dir(&dir).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().take(2).collect();
+    assert_eq!(lines[0], "search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
+    assert!(lines[1].starts_with("  normal.ts,1,1,function,\"function needle()\",1,"), "got: {text}");
+}
+
+#[test]
 fn a_missing_query_is_a_usage_error() {
     let output = monokl(&["search"]);
     assert_eq!(output.status.code(), Some(2));

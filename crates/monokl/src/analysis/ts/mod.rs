@@ -559,6 +559,37 @@ export const App = (p) => (
         assert_eq!(symbols(&analysis).len(), 1);
     }
 
+    #[rstest]
+    #[case::on_the_next_line("const r = /'/;\nconst x = ")]
+    #[case::on_the_same_line("const r = /'/, x = ")]
+    fn a_quote_inside_a_regex_literal_does_not_hide_nesting(#[case] prefix: &str) {
+        let text = format!("{prefix}{}1{};\n", "(".repeat(5000), ")".repeat(5000));
+        assert_degraded(&analyze_source("regex.ts", &text, AnalysisProfile::Full));
+    }
+
+    #[rstest]
+    #[case::generic_types("deep.ts", "export type T = ", "Array<", "number", ">", 20_000, ("T", SymbolKind::TypeAlias), 0)]
+    #[case::arrow_functions("deep.ts", "export const f = ", "() => ", "1", "", 20_000, ("f", SymbolKind::Variable), 0)]
+    #[case::conditionals("deep.ts", "export const t = ", "a ? b : ", "c", "", 20_000, ("t", SymbolKind::Variable), 0)]
+    #[case::jsx_elements("deep.tsx", "export const j = ", "<div>", "", "</div>", 30_000, ("j", SymbolKind::Variable), 30_000)]
+    fn nesting_without_brackets_parses_however_deep(
+        #[case] path: &str,
+        #[case] head: &str,
+        #[case] open: &str,
+        #[case] middle: &str,
+        #[case] close: &str,
+        #[case] depth: usize,
+        #[case] symbol: (&str, SymbolKind),
+        #[case] jsx_elements: usize,
+    ) {
+        let text = format!("{head}{}{middle}{};\n", open.repeat(depth), close.repeat(depth));
+        let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(symbols(&analysis), [(symbol.0, symbol.1, 1, None)]);
+        assert_eq!(blocks(&analysis), [(1, 1, symbol.1, None)]);
+        assert_eq!(analysis.jsx_elements().len(), jsx_elements);
+    }
+
     #[test]
     fn the_source_closure_error_is_returned_and_the_closure_runs_once() {
         let calls = Rc::new(Cell::new(0));
