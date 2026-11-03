@@ -32,9 +32,9 @@
     }
   },
   "redaction": {
-    "replacements": 48,
+    "replacements": 50,
     "layers": {
-      "betterleaks": 0,
+      "betterleaks": 2,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
