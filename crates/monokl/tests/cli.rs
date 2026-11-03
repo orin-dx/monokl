@@ -77,10 +77,10 @@ fn an_invalid_regex_fails_with_a_structured_error() {
 }
 
 #[test]
-fn a_file_too_deeply_nested_to_parse_does_not_stop_the_others() {
+fn a_deeply_nested_file_is_searched_like_any_other() {
     let dir = tempfile::tempdir().unwrap();
-    let hostile = format!("export const needle = /'/;\nexport const x = {}1{};\n", "(".repeat(5000), ")".repeat(5000));
-    std::fs::write(dir.path().join("hostile.ts"), hostile).unwrap();
+    let nested = format!("export const needle = /'/;\nexport const x = {}1{};\n", "(".repeat(5000), ")".repeat(5000));
+    std::fs::write(dir.path().join("nested.ts"), nested).unwrap();
     std::fs::write(dir.path().join("normal.ts"), "export function needle() {}\n").unwrap();
 
     let output =
@@ -88,9 +88,10 @@ fn a_file_too_deeply_nested_to_parse_does_not_stop_the_others() {
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    let lines: Vec<&str> = text.lines().take(2).collect();
-    assert_eq!(lines[0], "search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
+    let lines: Vec<&str> = text.lines().take(3).collect();
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
     assert!(lines[1].starts_with("  normal.ts,1,1,function,function needle(),1,"), "got: {text}");
+    assert!(lines[2].starts_with("  nested.ts,1,1,variable,null,2,"), "got: {text}");
 }
 
 #[test]

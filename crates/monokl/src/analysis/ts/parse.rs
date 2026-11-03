@@ -22,10 +22,6 @@ use crate::types::{
     JsxElementEntry, SymbolEntry, SymbolKind,
 };
 
-/// Files with more bracket nesting than this are not parsed. Real code stays far below it; turning such a file away
-/// early saves touching hundreds of megabytes of stack on a parse that recovers nothing useful.
-const MAX_SOURCE_NESTING_DEPTH: usize = 256;
-
 /// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
 /// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
 /// level measured, a `[` in a type, uses 1.7 KB of stack optimized and 4.6 KB unoptimized: this is over twice that.
@@ -34,8 +30,8 @@ const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else
 /// Stack for what does not grow with the source.
 const BASE_STACK: usize = 8 << 20;
 
-/// The most stack one parse reserves. Only touched pages are committed, but a file that defeats the nesting scan can
-/// touch about half of it, so this also bounds that file's memory.
+/// The most stack one parse reserves. Only touched pages are committed, but a hostile file of the longest parsed length
+/// can touch about half of it (460 MiB measured), so this also bounds a parse's memory.
 const MAX_STACK: usize = 1 << 30;
 
 /// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
@@ -62,10 +58,9 @@ impl Extraction {
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// A file too long to be sure of its stack, one with too much bracket nesting, or one whose parse or extraction
-/// panics, yields [`Extraction::degraded`].
+/// A file too long to be sure of its stack, or one whose parse or extraction panics, yields [`Extraction::degraded`].
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
-    if source.len() > MAX_PARSED_SOURCE_LEN || max_bracket_nesting_depth(source) > MAX_SOURCE_NESTING_DEPTH {
+    if source.len() > MAX_PARSED_SOURCE_LEN {
         return Extraction::degraded();
     }
     let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
@@ -81,82 +76,6 @@ fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extrac
         // The closure's output is discarded on a panic, so no torn state is observable afterwards.
         handle.join().unwrap_or_else(|_| Extraction::degraded())
     })
-}
-
-/// The deepest bracket nesting in `source`, skipping comments and string, template and regex literals.
-///
-/// A cheap linear scan, not a parse: it tells a regex literal from a division by the character before it and does not
-/// look inside templates or JSX text, so it can miscount. The stack each parse gets does not depend on it.
-fn max_bracket_nesting_depth(source: &str) -> usize {
-    let bytes = source.as_bytes();
-    let (mut depth, mut max_depth, mut i) = (0usize, 0usize, 0usize);
-    let mut previous = None;
-    while i < bytes.len() {
-        let byte = bytes[i];
-        match byte {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i += 2;
-                continue;
-            }
-            b'/' if previous.is_none_or(|before: u8| b"(,=:[!&|?{};+-*%<>~^".contains(&before)) => {
-                i = regex_end(bytes, i + 1);
-            }
-            quote @ (b'\'' | b'"' | b'`') => i = string_end(bytes, i + 1, quote),
-            b'(' | b'{' | b'[' => {
-                depth += 1;
-                max_depth = max_depth.max(depth);
-                i += 1;
-            }
-            b')' | b'}' | b']' => {
-                depth = depth.saturating_sub(1);
-                i += 1;
-            }
-            _ => i += 1,
-        }
-        if !byte.is_ascii_whitespace() {
-            previous = Some(byte);
-        }
-    }
-    max_depth
-}
-
-/// The index just past the string or template literal whose body starts at `i`. Quoted strings cannot span lines, so
-/// a quote the scan mistook for one hides at most the rest of its line.
-fn string_end(bytes: &[u8], mut i: usize, quote: u8) -> usize {
-    while i < bytes.len() && bytes[i] != quote {
-        if quote != b'`' && bytes[i] == b'\n' {
-            return i;
-        }
-        i += if bytes[i] == b'\\' { 2 } else { 1 };
-    }
-    i + 1
-}
-
-/// The index just past the regex literal whose body starts at `i`, or of the line break that ends it early.
-fn regex_end(bytes: &[u8], mut i: usize) -> usize {
-    let mut in_class = false;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 1,
-            b'\n' => return i,
-            b'[' => in_class = true,
-            b']' => in_class = false,
-            b'/' if !in_class => return i + 1,
-            _ => {}
-        }
-        i += 1;
-    }
-    i
 }
 
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
@@ -631,31 +550,6 @@ mod tests {
             ..Extraction::default()
         });
         assert_eq!(extraction.type_only_imports, ["32768"]);
-    }
-
-    #[rstest]
-    #[case("", 0)]
-    #[case("a(b[c{}])", 3)]
-    #[case("(((", 3)]
-    #[case(")))(", 1)]
-    #[case("// (((\n[", 1)]
-    #[case("/* ((( */ [", 1)]
-    #[case("'(((' + [[", 2)]
-    #[case("\"\\\"(((\" + [", 1)]
-    #[case("`(((` + {", 1)]
-    #[case("`(((\n(((` + {", 1)]
-    #[case("'\n(((", 3)]
-    #[case("\"(\n((", 2)]
-    #[case("/'/ + (((", 3)]
-    #[case("x = /[/(]/ + (", 1)]
-    #[case("x = /\\/(/ + (", 1)]
-    #[case("x = /(\n((", 2)]
-    #[case("x = /((", 0)]
-    #[case("x = '((", 0)]
-    #[case("(a) / ((b)) / 2", 2)]
-    #[case("1 /* ( */ / ((", 2)]
-    fn nesting_depth_ignores_comments_and_literals(#[case] source: &str, #[case] depth: usize) {
-        assert_eq!(max_bracket_nesting_depth(source), depth);
     }
 
     #[test]

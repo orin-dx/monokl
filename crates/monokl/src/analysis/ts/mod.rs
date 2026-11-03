@@ -530,32 +530,45 @@ export const App = (p) => (
         assert_eq!(analysis.lang.ts().unwrap().type_only_imports, Vec::<String>::new());
     }
 
-    #[test]
-    fn a_file_nested_past_the_limit_is_degraded_without_parsing() {
-        let text = format!("import a from './a';\nconst x = {}1{};\n", "[".repeat(5000), "]".repeat(5000));
+    #[rstest]
+    #[case::brackets("[", "]")]
+    #[case::calls("f(", ")")]
+    #[case::object_literals("{a:", "}")]
+    fn brackets_nested_thousands_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
+        let text = nested("import a from './a';\nexport const x = ", open, "1", close, 5000);
         let analysis = analyze_source("deep.ts", &text, AnalysisProfile::Full);
-        assert_degraded(&analysis);
-        assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
-        assert_eq!(analysis.profile, AnalysisProfile::Full);
-    }
-
-    #[test]
-    fn a_file_nested_to_the_limit_is_still_parsed() {
-        for (open, close) in [("[", "]"), ("f(", ")"), ("{a:", "}")] {
-            let text = format!("export const x = {}1{};\n", open.repeat(256), close.repeat(256));
-            let analysis = analyze_source("limit.ts", &text, AnalysisProfile::Full);
-            assert!(!analysis.had_parse_errors, "{open}");
-            assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
-        }
-    }
-
-    #[test]
-    fn brackets_in_strings_and_comments_do_not_count_toward_nesting() {
-        let text =
-            format!("// {}\nexport const s = '{}';\n/* {} */\n", "[".repeat(5000), "(".repeat(5000), "{".repeat(5000));
-        let analysis = analyze_source("quiet.ts", &text, AnalysisProfile::Structural);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis).len(), 1);
+        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 2, None)]);
+        assert_eq!(dependencies(&analysis), [("./a", 1, vec![("default", "a", BindingKind::Default)])]);
+    }
+
+    #[test]
+    fn a_string_continued_across_crlf_line_breaks_may_hold_many_parentheses() {
+        let text = format!("export const s = \"{}\";\r\nexport function after() {{}}\r\n", "(\\\r\n".repeat(300));
+        let analysis = analyze_source("continued.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        let after = Some("function after()");
+        assert_eq!(
+            symbols(&analysis),
+            [("s", SymbolKind::Variable, 1, None), ("after", SymbolKind::Function, 302, after)]
+        );
+    }
+
+    #[test]
+    fn a_postfix_increment_before_a_division_is_not_a_regex() {
+        let text = format!(
+            "export function f(values: number[], count: number, total: number) {{\n{}}}\nexport const y = 1;\n",
+            "  values.push(count++ / total);\n".repeat(300)
+        );
+        let analysis = analyze_source("division.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            symbols(&analysis),
+            [
+                ("f", SymbolKind::Function, 1, Some("function f(values: number[], count: number, total: number)")),
+                ("y", SymbolKind::Variable, 303, None)
+            ]
+        );
     }
 
     #[test]
@@ -576,24 +589,15 @@ export const App = (p) => (
         assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
     }
 
-    #[rstest]
-    #[case::on_the_next_line("const r = /'/;\nconst x = ")]
-    #[case::on_the_same_line("const r = /'/, x = ")]
-    fn a_quote_inside_a_regex_literal_does_not_hide_nesting(#[case] prefix: &str) {
-        let text = format!("{prefix}{}1{};\n", "(".repeat(5000), ")".repeat(5000));
-        assert_degraded(&analyze_source("regex.ts", &text, AnalysisProfile::Full));
-    }
-
     #[test]
-    fn a_file_that_fools_the_nesting_scan_still_parses_within_its_stack() {
-        // The scan reads the regex after `return` as a division and the quote as a string running to the end of the
-        // line, so it never sees the brackets; brackets in a type cost the most stack per byte.
+    fn a_quoted_regex_before_deeply_nested_type_brackets_still_parses() {
+        // Brackets in a type cost the most stack per byte.
         let text = format!(
             "export function f() {{ return /'/; }} export type T = {}number{};\n",
             "[".repeat(20_000),
             "]".repeat(20_000)
         );
-        let analysis = analyze_source("fooled.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("regex.ts", &text, AnalysisProfile::Full);
         assert!(!analysis.had_parse_errors);
         assert_eq!(
             symbols(&analysis),
@@ -621,7 +625,7 @@ export const App = (p) => (
         ("j", SymbolKind::Variable),
         7_000
     )]
-    fn nesting_the_scan_does_not_count_still_parses(
+    fn deep_nesting_without_brackets_still_parses(
         #[case] path: &str,
         #[case] text: String,
         #[case] symbol: (&str, SymbolKind),
