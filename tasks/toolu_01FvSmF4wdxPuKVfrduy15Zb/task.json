@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FvSmF4wdxPuKVfrduy15Zb",
+  "agent_id": "a7df89d8b7dc33f07",
+  "subagent_type": "general-purpose",
+  "task_description": "Queries behave as documented PR",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 87073,
+    "cache_read_tokens": 3520164,
+    "output_tokens": 18830,
+    "api_call_count": 42
+  },
+  "started_at": "2026-11-02T17:26:29.633714-08:00",
+  "completed_at": "2026-11-02T17:32:53.119234-08:00"
+}
