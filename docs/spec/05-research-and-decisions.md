@@ -309,3 +309,10 @@ Decisions made while building the first end-to-end command, with the departures 
 - **CLI.** Results print on stdout; errors are structured michi errors on stderr with exit 1; usage errors exit 2. Paths print relative to the working directory when under it. Reaching the file ceiling adds a `Warning` diagnostic.
 - **Property tests.** Reference-implementation properties for ranking, dedup, tokenizing and the query parser found no bugs. `#[non_exhaustive]` is on the enums that will grow and on `TextSearchResult`; `Digest`, `CapabilityPrecision`, option structs and `Modifier` are left exact on purpose.
 - **Still open.** `+regex:`/`-regex:` lose their modifier (#8), and there is no per-term length cap (#16).
+
+## 22. Search output tells the truth (2026-11-02)
+
+- **Diagnostics render as `help` lines.** One line per distinct diagnostic message, counted when tied to files ("2 files skipped: ..."), after the truncation marker. Rejected: a new `diagnostics` section, because michi hints already carry short advice and a second block costs every agent more tokens.
+- **Empty and operator-only queries are no longer silent.** They get the same `Skipped` diagnostic as exclusion-only queries (supersedes the "stay silent" line in §21). Rejected: an error, because an empty query is a valid request that matches nothing.
+- **Empty results say what is searched.** One hint: only top-level declarations are searched; use rg for text elsewhere. Rejected: saying it on every result, which spends tokens when rows are present.
+- **Advice names only what exists.** The `extract` hint and the `maxTerms` recovery are gone until those exist. A file as the search root is `invalid_input`, and a failed stdout write exits 1 unless the reader closed the pipe.
