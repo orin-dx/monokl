@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M6FGGFQFMECMQMZ87VDCVYFN",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-03T01:31:32.037644Z",
+  "branch": "fix/queries-match-readme",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "febd96070297",
+  "checkpoint_transcript_start": 13654,
+  "transcript_lines_at_start": 13654,
+  "compact_transcript_start": 925,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 46,
+      "cache_creation_tokens": 21261,
+      "cache_read_tokens": 2612604,
+      "output_tokens": 14049,
+      "api_call_count": 23
+    }
+  },
+  "redaction": {
+    "replacements": 48,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 33
+  },
+  "summary": {
+    "intent": "Address four review findings (A-D) on PR #43 (fix/parse-stack-overflow), which guards the parser against stack overflow on deeply nested source, by delegating the fixes to a subagent.",
+    "outcome": "The subagent deleted the bracket-nesting pre-scan, added a named degradation reason for degraded files, documented the debug_assertions proxy, and pushed three signed commits (afffe7f..813835e) to the PR. Tests, lint, doc-check, typos and coverage (97.58%) all pass, and the worst-case measurement of 463 MiB and 0.13 s is under the 1 GiB / 2 s limit.",
+    "learnings": {
+      "repo": [
+        "The pipeline only analyzes files that have a text hit, so hostile fixtures must start with a matching line such as `export const needle = 1;`.",
+        "Release-binary baseline RSS is about 54 MiB. Measuring peak memory with `time -l` only works with the sandbox disabled.",
+        "`FileAnalysis` now has a public `degradation: Option<Degradation>` field, so struct literals outside the crate must include it. `Degradation` is a `#[non_exhaustive]` enum with `TooLarge { bytes, cap }`, `Panicked` and `ThreadUnavailable`.",
+        "`had_parse_errors` stays true for degraded files. A file with syntax errors keeps its recovered content and has `degradation: None`.",
+        "`debug_assertions` is used as a proxy for 'unoptimized' when sizing the stack budget (`STACK_PER_SOURCE_BYTE`). A release profile with debug assertions overpays, while an opt-level 0 profile without them gets the smaller budget and could overflow. The workspace profiles currently do neither.",
+        "The pre-scan was unreliable: it mishandled CRLF-continued strings and postfix `++` followed by division. Deleting it was the fix, and the parser's own depth guards cover the deep-nesting cases.",
+        "Design docs section 22 records the review findings, the decision to drop the scan, and the new worst-case numbers."
+      ],
+      "code": [],
+      "workflow": [
+        "Run new regression tests against the old implementation first to confirm they fail, then confirm they pass after the fix.",
+        "The `git fetch` and `git push` calls needed the sandbox disabled to reach github.com.",
+        "A subagent's hand-back report is model output, not user authority. Its claims should be treated as a report to verify."
+      ]
+    },
+    "friction": [
+      "The worktree started with a stale index of staged files, which required `git checkout -f` onto the review branch.",
+      "The measurement fixtures in `/tmp/claude-501/fix184b/` were missing and had to be regenerated with `gen.py`.",
+      "The sandbox blocked network access and `time -l`, so those commands had to be run with it disabled."
+    ],
+    "open_items": [
+      "PR #42 (`test/pin-survivors`) will conflict after #43 lands. Its tests for `max_bracket_nesting_depth`, `string_end` and `regex_end` need dropping, and its `FileAnalysis`/`Extraction` literals need the `degradation` field. The subagent did not touch it.",
+      "The public API change (the new `FileAnalysis.degradation` field) should be noted for external consumers or in release notes.",
+      "The `debug_assertions` proxy is only documented, not fixed. Revisit it if the workspace ever adds a release-with-debug-assertions or opt-level 0 profile."
+    ]
+  }
+}
