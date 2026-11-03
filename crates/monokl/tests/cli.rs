@@ -1,7 +1,7 @@
 //! Black-box tests: run the built `monokl` binary against the `small-ts` fixture project.
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "a failing assertion should panic in a test")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn fixture() -> PathBuf {
@@ -99,4 +99,77 @@ fn a_missing_query_is_a_usage_error() {
     let output = monokl(&["search"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("<QUERY>"));
+}
+
+/// A temp project with a gitignored `build/` directory holding the only match for `generated`.
+fn project_with_a_gitignored_match() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("build")).unwrap();
+    std::fs::write(dir.path().join("build/out.ts"), "export function generated() {}\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/main.ts"), "export function main() {}\n").unwrap();
+    dir
+}
+
+fn monokl_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_monokl")).args(args).current_dir(dir).output().unwrap()
+}
+
+#[test]
+fn ignored_directories_are_not_searched_by_default() {
+    let dir = project_with_a_gitignored_match();
+    let output = monokl_in(dir.path(), &["search", "generated", "."]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).starts_with("search: []"), "got: {}", stdout(&output));
+}
+
+#[test]
+fn no_ignore_searches_ignored_directories() {
+    let dir = project_with_a_gitignored_match();
+    let output = monokl_in(dir.path(), &["search", "generated", ".", "--no-ignore"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:"));
+    assert!(lines.next().unwrap().starts_with("  build/out.ts,1,1,function,"), "got: {text}");
+}
+
+#[test]
+fn a_missing_search_root_exits_with_a_structured_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = monokl_in(dir.path(), &["search", "alpha", "no-such-directory"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).starts_with("error: not_found"), "got: {}", stderr(&output));
+}
+
+#[test]
+fn a_query_with_no_positive_terms_says_so() {
+    let output = monokl(&["search", "--", "-foo", "."]);
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        "search: []\nhelp[2]: query has no positive terms; add a term without a leading `-`,\
+         \"only top-level declarations are searched; for text in tests, calls or config try rg\"\n"
+    );
+}
+
+#[test]
+fn an_unsupported_language_says_so() {
+    let output = monokl(&["search", "format", ".", "--language", "rust"]);
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        "search: []\nhelp[2]: language Rust not supported in v1; only TypeScript/JavaScript,\
+         \"only top-level declarations are searched; for text in tests, calls or config try rg\"\n"
+    );
+}
+
+#[test]
+fn a_file_as_the_search_root_is_invalid_input_naming_the_path() {
+    let output = monokl(&["search", "alpha", "src/index.ts"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).starts_with("error: invalid_input"), "got: {}", stderr(&output));
+    assert!(stderr(&output).contains("src/index.ts"), "got: {}", stderr(&output));
 }

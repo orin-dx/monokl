@@ -134,9 +134,6 @@ fn search_with_ceiling(
         parse(query)?
     };
     let plan = QueryPlan::from_terms(terms);
-    if plan.is_empty() {
-        return Ok(SearchResult::empty());
-    }
     let patterns = plan.search_patterns();
     if patterns.is_empty() {
         return Ok(SearchResult::skipped("query has no positive terms; add a term without a leading `-`"));
@@ -545,18 +542,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_operator_only_queries_return_an_empty_result_without_diagnostics() {
+    fn empty_and_operator_only_queries_return_one_skipped_diagnostic() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
+        let expected =
+            [(DiagnosticKind::Skipped, None, "query has no positive terms; add a term without a leading `-`")];
         for query in ["", "   ", "+", "-", "regex:"] {
             let result = search(&whole_file_registry(), &request(&root, query)).unwrap();
             assert!(result.ranked.is_empty(), "{query:?}");
             assert_eq!((result.files_total, result.ceiling_hit), (0, false), "{query:?}");
-            assert!(result.diagnostics.is_empty(), "{query:?}");
+            assert_eq!(summary(&result.diagnostics), expected, "{query:?}");
         }
         let exact = SearchRequest { exact: true, ..request(&root, "  ") };
         let result = search(&whole_file_registry(), &exact).unwrap();
         assert!(result.ranked.is_empty());
-        assert!(result.diagnostics.is_empty());
+        assert_eq!(summary(&result.diagnostics), expected);
     }
 
     #[test]
@@ -876,6 +875,56 @@ mod tests {
                 "file could not be read, or a matching line is not UTF-8"
             )]
         );
+    }
+
+    const UNREADABLE: &str = "file could not be read, or a matching line is not UTF-8";
+
+    #[test]
+    fn an_excluded_pass_is_not_run_when_nothing_matches_a_positive_term() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"gamma \xff\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
+        assert_eq!(files(&result, &root), Vec::<String>::new());
+        assert_eq!(result.files_total, 0);
+        assert_eq!(summary(&result.diagnostics), []);
+    }
+
+    #[test]
+    fn a_file_unreadable_only_for_the_excluded_terms_gets_one_diagnostic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"alpha\n").unwrap();
+        std::fs::write(dir.path().join("b.ts"), b"gamma \xff\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Skipped, Some(root.join("b.ts").as_str()), UNREADABLE)]
+        );
+    }
+
+    #[test]
+    fn a_file_unreadable_for_both_the_main_and_the_excluded_terms_gets_one_diagnostic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"alpha\n").unwrap();
+        std::fs::write(dir.path().join("b.ts"), b"alpha gamma \xff\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Skipped, Some(root.join("b.ts").as_str()), UNREADABLE)]
+        );
+    }
+
+    #[test]
+    fn an_excluded_term_drops_its_files_when_the_ceiling_is_below_the_file_count() {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.ts", "alpha gamma\n"), ("c.ts", "alpha\n")]);
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha -gamma"), 1).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(result.files_total, 3);
+        assert!(result.ceiling_hit);
     }
 
     #[test]

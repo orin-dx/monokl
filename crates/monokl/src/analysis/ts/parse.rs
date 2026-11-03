@@ -563,6 +563,17 @@ mod tests {
     }
 
     #[test]
+    fn a_parenthesized_default_export_is_exported_without_a_symbol_or_a_function_block() {
+        let extraction = extract(Utf8Path::new("a.ts"), "export default (function g() {});\n", AnalysisProfile::Full);
+        assert!(!extraction.had_parse_errors);
+        assert!(extraction.symbols.is_empty());
+        let exports: Vec<_> = extraction.exports.iter().map(|e| (e.name.as_str(), e.line, e.re_export)).collect();
+        assert_eq!(exports, [("default", 1, false)]);
+        let blocks: Vec<_> = extraction.blocks.iter().map(|b| (b.line_start, b.line_end, b.node_kind)).collect();
+        assert_eq!(blocks, [(1, 1, SymbolKind::Other)]);
+    }
+
+    #[test]
     fn line_numbers_are_one_based_and_count_preceding_newlines() {
         let index = LineIndex::new("a\nbb\n\nc");
         assert_eq!([0, 1, 2, 4, 5, 6].map(|offset| index.line(offset)), [1, 1, 2, 2, 3, 4]);

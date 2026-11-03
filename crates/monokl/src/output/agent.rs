@@ -1,8 +1,10 @@
 //! Agent-facing output: TOON projections of command results and conversion of [`MonoklError`] into michi errors.
+use std::collections::BTreeMap;
+
 use michi::toon::Value;
 
 use crate::error::MonoklError;
-use crate::types::{SymbolKind, Visibility};
+use crate::types::{Diagnostic, DiagnosticKind, SymbolKind, Visibility};
 
 /// The CLI command currently executing, so a recovery hint can name the right tool to retry.
 pub struct ErrorContext<'a> {
@@ -192,11 +194,35 @@ impl ToonProjection<7> for crate::types::SearchResponse {
     }
 
     fn toon_hints(&self) -> Vec<michi::Hint> {
-        let marker = self.truncation_marker.as_deref().map(michi::Hint::new);
-        let extract =
-            michi::Hint::new("use extract with file/lineStart/lineEnd to retrieve a row's actual code content");
-        marker.into_iter().chain(std::iter::once(extract)).collect()
+        let mut hints: Vec<michi::Hint> = self.truncation_marker.as_deref().map(michi::Hint::new).into_iter().collect();
+        hints.extend(diagnostic_lines(&self.diagnostics).into_iter().map(michi::Hint::new));
+        if self.results.is_empty() {
+            hints.push(michi::Hint::new(
+                "only top-level declarations are searched; for text in tests, calls or config try rg",
+            ));
+        }
+        hints
     }
+}
+
+/// One line per distinct diagnostic message; a message tied to files is counted and says what happened to them.
+fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
+    let mut counts: BTreeMap<(&str, Option<&'static str>), usize> = BTreeMap::new();
+    for d in diagnostics {
+        let verb = d.path.as_ref().map(|_| match d.kind {
+            DiagnosticKind::Degraded => "degraded",
+            DiagnosticKind::Skipped => "skipped",
+            DiagnosticKind::Warning => "warned",
+        });
+        *counts.entry((d.message.as_str(), verb)).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|((message, verb), n)| match verb {
+            Some(verb) => format!("{n} {} {verb}: {message}", if n == 1 { "file" } else { "files" }),
+            None => message.to_owned(),
+        })
+        .collect()
 }
 
 /// Converts a TOON validation failure into a [`michi::DomainError`].
@@ -308,11 +334,39 @@ mod projection_tests {
         );
         assert!(rendered.contains("src/lib.rs,5,9,function,\"fn foo(x)\\nsecond line\",2,0.92"), "got: {rendered}");
         assert!(!rendered.contains("fn foo() {}"), "code field must never appear in TOON output, got: {rendered}");
-        assert!(
-            rendered.ends_with(
-                "\nhelp[1]: use extract with file/lineStart/lineEnd to retrieve a row's actual code content"
-            ),
-            "got: {rendered}"
+        assert!(!rendered.contains("help["), "a non-empty result with no diagnostics has no hints, got: {rendered}");
+    }
+
+    #[test]
+    fn render_projection_empty_search_response_says_what_went_wrong() {
+        use crate::types::SearchResponse;
+        use camino::Utf8PathBuf;
+
+        let diagnostic = |kind, path: Option<&str>, message: &str| Diagnostic {
+            kind,
+            path: path.map(Utf8PathBuf::from),
+            message: message.to_owned(),
+        };
+        let response = SearchResponse {
+            results: Vec::new(),
+            total_blocks_before_truncation: 0,
+            truncated: false,
+            truncation_marker: None,
+            total_bytes: 0,
+            total_tokens: 0,
+            diagnostics: vec![
+                diagnostic(DiagnosticKind::Skipped, Some("a.ts"), "unreadable"),
+                diagnostic(DiagnosticKind::Skipped, Some("b.ts"), "unreadable"),
+                diagnostic(DiagnosticKind::Degraded, Some("c.ts"), "parse errors"),
+                diagnostic(DiagnosticKind::Skipped, None, "query has no positive terms"),
+            ],
+        };
+
+        assert_eq!(
+            render_projection(&response).expect("must render"),
+            "search: []\n\
+             help[4]: \"1 file degraded: parse errors\",query has no positive terms,\"2 files skipped: unreadable\",\
+             \"only top-level declarations are searched; for text in tests, calls or config try rg\""
         );
     }
 
@@ -351,8 +405,7 @@ mod projection_tests {
              src/f1.rs,1,2,function,null,1,0.5\n  \
              src/f2.rs,2,3,function,null,2,0.5\n\
              totalCount: 3\n\
-             help[2]: showing 2 of 3; refine the query with +term or -term,\
-             use extract with file/lineStart/lineEnd to retrieve a row's actual code content"
+             help[1]: showing 2 of 3; refine the query with +term or -term"
         );
     }
 
@@ -538,6 +591,7 @@ fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {
     match kind {
         std::io::ErrorKind::NotFound => ErrorCode::NotFound,
         std::io::ErrorKind::PermissionDenied => ErrorCode::Forbidden,
+        std::io::ErrorKind::NotADirectory => ErrorCode::InvalidInput,
         _ => ErrorCode::ExternalFailure,
     }
 }
@@ -688,11 +742,7 @@ impl ToDomainError for MonoklError {
 
         domain_err = match self {
             MonoklError::TooManyTerms { count, limit } => {
-                domain_err.hint(format!("you supplied {count} terms; the limit is {limit}")).recovery(
-                    michi::RecoveryHint::new(ctx.command)
-                        .param("maxTerms", michi::KvValue::Int(*limit as i64))
-                        .reason("re-run with a shorter query"),
-                )
+                domain_err.hint(format!("you supplied {count} terms; the limit is {limit}"))
             }
             MonoklError::FileTooLarge { path, size, cap } => {
                 domain_err.hint(format!("{path} is {size} bytes; the cap is {cap} bytes")).recovery(
@@ -704,7 +754,17 @@ impl ToDomainError for MonoklError {
             MonoklError::InvalidGitRef { ref_, reason } => {
                 domain_err.hint(format!("{ref_:?} is not a valid git ref: {reason}"))
             }
-            _ => domain_err,
+            MonoklError::Io(_)
+            | MonoklError::Walk { .. }
+            | MonoklError::RegexBuild(_)
+            | MonoklError::NonUtf8Path { .. }
+            | MonoklError::TokenizerInit
+            | MonoklError::Json(_)
+            | MonoklError::PathOutsideRoot { .. }
+            | MonoklError::StaleDiskCache
+            | MonoklError::Git { .. }
+            | MonoklError::SymlinkRejected { .. }
+            | MonoklError::LockPoisoned { .. } => domain_err,
         };
 
         domain_err
@@ -873,10 +933,16 @@ mod error_tests {
             "got: {:?}",
             domain_err.hints
         );
-        let recovery = domain_err.recovery.expect("recovery must be set");
-        assert_eq!(recovery.tool, "search");
-        assert_eq!(recovery.params, vec![("maxTerms".to_string(), michi::KvValue::Int(8))]);
-        assert_eq!(recovery.reason.as_deref(), Some("re-run with a shorter query"));
+        assert!(domain_err.recovery.is_none(), "search has no maxTerms flag to recover with");
+    }
+
+    #[test]
+    fn a_file_as_the_search_root_is_invalid_input() {
+        let io_err = ignore::Error::Io(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        let err = MonoklError::Walk { path: Utf8PathBuf::from("/x/a.ts"), source: io_err };
+        let domain_err = err.to_domain_error(ctx());
+        assert_eq!(domain_err.code, michi::ErrorCode::InvalidInput);
+        assert!(domain_err.message.contains("/x/a.ts"), "got: {}", domain_err.message);
     }
 
     #[test]

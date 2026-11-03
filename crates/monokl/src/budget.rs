@@ -169,6 +169,16 @@ mod tests {
     }
 
     #[test]
+    fn search_limits_default_carries_the_budget_default() {
+        let limits = SearchLimits::default();
+        let budget = Budget::default();
+        assert_eq!(
+            (limits.max_results, limits.max_tokens, limits.max_bytes),
+            (Some(budget.max_results), Some(budget.max_tokens), budget.max_bytes)
+        );
+    }
+
+    #[test]
     fn budget_from_search_limits_fills_defaults_and_clamps_bytes() {
         let unset = SearchLimits { max_results: None, max_bytes: 10_000_000, max_tokens: None, max_candidates: 1 };
         assert_eq!(Budget::from(&unset), caps(50, 20_000, 2_097_152));
@@ -298,6 +308,22 @@ mod tests {
 
         let over_cap = format!("{at_cap}a");
         assert_eq!(count_tokens(&over_cap), TOKENIZE_BYTE_CAP + 1);
+    }
+
+    #[test]
+    fn text_well_under_the_byte_cap_is_tokenized_not_measured_by_its_length() {
+        let text = "a ".repeat(1024);
+        assert_eq!(text.len(), 2048);
+        let tokens = tiktoken_rs::o200k_base().unwrap().encode_with_special_tokens(&text).len();
+        assert_eq!(count_tokens(&text), tokens);
+        assert_eq!(tokens, 1025);
+    }
+
+    #[test]
+    fn text_far_over_the_byte_cap_is_measured_by_its_length() {
+        let text = "a ".repeat(20 * 1024);
+        assert_eq!(text.len(), 40 * 1024);
+        assert_eq!(count_tokens(&text), 40 * 1024);
     }
 
     #[test]
