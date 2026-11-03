@@ -1,0 +1,19 @@
+{
+  "tool_use_id": "toolu_019mLiFgUW2QHp3kRkpu4rh6",
+  "agent_id": "a89799f2921146cc2",
+  "subagent_type": "general-purpose",
+  "task_description": "Pinning tests for mutation survivors",
+  "files": [
+    "crates/monokl/src/analysis/ts/mod.rs",
+    "crates/monokl/src/analysis/ts/parse.rs"
+  ],
+  "token_usage": {
+    "input_tokens": 108,
+    "cache_creation_tokens": 243704,
+    "cache_read_tokens": 5437395,
+    "output_tokens": 24836,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-02T16:21:09.906503-08:00",
+  "completed_at": "2026-11-02T16:45:42.011981-08:00"
+}
