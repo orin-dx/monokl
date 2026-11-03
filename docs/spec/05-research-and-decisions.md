@@ -309,3 +309,10 @@ Decisions made while building the first end-to-end command, with the departures 
 - **CLI.** Results print on stdout; errors are structured michi errors on stderr with exit 1; usage errors exit 2. Paths print relative to the working directory when under it. Reaching the file ceiling adds a `Warning` diagnostic.
 - **Property tests.** Reference-implementation properties for ranking, dedup, tokenizing and the query parser found no bugs. `#[non_exhaustive]` is on the enums that will grow and on `TextSearchResult`; `Digest`, `CapabilityPrecision`, option structs and `Modifier` are left exact on purpose.
 - **Still open.** `+regex:`/`-regex:` lose their modifier (#8), and there is no per-term length cap (#16).
+
+## 22. Queries match the README (2026-11-02)
+
+- **`+regex:`/`-regex:` (closes #8).** The modifier applies to the regex term. Rejected: leaving the degrade to an optional literal, which ranked the files a `-regex:` meant to exclude.
+- **Quoted regex.** `regex:"a b"` already lexed as one pattern; only the README lacked it. No new syntax.
+- **`--language` goes by file extension.** The TypeScript analyzer owns all eight extensions, so the filter compares the path extension. Rejected: a `LanguageId::JavaScript` variant, which would split one analyzer for a filter.
+- **Declaration and test files.** `.d.mts`/`.d.cts` are skipped like `.d.ts`; `.test`/`.spec` cover every analyzable extension.
