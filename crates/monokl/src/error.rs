@@ -1,6 +1,7 @@
 //! The crate-wide [`MonoklError`] type and its [`Result`] alias.
 //!
-//! Every fallible `pub` and `pub(crate)` function returns [`Result`].
+//! Every fallible `pub` and `pub(crate)` function returns [`Result`], except the output layer
+//! (`output::agent::render_projection`), which returns michi's `DomainError`.
 use camino::Utf8PathBuf;
 
 use crate::file_io::FileIoError;
