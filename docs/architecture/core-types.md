@@ -142,9 +142,9 @@ pub struct SearchOptions {
 //          limits=SearchLimits::default(), exact=false, language=None
 
 pub struct SearchLimits {
-    pub max_results: Option<usize>,   // default Some(50)
-    pub max_bytes: usize,             // default 2_097_152
-    pub max_tokens: Option<usize>,    // default Some(20_000)
+    pub max_results: Option<usize>,   // default Some(Budget::default().max_results)
+    pub max_bytes: usize,             // default: Budget::default().max_bytes
+    pub max_tokens: Option<usize>,    // default Some(Budget::default().max_tokens)
     pub max_candidates: usize,        // default 1_000
 }
 ```
@@ -168,8 +168,7 @@ pub enum Language { TypeScript, JavaScript, Rust, Python }
 This is the small, **public-API** enum — 4 variants, also the CLI `--language` flag's
 `ValueEnum`. It is a different type from `LanguageId` (`01-core-architecture.md`, the
 `LanguageAnalyzer`/`AnalyzerRegistry` section), the larger **internal analyzer-dispatch**
-enum — `TypeScript, Rust, Python, Go, Java, C, Cpp, Bash, CSharp, Ruby, Php, Kotlin, Scala`
-(12 variants, includes fallback-tier-only languages with no `LangData` variant at all). Full
+enum (`crates/monokl/src/analysis/lang.rs`; it includes fallback-tier-only languages with no `LangData` variant at all). Full
 treatment of `LanguageId` belongs to `language-analyzer-contract.md`, not here — this note
 exists only so the two aren't reached for interchangeably.
 
