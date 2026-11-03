@@ -1,0 +1,18 @@
+{
+  "tool_use_id": "toolu_01BhtHVjxMTwpAp6pp6KPHsa",
+  "agent_id": "aaf28206e4a0ecabe",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix copy drift: one owner per fact",
+  "files": [
+    ".pr-body.md"
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 114554,
+    "cache_read_tokens": 4427800,
+    "output_tokens": 22723,
+    "api_call_count": 50
+  },
+  "started_at": "2026-11-02T17:17:46.989252-08:00",
+  "completed_at": "2026-11-02T17:24:19.272857-08:00"
+}
