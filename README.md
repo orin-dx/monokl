@@ -54,12 +54,12 @@ search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
   src/utils/validation.ts,8,12,function,"function validatePrice(price: number): ValidationResult",2,3.07557
   src/index.ts,3,3,other,null,3,2.345138
 totalCount: 10
-help[2]: showing 3 of 10; refine the query with +term or -term,use extract with file/lineStart/lineEnd to retrieve a row's actual code content
+help[1]: showing 3 of 10; refine the query with +term or -term
 ```
 
 Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
 
-The last line suggests an `extract` command to read a row's code. That command is planned but not built yet; for now, open the file at `lineStart`–`lineEnd`.
+To read a row's code, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, syntax errors and an empty query are reported as `help` lines under the table.
 
 ## Writing a query
 

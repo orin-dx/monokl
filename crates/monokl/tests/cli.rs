@@ -125,3 +125,33 @@ fn a_missing_search_root_exits_with_a_structured_error() {
     assert_eq!(stdout(&output), "");
     assert!(stderr(&output).starts_with("error: not_found"), "got: {}", stderr(&output));
 }
+
+#[test]
+fn a_query_with_no_positive_terms_says_so() {
+    let output = monokl(&["search", "--", "-foo", "."]);
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        "search: []\nhelp[2]: query has no positive terms; add a term without a leading `-`,\
+         \"only top-level declarations are searched; for text in tests, calls or config try rg\"\n"
+    );
+}
+
+#[test]
+fn an_unsupported_language_says_so() {
+    let output = monokl(&["search", "format", ".", "--language", "rust"]);
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        "search: []\nhelp[2]: language Rust not supported in v1; only TypeScript/JavaScript,\
+         \"only top-level declarations are searched; for text in tests, calls or config try rg\"\n"
+    );
+}
+
+#[test]
+fn a_file_as_the_search_root_is_invalid_input_naming_the_path() {
+    let output = monokl(&["search", "alpha", "src/index.ts"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).starts_with("error: invalid_input"), "got: {}", stderr(&output));
+    assert!(stderr(&output).contains("src/index.ts"), "got: {}", stderr(&output));
+}
