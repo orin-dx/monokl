@@ -22,8 +22,8 @@ pub struct ParsedTerm {
 
 /// Parses a query string into terms.
 ///
-/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:` yields no term, and a modifier
-/// followed by `regex:` drops both the modifier and the regex prefix. Regex syntax is not validated here.
+/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:` yields no term. A `+` or `-`
+/// before `regex:` makes the regex term required or excluded. Regex syntax is not validated here.
 ///
 /// # Errors
 ///
@@ -39,27 +39,9 @@ pub fn parse(input: &str) -> Result<Vec<ParsedTerm>> {
         let tok = lexer.next_token();
         match tok {
             Token::Eof => break,
-            Token::Plus => {
-                let content = lexer.next_token();
-                if let Some(term) = content_to_term(content, Modifier::Required) {
-                    terms.push(term);
-                }
-            }
-            Token::Minus => {
-                let content = lexer.next_token();
-                if let Some(term) = content_to_term(content, Modifier::Excluded) {
-                    terms.push(term);
-                }
-            }
-            Token::RegexPrefix => {
-                let pattern_tok = lexer.next_token();
-                match pattern_tok {
-                    Token::Word(raw) | Token::QuotedString(raw) => {
-                        terms.push(ParsedTerm { modifier: Modifier::Optional, pattern: raw, is_regex: true });
-                    }
-                    _ => {}
-                }
-            }
+            Token::Plus => push_modified(&mut lexer, Modifier::Required, &mut terms),
+            Token::Minus => push_modified(&mut lexer, Modifier::Excluded, &mut terms),
+            Token::RegexPrefix => push_regex(&mut lexer, Modifier::Optional, &mut terms),
             Token::Word(w) => {
                 terms.push(ParsedTerm { modifier: Modifier::Optional, pattern: regex::escape(&w), is_regex: false });
             }
@@ -74,12 +56,20 @@ pub fn parse(input: &str) -> Result<Vec<ParsedTerm>> {
     Ok(terms)
 }
 
-fn content_to_term(tok: Token, modifier: Modifier) -> Option<ParsedTerm> {
-    match tok {
-        Token::Word(w) => Some(ParsedTerm { modifier, pattern: regex::escape(&w), is_regex: false }),
-        Token::QuotedString(s) => Some(ParsedTerm { modifier, pattern: regex::escape(&s), is_regex: false }),
-        // `+regex:foo` loses its modifier here, and the main loop then reads `foo` as a bare optional word.
-        Token::RegexPrefix | Token::Plus | Token::Minus | Token::Eof => None,
+/// Reads the term after a `+` or `-`; a `regex:` prefix there makes it a regex term that keeps the modifier.
+fn push_modified(lexer: &mut Lexer<'_>, modifier: Modifier, terms: &mut Vec<ParsedTerm>) {
+    match lexer.next_token() {
+        Token::RegexPrefix => push_regex(lexer, modifier, terms),
+        Token::Word(w) => terms.push(ParsedTerm { modifier, pattern: regex::escape(&w), is_regex: false }),
+        Token::QuotedString(s) => terms.push(ParsedTerm { modifier, pattern: regex::escape(&s), is_regex: false }),
+        Token::Plus | Token::Minus | Token::Eof => {}
+    }
+}
+
+/// Reads the pattern after a `regex:` prefix. A dangling prefix yields no term.
+fn push_regex(lexer: &mut Lexer<'_>, modifier: Modifier, terms: &mut Vec<ParsedTerm>) {
+    if let Token::Word(pattern) | Token::QuotedString(pattern) = lexer.next_token() {
+        terms.push(ParsedTerm { modifier, pattern, is_regex: true });
     }
 }
 
@@ -417,21 +407,24 @@ mod tests {
     }
 
     #[test]
-    fn plus_regex_prefix_degrades_to_optional_escaped_literal_foo() {
-        let terms = parse("+regex:foo").unwrap();
-        assert_eq!(terms.len(), 1);
-        assert_eq!(terms[0].modifier, Modifier::Optional);
-        assert!(!terms[0].is_regex);
-        assert_eq!(terms[0].pattern, regex::escape("foo"));
+    fn plus_and_minus_before_regex_prefix_keep_their_modifier() {
+        for (query, modifier) in [("+regex:foo(", Modifier::Required), ("-regex:foo(", Modifier::Excluded)] {
+            let terms = parse(query).unwrap();
+            assert_eq!(terms.len(), 1, "{query}");
+            assert_eq!(terms[0].modifier, modifier, "{query}");
+            assert!(terms[0].is_regex, "{query}");
+            assert_eq!(terms[0].pattern, "foo(", "{query}");
+        }
     }
 
     #[test]
-    fn minus_regex_prefix_degrades_to_optional_escaped_literal_foo() {
-        let terms = parse("-regex:foo").unwrap();
-        assert_eq!(terms.len(), 1);
-        assert_eq!(terms[0].modifier, Modifier::Optional);
-        assert!(!terms[0].is_regex);
-        assert_eq!(terms[0].pattern, regex::escape("foo"));
+    fn quoted_regex_pattern_keeps_whitespace_and_the_modifier() {
+        let terms = parse("-regex:\"function use[A-Z]\" bar").unwrap();
+        assert_eq!(terms.len(), 2);
+        assert_eq!(terms[0].modifier, Modifier::Excluded);
+        assert!(terms[0].is_regex);
+        assert_eq!(terms[0].pattern, "function use[A-Z]");
+        assert_eq!(terms[1].pattern, "bar");
     }
 
     #[test]
@@ -486,37 +479,6 @@ mod tests {
         assert_eq!(terms[0].modifier, Modifier::Optional);
         assert!(!terms[0].is_regex);
         assert_eq!(terms[0].pattern, "a b");
-    }
-
-    // The `RegexPrefix` arm is indistinguishable by behavior from any other `None` arm, so its explicit, wildcard-free
-    // handling is checked in the source.
-    #[test]
-    fn content_to_term_has_explicit_regex_prefix_arm_structural() {
-        let src = include_str!("parser.rs");
-        let fn_start =
-            src.find("fn content_to_term").unwrap_or_else(|| panic!("`fn content_to_term` not found in parser.rs"));
-        let open = src[fn_start..].find('{').unwrap() + fn_start;
-        let mut depth: i32 = 0;
-        let mut close = None;
-        for (i, ch) in src[open..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close = Some(open + i);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let close = close.unwrap_or_else(|| panic!("no matching close brace found for content_to_term"));
-        let body = &src[open..=close];
-        assert!(
-            body.contains("Token::RegexPrefix |") && !body.contains("_ =>"),
-            "content_to_term's match must name `Token::RegexPrefix` in its `None` arm with no wildcard, found body: {body:?}"
-        );
     }
 }
 
