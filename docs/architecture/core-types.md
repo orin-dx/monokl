@@ -3,8 +3,8 @@
 Source: `docs/spec/01-core-architecture.md` §4 ("types.rs — all public types verbatim"),
 cross-referenced with `docs/spec/03-multi-language-platform.md`'s `SymbolEntry` field
 additions (§ "`SymbolEntry` — gained `owner`, `trait_impl`, `visibility`, `kind_detail`").
-No code exists yet — monokl is spec-stage. This file states what `types.rs` must actually
-contain when written, which in two places (below) differs from what `docs/spec/04-analysis-fidelity.md`
+`crates/monokl/src/types.rs` exists and implements part of this. This file states what `types.rs` must actually
+contain, which in two places (below) differs from what `docs/spec/04-analysis-fidelity.md`
 currently says.
 
 ## SymbolEntry

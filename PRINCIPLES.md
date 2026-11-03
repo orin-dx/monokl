@@ -8,7 +8,7 @@ What monokl believes, and why. See [ARCHITECTURE.md](ARCHITECTURE.md) for how th
 
 **Aggregate views, not re-scans.** The import graph and symbol index are folded from cached per-file data by `WorkspaceEnricher`s. Building workspace-wide structure never means re-walking the filesystem or re-reading files that are already cached.
 
-**Token budget is non-negotiable.** `max_bytes` has a hard 2MB ceiling. When output gets truncated, the response says so explicitly — a truncation marker, not silent data loss. An agent consuming monokl's output should never have to guess whether it's seeing everything.
+**Token budget is non-negotiable.** `max_bytes` defaults to 2 MiB. When output gets truncated, the response says so explicitly — a truncation marker, not silent data loss. An agent consuming monokl's output should never have to guess whether it's seeing everything.
 
 **Determinism.** Serialized output uses `BTreeMap` for stable key order. Ties break on `(file, line_start)`. BM25 scores round to 6 decimal places specifically to eliminate floating-point divergence between x86-64 and ARM64 — the same query against the same code should produce byte-identical JSON regardless of what machine ran it.
 

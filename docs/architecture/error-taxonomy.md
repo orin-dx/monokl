@@ -1,9 +1,9 @@
 # Error Taxonomy — Semantic Model
 
 Source: `docs/spec/01-core-architecture.md` §3 (error.rs), verbatim enum at lines 190–252.
-No code exists yet — this file is currently **normative**, not descriptive. When `error.rs`
-is implemented, re-point this citation at the source and reconcile via `canon/drift`; until
-then, deviating from the enum below is a spec change, not an implementation detail.
+`crates/monokl/src/error.rs` and `file_io.rs` exist and implement part of this enum; the rest is **normative**, not
+descriptive. Reconcile against the source, and treat deviating from the enum below as a spec change, not an
+implementation detail.
 
 The enum shown is already the **post-research-correction** state: `InvalidGitRef`/`Git`/
 `SymlinkRejected`/`FileTooLarge` were added late (Part 3 constructs all four but an earlier
