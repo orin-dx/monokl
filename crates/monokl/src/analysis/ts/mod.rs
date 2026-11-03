@@ -541,7 +541,6 @@ export const App = (p) => (
 
     #[test]
     fn a_file_nested_to_the_limit_is_still_parsed() {
-        // Runs on a 2 MiB test thread in a debug build, the tightest stack a caller is likely to give the parser.
         for (open, close) in [("[", "]"), ("f(", ")"), ("{a:", "}")] {
             let text = format!("export const x = {}1{};\n", open.repeat(256), close.repeat(256));
             let analysis = analyze_source("limit.ts", &text, AnalysisProfile::Full);
@@ -559,6 +558,24 @@ export const App = (p) => (
         assert_eq!(symbols(&analysis).len(), 1);
     }
 
+    #[test]
+    fn a_file_longer_than_the_parse_limit_is_degraded_without_parsing() {
+        let head = "export const x = 1;\n";
+        let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN + 1 - head.len()));
+        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        assert_degraded(&analysis);
+        assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
+    }
+
+    #[test]
+    fn a_file_as_long_as_the_parse_limit_is_still_parsed() {
+        let head = "export const x = 1;\n";
+        let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN - head.len()));
+        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
+    }
+
     #[rstest]
     #[case::on_the_next_line("const r = /'/;\nconst x = ")]
     #[case::on_the_same_line("const r = /'/, x = ")]
@@ -567,22 +584,49 @@ export const App = (p) => (
         assert_degraded(&analyze_source("regex.ts", &text, AnalysisProfile::Full));
     }
 
+    #[test]
+    fn a_file_that_fools_the_nesting_scan_still_parses_within_its_stack() {
+        // The scan reads the regex after `return` as a division and the quote as a string running to the end of the
+        // line, so it never sees the brackets; brackets in a type cost the most stack per byte.
+        let text = format!(
+            "export function f() {{ return /'/; }} export type T = {}number{};\n",
+            "[".repeat(20_000),
+            "]".repeat(20_000)
+        );
+        let analysis = analyze_source("fooled.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            symbols(&analysis),
+            [("f", SymbolKind::Function, 1, Some("function f()")), ("T", SymbolKind::TypeAlias, 1, None)]
+        );
+    }
+
+    /// `head`, then `open` `depth` times, `middle`, and `close` `depth` times.
+    fn nested(head: &str, open: &str, middle: &str, close: &str, depth: usize) -> String {
+        format!("{head}{}{middle}{};\n", open.repeat(depth), close.repeat(depth))
+    }
+
     #[rstest]
-    #[case::generic_types("deep.ts", "export type T = ", "Array<", "number", ">", 20_000, ("T", SymbolKind::TypeAlias), 0)]
-    #[case::arrow_functions("deep.ts", "export const f = ", "() => ", "1", "", 20_000, ("f", SymbolKind::Variable), 0)]
-    #[case::conditionals("deep.ts", "export const t = ", "a ? b : ", "c", "", 20_000, ("t", SymbolKind::Variable), 0)]
-    #[case::jsx_elements("deep.tsx", "export const j = ", "<div>", "", "</div>", 30_000, ("j", SymbolKind::Variable), 30_000)]
-    fn nesting_without_brackets_parses_however_deep(
+    #[case::generic_types(
+        "deep.ts",
+        nested("export type T = ", "Array<", "number", ">", 10_000),
+        ("T", SymbolKind::TypeAlias),
+        0
+    )]
+    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 12_000), ("f", SymbolKind::Variable), 0)]
+    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 10_000), ("t", SymbolKind::Variable), 0)]
+    #[case::jsx_elements(
+        "deep.tsx",
+        nested("export const j = ", "<div>", "", "</div>", 7_000),
+        ("j", SymbolKind::Variable),
+        7_000
+    )]
+    fn nesting_the_scan_does_not_count_still_parses(
         #[case] path: &str,
-        #[case] head: &str,
-        #[case] open: &str,
-        #[case] middle: &str,
-        #[case] close: &str,
-        #[case] depth: usize,
+        #[case] text: String,
         #[case] symbol: (&str, SymbolKind),
         #[case] jsx_elements: usize,
     ) {
-        let text = format!("{head}{}{middle}{};\n", open.repeat(depth), close.repeat(depth));
         let analysis = analyze_source(path, &text, AnalysisProfile::Full);
         assert!(!analysis.had_parse_errors);
         assert_eq!(symbols(&analysis), [(symbol.0, symbol.1, 1, None)]);

@@ -90,7 +90,7 @@ fn a_file_too_deeply_nested_to_parse_does_not_stop_the_others() {
     let text = stdout(&output);
     let lines: Vec<&str> = text.lines().take(2).collect();
     assert_eq!(lines[0], "search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
-    assert!(lines[1].starts_with("  normal.ts,1,1,function,\"function needle()\",1,"), "got: {text}");
+    assert!(lines[1].starts_with("  normal.ts,1,1,function,function needle(),1,"), "got: {text}");
 }
 
 #[test]

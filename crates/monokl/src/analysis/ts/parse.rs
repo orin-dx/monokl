@@ -2,7 +2,7 @@
 //!
 //! The parse owns its arena. Everything leaving this module is owned data, so no arena-borrowed node escapes.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::thread;
 
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
@@ -22,10 +22,24 @@ use crate::types::{
     JsxElementEntry, SymbolEntry, SymbolKind,
 };
 
-/// Files nested deeper than this are not parsed: the parser recurses once per level and overflowing the stack aborts
-/// the process. A 2 MiB debug-build stack, the tightest a worker thread is likely to have, overflows between 700 and
-/// 850 nested arrays; real code stays far below this.
+/// Files with more bracket nesting than this are not parsed. Real code stays far below it; turning such a file away
+/// early saves touching hundreds of megabytes of stack on a parse that recovers nothing useful.
 const MAX_SOURCE_NESTING_DEPTH: usize = 256;
+
+/// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
+/// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
+/// level measured, a `[` in a type, uses 1.7 KB of stack optimized and 4.6 KB unoptimized: this is over twice that.
+const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
+
+/// Stack for what does not grow with the source.
+const BASE_STACK: usize = 8 << 20;
+
+/// The most stack one parse reserves. Only touched pages are committed, but a file that defeats the nesting scan can
+/// touch about half of it, so this also bounds that file's memory.
+const MAX_STACK: usize = 1 << 30;
+
+/// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
+pub(super) const MAX_PARSED_SOURCE_LEN: usize = (MAX_STACK - BASE_STACK) / STACK_PER_SOURCE_BYTE;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
@@ -48,33 +62,43 @@ impl Extraction {
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// A file nested too deeply to parse safely, or one whose parse or extraction panics, yields
-/// [`Extraction::degraded`].
+/// A file too long to be sure of its stack, one with too much bracket nesting, or one whose parse or extraction
+/// panics, yields [`Extraction::degraded`].
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
-    if max_bracket_nesting_depth(source) > MAX_SOURCE_NESTING_DEPTH {
+    if source.len() > MAX_PARSED_SOURCE_LEN || max_bracket_nesting_depth(source) > MAX_SOURCE_NESTING_DEPTH {
         return Extraction::degraded();
     }
-    guarded(|| parse_and_extract(path, source, profile))
+    let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
+    guarded(stack_size, || parse_and_extract(path, source, profile))
 }
 
-fn guarded(run: impl FnOnce() -> Extraction) -> Extraction {
-    // The closure's output is discarded on a panic, so no torn state is observable afterwards.
-    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|_| Extraction::degraded())
+/// Runs `run` on its own thread with `stack_size` bytes of stack. A panic, or a thread that cannot be started, yields
+/// [`Extraction::degraded`].
+fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extraction {
+    thread::scope(|scope| {
+        let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(stack_size);
+        let Ok(handle) = builder.spawn_scoped(scope, run) else { return Extraction::degraded() };
+        // The closure's output is discarded on a panic, so no torn state is observable afterwards.
+        handle.join().unwrap_or_else(|_| Extraction::degraded())
+    })
 }
 
-/// The deepest bracket nesting in `source`, skipping comments and string literals.
+/// The deepest bracket nesting in `source`, skipping comments and string, template and regex literals.
 ///
-/// A cheap linear scan used as a proxy for how deep the parser will recurse. It undercounts around apostrophes in
-/// JSX text and regex literals, which only ever lets a file through, never rejects a valid one.
+/// A cheap linear scan, not a parse: it tells a regex literal from a division by the character before it and does not
+/// look inside templates or JSX text, so it can miscount. The stack each parse gets does not depend on it.
 fn max_bracket_nesting_depth(source: &str) -> usize {
     let bytes = source.as_bytes();
     let (mut depth, mut max_depth, mut i) = (0usize, 0usize, 0usize);
+    let mut previous = None;
     while i < bytes.len() {
-        match bytes[i] {
+        let byte = bytes[i];
+        match byte {
             b'/' if bytes.get(i + 1) == Some(&b'/') => {
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
+                continue;
             }
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
                 i += 2;
@@ -82,14 +106,12 @@ fn max_bracket_nesting_depth(source: &str) -> usize {
                     i += 1;
                 }
                 i += 2;
+                continue;
             }
-            quote @ (b'\'' | b'"' | b'`') => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
+            b'/' if previous.is_none_or(|before: u8| b"(,=:[!&|?{};+-*%<>~^".contains(&before)) => {
+                i = regex_end(bytes, i + 1);
             }
+            quote @ (b'\'' | b'"' | b'`') => i = string_end(bytes, i + 1, quote),
             b'(' | b'{' | b'[' => {
                 depth += 1;
                 max_depth = max_depth.max(depth);
@@ -101,8 +123,40 @@ fn max_bracket_nesting_depth(source: &str) -> usize {
             }
             _ => i += 1,
         }
+        if !byte.is_ascii_whitespace() {
+            previous = Some(byte);
+        }
     }
     max_depth
+}
+
+/// The index just past the string or template literal whose body starts at `i`. Quoted strings cannot span lines, so
+/// a quote the scan mistook for one hides at most the rest of its line.
+fn string_end(bytes: &[u8], mut i: usize, quote: u8) -> usize {
+    while i < bytes.len() && bytes[i] != quote {
+        if quote != b'`' && bytes[i] == b'\n' {
+            return i;
+        }
+        i += if bytes[i] == b'\\' { 2 } else { 1 };
+    }
+    i + 1
+}
+
+/// The index just past the regex literal whose body starts at `i`, or of the line break that ends it early.
+fn regex_end(bytes: &[u8], mut i: usize) -> usize {
+    let mut in_class = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'\n' => return i,
+            b'[' => in_class = true,
+            b']' => in_class = false,
+            b'/' if !in_class => return i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    i
 }
 
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
@@ -542,7 +596,7 @@ mod tests {
 
     #[test]
     fn a_panic_becomes_the_degraded_extraction() {
-        let extraction = guarded(|| panic!("boom"));
+        let extraction = guarded(BASE_STACK, || panic!("boom"));
         assert!(extraction.had_parse_errors);
         assert!(extraction.symbols.is_empty());
         assert!(extraction.dependencies.is_empty());
@@ -554,9 +608,29 @@ mod tests {
 
     #[test]
     fn a_run_that_does_not_panic_is_returned_untouched() {
-        let extraction = guarded(|| Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
+        let extraction =
+            guarded(BASE_STACK, || Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
         assert!(!extraction.had_parse_errors);
         assert_eq!(extraction.type_only_imports, ["x"]);
+    }
+
+    /// Recurses `depth` times with a 1 KiB frame and returns how many frames it went through.
+    fn recurse(depth: usize) -> usize {
+        let frame = std::hint::black_box([1u8; 1024]);
+        if depth == 0 {
+            return 0;
+        }
+        recurse(depth - 1) + usize::from(std::hint::black_box(frame)[0])
+    }
+
+    #[test]
+    fn the_run_gets_the_stack_it_asks_for() {
+        // 32 MiB of frames would overflow both the 8 MiB main thread and the 2 MiB a test thread gets.
+        let extraction = guarded(256 << 20, || Extraction {
+            type_only_imports: vec![recurse(32 << 10).to_string()],
+            ..Extraction::default()
+        });
+        assert_eq!(extraction.type_only_imports, ["32768"]);
     }
 
     #[rstest]
@@ -569,7 +643,16 @@ mod tests {
     #[case("'(((' + [[", 2)]
     #[case("\"\\\"(((\" + [", 1)]
     #[case("`(((` + {", 1)]
-    fn nesting_depth_ignores_comments_and_strings(#[case] source: &str, #[case] depth: usize) {
+    #[case("`(((\n(((` + {", 1)]
+    #[case("'\n(((", 3)]
+    #[case("\"(\n((", 2)]
+    #[case("/'/ + (((", 3)]
+    #[case("x = /[/(]/ + (", 1)]
+    #[case("x = /\\/(/ + (", 1)]
+    #[case("x = /(\n((", 2)]
+    #[case("(a) / ((b)) / 2", 2)]
+    #[case("1 /* ( */ / ((", 2)]
+    fn nesting_depth_ignores_comments_and_literals(#[case] source: &str, #[case] depth: usize) {
         assert_eq!(max_bracket_nesting_depth(source), depth);
     }
 
