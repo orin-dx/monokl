@@ -90,12 +90,14 @@ impl LanguageAnalyzer for TsAnalyzer {
             jsx_elements,
             type_only_imports,
             had_parse_errors,
+            degradation,
         } = parse::extract(path, &source, profile);
         Ok(Arc::new(FileAnalysis {
             source_path: path.to_owned(),
             digest,
             profile,
             had_parse_errors,
+            degradation,
             symbols,
             dependencies,
             exports,
@@ -113,6 +115,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::analysis::Degradation;
     use crate::error::MonoklError;
     use crate::types::{BindingKind, DependencyTarget, SymbolKind};
 
@@ -513,6 +516,7 @@ export const App = (p) => (
     fn an_unrecoverable_syntax_error_leaves_nothing_but_the_flag() {
         let analysis = analyze_source("fatal.ts", "export function good() {}\nconst x = ;\n", AnalysisProfile::Full);
         assert_degraded(&analysis);
+        assert_eq!(analysis.degradation, None);
     }
 
     #[test]
@@ -572,11 +576,15 @@ export const App = (p) => (
     }
 
     #[test]
-    fn a_file_longer_than_the_parse_limit_is_degraded_without_parsing() {
+    fn a_file_longer_than_the_parse_limit_is_degraded_for_its_size() {
         let head = "export const x = 1;\n";
         let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN + 1 - head.len()));
         let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
         assert_degraded(&analysis);
+        assert_eq!(
+            analysis.degradation,
+            Some(Degradation::TooLarge { bytes: parse::MAX_PARSED_SOURCE_LEN + 1, cap: parse::MAX_PARSED_SOURCE_LEN })
+        );
         assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
     }
 
@@ -586,6 +594,7 @@ export const App = (p) => (
         let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN - head.len()));
         let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
         assert!(!analysis.had_parse_errors);
+        assert_eq!(analysis.degradation, None);
         assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
     }
 

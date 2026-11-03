@@ -16,7 +16,7 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
 
-use crate::analysis::AnalysisProfile;
+use crate::analysis::{AnalysisProfile, Degradation};
 use crate::types::{
     BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord, JsxAttribute,
     JsxElementEntry, SymbolEntry, SymbolKind,
@@ -47,34 +47,38 @@ pub(super) struct Extraction {
     pub(super) jsx_elements: Vec<JsxElementEntry>,
     pub(super) type_only_imports: Vec<String>,
     pub(super) had_parse_errors: bool,
+    pub(super) degradation: Option<Degradation>,
 }
 
 impl Extraction {
-    /// The result for a file that could not be analyzed: no data, flagged as having errors.
-    fn degraded() -> Self {
-        Self { had_parse_errors: true, ..Self::default() }
+    /// The result for a file that could not be analyzed: no data, flagged as having errors and the reason.
+    fn degraded(degradation: Degradation) -> Self {
+        Self { had_parse_errors: true, degradation: Some(degradation), ..Self::default() }
     }
 }
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// A file too long to be sure of its stack, or one whose parse or extraction panics, yields [`Extraction::degraded`].
+/// A file too long to be sure of its stack, or one whose parse or extraction panics, yields [`Extraction::degraded`]
+/// with the reason.
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
     if source.len() > MAX_PARSED_SOURCE_LEN {
-        return Extraction::degraded();
+        return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
     let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
     guarded(stack_size, || parse_and_extract(path, source, profile))
 }
 
 /// Runs `run` on its own thread with `stack_size` bytes of stack. A panic, or a thread that cannot be started, yields
-/// [`Extraction::degraded`].
+/// [`Extraction::degraded`] with the reason.
 fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extraction {
     thread::scope(|scope| {
         let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(stack_size);
-        let Ok(handle) = builder.spawn_scoped(scope, run) else { return Extraction::degraded() };
+        let Ok(handle) = builder.spawn_scoped(scope, run) else {
+            return Extraction::degraded(Degradation::ThreadUnavailable);
+        };
         // The closure's output is discarded on a panic, so no torn state is observable afterwards.
-        handle.join().unwrap_or_else(|_| Extraction::degraded())
+        handle.join().unwrap_or_else(|_| Extraction::degraded(Degradation::Panicked))
     })
 }
 
@@ -517,6 +521,7 @@ mod tests {
     fn a_panic_becomes_the_degraded_extraction() {
         let extraction = guarded(BASE_STACK, || panic!("boom"));
         assert!(extraction.had_parse_errors);
+        assert_eq!(extraction.degradation, Some(Degradation::Panicked));
         assert!(extraction.symbols.is_empty());
         assert!(extraction.dependencies.is_empty());
         assert!(extraction.exports.is_empty());
@@ -530,6 +535,7 @@ mod tests {
         let extraction =
             guarded(BASE_STACK, || Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
         assert!(!extraction.had_parse_errors);
+        assert_eq!(extraction.degradation, None);
         assert_eq!(extraction.type_only_imports, ["x"]);
     }
 
