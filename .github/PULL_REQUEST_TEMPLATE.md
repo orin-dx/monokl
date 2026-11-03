@@ -1,20 +1,22 @@
-## What changed
-- 1-3 bullets, plain language
+## Summary
 
-## Why
-The problem or gap this closes — the diff already shows what changed.
+- What changed (1-3 bullets)
+- Why it was needed
 
 ## Type of change
-- [ ] Spec change (`docs/spec/`) — added a dated entry to `docs/spec/05-research-and-decisions.md` explaining what changed and why
-- [ ] Implementation (once there's code)
+
 - [ ] Bug fix
-- [ ] Breaking change
+- [ ] New feature
+- [ ] Breaking change (changes CLI flags or output format)
+- [ ] Refactor, docs or tooling only
+
+## Changeset
+
+- [ ] Needs a changeset if it changes what users get; otherwise say why not
 
 ## Test plan
-- [ ] `cargo nextest run` passes
-- [ ] `cargo clippy --workspace --all-targets` clean
-- [ ] Snapshot tests (`insta`) reviewed if output shape changed
-- [ ] N/A — spec-only change, nothing to build yet
 
-## Related
-Closes #<issue>
+- [ ] `just ci` passes locally
+- [ ] Edge cases covered
+
+Trail: https://entire.com/gh/orin-dx/-/trails/<number>
