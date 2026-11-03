@@ -55,7 +55,7 @@ Each changeset becomes one bullet in the changelog, which is a flat list per ver
 - **Never use `#` headings** or start the summary with `- `: the changelog supplies the version heading and the bullet.
 - **Put identifiers, flags and syntax in backticks,** and leave out function names, spec IDs and PR numbers.
 - **Entries appear in filename order.** Prefix a filename with `0-` (then `1-`) to make an entry lead its release.
-- `callisto version --dry-run` prints only the version plan. Check the rendered text in the release PR before merging it.
+- `just changesets` validates them. The rendered text only shows in the release PR, so read it there before merging.
 
 ## Filing an issue
 
