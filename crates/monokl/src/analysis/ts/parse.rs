@@ -569,8 +569,56 @@ mod tests {
     #[case("'(((' + [[", 2)]
     #[case("\"\\\"(((\" + [", 1)]
     #[case("`(((` + {", 1)]
-    fn nesting_depth_ignores_comments_and_strings(#[case] source: &str, #[case] depth: usize) {
+    #[case("()()", 1)]
+    #[case("[](){}", 1)]
+    #[case("}}}]]]))) [", 1)]
+    #[case("4 / 2 + [", 1)]
+    #[case("a / b * c [", 1)]
+    #[case("// (((", 0)]
+    #[case("[ // (((", 1)]
+    #[case("/* (((", 0)]
+    #[case("/* ((( *", 0)]
+    #[case("/* a * ( */ [", 1)]
+    #[case("/* a / ( */ [", 1)]
+    #[case("[[[[[[[[ /**/ [", 9)]
+    #[case("[[[[ /* ( */ [[", 6)]
+    #[case("'(((", 0)]
+    #[case("\"((\\", 0)]
+    #[case("[[[ 'ab\\'cd(' ]", 3)]
+    #[case("[[ `a\\`(`(", 3)]
+    #[case("([{([{", 6)]
+    fn nesting_depth_counts_brackets_outside_comments_and_strings(#[case] source: &str, #[case] depth: usize) {
         assert_eq!(max_bracket_nesting_depth(source), depth);
+    }
+
+    #[test]
+    fn nesting_depth_at_the_limit_is_parsed_and_one_past_it_is_degraded() {
+        let at_limit = format!(
+            "export const x = {}0{};\n",
+            "[".repeat(MAX_SOURCE_NESTING_DEPTH - 1),
+            "]".repeat(MAX_SOURCE_NESTING_DEPTH - 1)
+        );
+        assert_eq!(max_bracket_nesting_depth(&at_limit), MAX_SOURCE_NESTING_DEPTH - 1);
+        let exactly = format!("[{}", "[".repeat(MAX_SOURCE_NESTING_DEPTH - 1));
+        assert_eq!(max_bracket_nesting_depth(&exactly), MAX_SOURCE_NESTING_DEPTH);
+        let over = format!("[{}", "[".repeat(MAX_SOURCE_NESTING_DEPTH));
+        assert_eq!(max_bracket_nesting_depth(&over), MAX_SOURCE_NESTING_DEPTH + 1);
+        let path = Utf8Path::new("a.ts");
+        assert!(!extract(path, &at_limit, AnalysisProfile::Full).had_parse_errors);
+        let degraded = extract(path, &over, AnalysisProfile::Full);
+        assert!(degraded.had_parse_errors);
+        assert!(degraded.blocks.is_empty());
+    }
+
+    #[test]
+    fn a_parenthesized_default_export_is_exported_without_a_symbol_or_a_function_block() {
+        let extraction = extract(Utf8Path::new("a.ts"), "export default (function g() {});\n", AnalysisProfile::Full);
+        assert!(!extraction.had_parse_errors);
+        assert!(extraction.symbols.is_empty());
+        let exports: Vec<_> = extraction.exports.iter().map(|e| (e.name.as_str(), e.line, e.re_export)).collect();
+        assert_eq!(exports, [("default", 1, false)]);
+        let blocks: Vec<_> = extraction.blocks.iter().map(|b| (b.line_start, b.line_end, b.node_kind)).collect();
+        assert_eq!(blocks, [(1, 1, SymbolKind::Other)]);
     }
 
     #[test]

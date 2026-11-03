@@ -435,6 +435,62 @@ export default class Named {}
     }
 
     #[test]
+    fn every_top_level_declaration_kind_yields_its_symbol_export_and_block() {
+        let text = "\
+function f(a: number): string {
+  return String(a);
+}
+class C {
+  m() {}
+}
+interface I {
+  x: number;
+}
+type T = string;
+enum E {
+  A,
+}
+const v = 1;
+export function g() {}
+export default function h() {}
+export { v };
+export const y = 1;
+";
+        let analysis = analyze_source("kinds.ts", text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            symbols(&analysis),
+            [
+                ("f", SymbolKind::Function, 1, Some("function f(a: number): string")),
+                ("C", SymbolKind::Class, 4, None),
+                ("I", SymbolKind::Interface, 7, None),
+                ("T", SymbolKind::TypeAlias, 10, None),
+                ("E", SymbolKind::Enum, 11, None),
+                ("v", SymbolKind::Variable, 14, None),
+                ("g", SymbolKind::Function, 15, Some("function g()")),
+                ("h", SymbolKind::Function, 16, Some("function h()")),
+                ("y", SymbolKind::Variable, 18, None),
+            ]
+        );
+        assert_eq!(exports(&analysis), [("g", 15, false), ("default", 16, false), ("v", 17, false), ("y", 18, false)]);
+        assert_eq!(
+            blocks(&analysis),
+            [
+                (1, 3, SymbolKind::Function, Some("function f(a: number): string")),
+                (4, 6, SymbolKind::Class, None),
+                (7, 9, SymbolKind::Interface, None),
+                (10, 10, SymbolKind::TypeAlias, None),
+                (11, 13, SymbolKind::Enum, None),
+                (14, 14, SymbolKind::Variable, None),
+                (15, 15, SymbolKind::Function, Some("function g()")),
+                (16, 16, SymbolKind::Other, None),
+                (17, 17, SymbolKind::Other, None),
+                (18, 18, SymbolKind::Variable, None),
+            ]
+        );
+    }
+
+    #[test]
     fn an_anonymous_default_function_is_exported_but_has_no_symbol() {
         let analysis = analyze_source("anon.ts", "export default function () {}\n", AnalysisProfile::Full);
         assert_eq!(symbols(&analysis), []);
