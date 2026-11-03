@@ -301,6 +301,22 @@ mod tests {
     }
 
     #[test]
+    fn text_well_under_the_byte_cap_is_tokenized_not_measured_by_its_length() {
+        let text = "a ".repeat(1024);
+        assert_eq!(text.len(), 2048);
+        let tokens = tiktoken_rs::o200k_base().unwrap().encode_with_special_tokens(&text).len();
+        assert_eq!(count_tokens(&text), tokens);
+        assert_eq!(tokens, 1025);
+    }
+
+    #[test]
+    fn text_far_over_the_byte_cap_is_measured_by_its_length() {
+        let text = "a ".repeat(20 * 1024);
+        assert_eq!(text.len(), 40 * 1024);
+        assert_eq!(count_tokens(&text), 40 * 1024);
+    }
+
+    #[test]
     fn totals_do_not_depend_on_how_tight_the_token_cap_is() {
         // With a loose cap every block fits on its byte length alone; the reported total must still be the exact count.
         let input = || vec![block("fn a() {}", 1), block("let x = 1;\n", 2)];
