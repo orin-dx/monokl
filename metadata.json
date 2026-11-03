@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M6FCH35RT6FSWD0RZ2Q1C0M3",
+  "strategy": "manual-commit",
+  "branch": "chore/callisto-0.17",
+  "checkpoints_count": 9,
+  "files_touched": [
+    ".prototools",
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 68,
+    "cache_creation_tokens": 872828,
+    "cache_read_tokens": 11795298,
+    "output_tokens": 51665,
+    "api_call_count": 30,
+    "subagent_tokens": {
+      "input_tokens": 286,
+      "cache_creation_tokens": 854274,
+      "cache_read_tokens": 9991592,
+      "output_tokens": 72850,
+      "api_call_count": 140
+    }
+  },
+  "redaction": {
+    "replacements": 48,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

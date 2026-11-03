@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MJhgpiMNUBYppLcdriKKqe",
+  "agent_id": "a7b90fc16dbbaf997",
+  "subagent_type": "general-purpose",
+  "task_description": "Architecture and robustness review",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 142899,
+    "cache_read_tokens": 3201161,
+    "output_tokens": 22426,
+    "api_call_count": 28
+  },
+  "started_at": "2026-10-31T17:51:53.379204-07:00",
+  "completed_at": "2026-10-31T18:00:03.195466-07:00"
+}

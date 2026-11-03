@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Fq8bjaWUeF5ierFEPgy1t7",
+  "agent_id": "ad535d5e163d2ede5",
+  "subagent_type": "general-purpose",
+  "task_description": "Survey callisto 0.14 to 0.17 changes",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 112303,
+    "cache_read_tokens": 1215350,
+    "output_tokens": 13600,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-02T16:15:32.258821-08:00",
+  "completed_at": "2026-11-02T16:18:09.997481-08:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017mqfNaPAJLBpMwGtt5Wsy3",
+  "agent_id": "a45588e6c6b3966be",
+  "subagent_type": "general-purpose",
+  "task_description": "Research agent-search literature",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 76106,
+    "cache_read_tokens": 423823,
+    "output_tokens": 7780,
+    "api_call_count": 8
+  },
+  "started_at": "2026-10-31T17:51:53.380714-07:00",
+  "completed_at": "2026-10-31T17:53:34.487054-07:00"
+}

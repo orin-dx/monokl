@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01W2SDCycT3WNf7X7iPWuYqZ",
+  "agent_id": "aaa61c91573e16113",
+  "subagent_type": "general-purpose",
+  "task_description": "Mutation-test core modules",
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 246647,
+    "cache_read_tokens": 2591076,
+    "output_tokens": 11210,
+    "api_call_count": 44
+  },
+  "started_at": "2026-10-31T17:51:53.379247-07:00",
+  "completed_at": "2026-10-31T18:25:21.560722-07:00"
+}
