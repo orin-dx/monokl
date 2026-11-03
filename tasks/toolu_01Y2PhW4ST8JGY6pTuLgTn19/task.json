@@ -1,0 +1,18 @@
+{
+  "tool_use_id": "toolu_01Y2PhW4ST8JGY6pTuLgTn19",
+  "agent_id": "aafa4bd259e85c12c",
+  "subagent_type": "general-purpose",
+  "task_description": "Bump Callisto to 0.17.0",
+  "files": [
+    ".callisto-pr-body.tmp"
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 45609,
+    "cache_read_tokens": 801244,
+    "output_tokens": 5861,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-02T16:21:09.933595-08:00",
+  "completed_at": "2026-11-02T16:23:12.694557-08:00"
+}
