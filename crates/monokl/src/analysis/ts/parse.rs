@@ -25,6 +25,10 @@ use crate::types::{
 /// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
 /// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
 /// level measured, a `[` in a type, uses 1.7 KB of stack optimized and 4.6 KB unoptimized: this is over twice that.
+///
+/// `debug_assertions` stands in for "unoptimized", which `cfg!` cannot ask for directly. A release profile with debug
+/// assertions pays the larger budget and the smaller length cap for nothing; a profile that disables optimizations
+/// without them gets the smaller budget and could overflow. Change the constant if the workspace adds such a profile.
 const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
 
 /// Stack for what does not grow with the source.
