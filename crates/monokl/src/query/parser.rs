@@ -22,7 +22,7 @@ pub struct ParsedTerm {
 
 /// Parses a query string into terms.
 ///
-/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:` yields no term. A `+` or `-`
+/// Malformed input is tolerated rather than rejected: a dangling `+`, `-`, or `regex:`, or an empty phrase, yields no term. A `+` or `-`
 /// before `regex:` makes the regex term required or excluded. Regex syntax is not validated here.
 ///
 /// # Errors
@@ -42,12 +42,7 @@ pub fn parse(input: &str) -> Result<Vec<ParsedTerm>> {
             Token::Plus => push_modified(&mut lexer, Modifier::Required, &mut terms),
             Token::Minus => push_modified(&mut lexer, Modifier::Excluded, &mut terms),
             Token::RegexPrefix => push_regex(&mut lexer, Modifier::Optional, &mut terms),
-            Token::Word(w) => {
-                terms.push(ParsedTerm { modifier: Modifier::Optional, pattern: regex::escape(&w), is_regex: false });
-            }
-            Token::QuotedString(s) => {
-                terms.push(ParsedTerm { modifier: Modifier::Optional, pattern: regex::escape(&s), is_regex: false });
-            }
+            Token::Word(text) | Token::QuotedString(text) => push_literal(Modifier::Optional, &text, &mut terms),
         }
     }
     if terms.len() > LIMIT {
@@ -60,9 +55,15 @@ pub fn parse(input: &str) -> Result<Vec<ParsedTerm>> {
 fn push_modified(lexer: &mut Lexer<'_>, modifier: Modifier, terms: &mut Vec<ParsedTerm>) {
     match lexer.next_token() {
         Token::RegexPrefix => push_regex(lexer, modifier, terms),
-        Token::Word(w) => terms.push(ParsedTerm { modifier, pattern: regex::escape(&w), is_regex: false }),
-        Token::QuotedString(s) => terms.push(ParsedTerm { modifier, pattern: regex::escape(&s), is_regex: false }),
+        Token::Word(text) | Token::QuotedString(text) => push_literal(modifier, &text, terms),
         Token::Plus | Token::Minus | Token::Eof => {}
+    }
+}
+
+/// Adds a literal term. An empty phrase (`""`) yields no term: it would match every line.
+fn push_literal(modifier: Modifier, text: &str, terms: &mut Vec<ParsedTerm>) {
+    if !text.is_empty() {
+        terms.push(ParsedTerm { modifier, pattern: regex::escape(text), is_regex: false });
     }
 }
 
@@ -479,6 +480,15 @@ mod tests {
         assert_eq!(terms[0].modifier, Modifier::Optional);
         assert!(!terms[0].is_regex);
         assert_eq!(terms[0].pattern, "a b");
+    }
+
+    #[test]
+    fn empty_phrase_yields_no_term_with_or_without_a_modifier() {
+        assert!(parse("\"\"").unwrap().is_empty());
+        assert!(parse("+\"\" -\"\"").unwrap().is_empty());
+        let terms = parse("foo \"\"").unwrap();
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0].pattern, "foo");
     }
 }
 

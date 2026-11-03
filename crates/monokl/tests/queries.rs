@@ -15,6 +15,7 @@ fn matched(files: &[(&str, &str)], args: &[&str]) -> Vec<String> {
     }
     let output =
         Command::new(env!("CARGO_BIN_EXE_monokl")).arg("search").args(args).current_dir(dir.path()).output().unwrap();
+    assert!(output.status.success(), "monokl search failed: {}", String::from_utf8_lossy(&output.stderr));
     let text = String::from_utf8(output.stdout).unwrap();
     let mut names: Vec<String> = text
         .lines()
@@ -63,4 +64,10 @@ fn declaration_and_test_files_in_every_extension_are_skipped() {
         ("src/v.spec.cts", "const alpha = 1;\n"),
     ];
     assert_eq!(matched(&files, &["alpha", "."]), ["src/a.ts"]);
+}
+
+#[test]
+fn empty_phrase_is_ignored() {
+    assert_eq!(matched(&TWO_FILES, &["foo \"\"", "."]), ["src/a.ts"]);
+    assert_eq!(matched(&TWO_FILES, &["\"\"", "."]), Vec::<String>::new());
 }
