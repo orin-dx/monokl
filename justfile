@@ -78,7 +78,7 @@ typos:
 
 # Callisto config, package discovery and pending changesets; the same gate as CI's Changesets job
 changesets:
-    callisto status --check
+    callisto status --check --strict
     callisto release --dry-run --format text
 
 # Record a pending change for the next release, e.g. `just changeset minor "Add the search command"`
