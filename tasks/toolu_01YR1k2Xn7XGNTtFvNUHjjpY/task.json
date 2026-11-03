@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YR1k2Xn7XGNTtFvNUHjjpY",
+  "agent_id": "a0c0e2b2e92484b04",
+  "subagent_type": "general-purpose",
+  "task_description": "Docs and CI say what is true PR",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 87482,
+    "cache_read_tokens": 2198362,
+    "output_tokens": 13162,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-02T20:04:32.356665-08:00",
+  "completed_at": "2026-11-02T20:09:11.396894-08:00"
+}
