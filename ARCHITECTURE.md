@@ -12,15 +12,15 @@ file → LanguageAnalyzer::analyze() → FileAnalysis (owned: symbols, deps, exp
 
 `FileAnalysis` never borrows from the parser's arena — everything in it is owned data (`String`, not `&str`; `Vec<T>` of owned items). The arena drops at the end of `analyze()`. This is a hard rule, not a style preference: it's what lets `FileAnalysis` be cached, shared across threads via `Arc`, and outlive the parse call that produced it.
 
-A second layer, `WorkspaceEnricher`, folds per-file analyses into workspace-wide structure — an import graph, a symbol index — without re-parsing anything:
+Planned, not built: a second layer, `WorkspaceEnricher`, folds per-file analyses into workspace-wide structure — an import graph, a symbol index — without re-parsing anything:
 
 ```
 Vec<FileAnalysis> → WorkspaceEnricher::update() × N files → WorkspaceIndex
 ```
 
-Two enrichers exist today: `ImportGraphEnricher` (which files import which) and `SymbolIndexEnricher` (symbol name → declaration sites). Both are cheap bookkeeping over already-parsed data — the expensive part is parsing, done once, upstream.
+Two enrichers are planned: `ImportGraphEnricher` (which files import which) and `SymbolIndexEnricher` (symbol name → declaration sites). Both are cheap bookkeeping over already-parsed data — the expensive part is parsing, done once, upstream.
 
-Building a `WorkspaceIndex` is three phases:
+Building a `WorkspaceIndex` will be three phases (none of this is built):
 
 1. **Parallel analyze.** Walk the directory, run `LanguageAnalyzer::analyze()` per file via `rayon`, then sort by path. Sorting happens _after_ parallel completion rather than enforcing commit order _during_ it — import resolution is real (`oxc_resolver`, not name-matching), so there's no insertion-order ambiguity to guard against.
 2. **Stream `update()`** for every (file, enricher) pair.
@@ -106,7 +106,7 @@ Unsupported < Heuristic < Structural < Exact
 
 | Level | Means | Example |
 | --- | --- | --- |
-| **Exact** | Real resolution | TS/JS import resolution via `oxc_resolver` |
+| **Exact** | Real resolution | TS/JS import resolution via `oxc_resolver` (planned; not built) |
 | **Structural** | Real AST parsing, heuristic resolution | Rust's module-path walker; Go's `go.mod`-based cross-package resolution |
 | **Heuristic** | Regex/text-scan level | A language with no real parser yet |
 | **Unsupported** | The operation doesn't exist for this language | — |

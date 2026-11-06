@@ -4,7 +4,7 @@ Source: `docs/spec/01-core-architecture.md` §12 (`analysis/content_hash.rs`), �
 §16 (`analysis/persist.rs`); `docs/spec/03-multi-language-platform.md` §2a (`analysis/cache_tiers.rs`,
 the 0.5.0+ extraction of the lookup logic shared across analyzers). Cross-referenced against
 `docs/spec/07-edge-cases-and-failure-modes.md` Part 1 #4/#5/#18, Part 3 #1.
-No code exists yet — monokl is spec-stage. Re-point at source once the crate exists; sync via `canon/drift`.
+No cache code exists yet: `crates/monokl` has no cache or persist module. Re-point at source once it does; sync via `canon/drift`.
 
 ## Two-Layer Storage
 

@@ -442,7 +442,7 @@ mod projection_tests {
              src/f1.rs,1,2,function,null,1,0.5\n  \
              src/f2.rs,2,3,function,null,2,0.5\n\
              totalCount: 3\n\
-             help[1]: showing 2 of 3; refine the query with +term or -term"
+             help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
         );
     }
 

@@ -6,8 +6,8 @@ verbatim, lines ~1290-1381); `docs/spec/03-multi-language-platform.md` §3 (`ana
 `require_precision_capability`/`add_missing_analyzer_diagnostic`, lines ~1780-1990).
 Cross-referenced against `docs/spec/07-edge-cases-and-failure-modes.md` Part 3 findings #6, #10, #14.
 
-No crate exists yet — code blocks below are spec-verbatim Rust, not source files. Treat this doc
-as authoritative until code exists, then re-point at source paths.
+`analysis/lang.rs` and `analysis/registry.rs` exist in `crates/monokl`; code blocks below are spec-verbatim Rust, not
+source files. Treat this doc as authoritative where the source has not caught up, and re-point at source paths.
 
 ## `LanguageAnalyzer` trait (`analysis/lang.rs`)
 

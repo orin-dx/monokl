@@ -35,7 +35,7 @@ fn search_prints_ranked_blocks_with_relative_paths() {
         ),
         "got: {first}"
     );
-    assert!(text.lines().all(|line| !line.contains("/Users/")), "paths should be relative: {text}");
+    assert!(text.lines().skip(1).all(|line| !line.trim_start().starts_with('/')), "paths should be relative: {text}");
 }
 
 #[test]

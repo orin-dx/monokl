@@ -12,7 +12,7 @@ use crate::types::{Diagnostic, RankedBlock, SearchLimits, SearchResponse};
 /// the fallback can only make a block look larger, never let one overspend the budget.
 const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
 
-const GUIDANCE: &str = "refine the query with +term or -term";
+const GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
 
 /// The three caps one search response must stay within.
 ///
@@ -214,7 +214,10 @@ mod tests {
         let over = apply_budget(blocks("a", 4), 4, &caps(3, 1000, 1000), Vec::new());
         assert_eq!(ranks(&over), [1, 2, 3]);
         assert!(over.truncated);
-        assert_eq!(over.truncation_marker.as_deref(), Some("showing 3 of 4; refine the query with +term or -term"));
+        assert_eq!(
+            over.truncation_marker.as_deref(),
+            Some("showing 3 of 4; raise the cap or refine the query with +term or -term")
+        );
     }
 
     #[test]
@@ -269,7 +272,10 @@ mod tests {
         let response = apply_budget(blocks(&"y".repeat(50), 2), 2, &caps(10, 1000, 49), Vec::new());
         assert_eq!(response.results.len(), 0);
         assert!(response.truncated);
-        assert_eq!(response.truncation_marker.as_deref(), Some("showing 0 of 2; refine the query with +term or -term"));
+        assert_eq!(
+            response.truncation_marker.as_deref(),
+            Some("showing 0 of 2; raise the cap or refine the query with +term or -term")
+        );
         assert_eq!((response.total_bytes, response.total_tokens), (0, 0));
     }
 
@@ -279,7 +285,10 @@ mod tests {
         assert_eq!(ranks(&response), [1, 2]);
         assert_eq!(response.total_blocks_before_truncation, 9);
         assert!(response.truncated);
-        assert_eq!(response.truncation_marker.as_deref(), Some("showing 2 of 9; refine the query with +term or -term"));
+        assert_eq!(
+            response.truncation_marker.as_deref(),
+            Some("showing 2 of 9; raise the cap or refine the query with +term or -term")
+        );
     }
 
     #[test]
