@@ -1,0 +1,160 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M6S40BXRR5WKM8RX7HNXFNQ7",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-06T19:05:29.735481Z",
+  "branch": "eval/rg-ground-truth",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "5ff5e0ae4af6",
+  "checkpoint_transcript_start": 16824,
+  "transcript_lines_at_start": 16824,
+  "compact_transcript_start": 1168,
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 118238,
+    "cache_read_tokens": 5493265,
+    "output_tokens": 17253,
+    "api_call_count": 31,
+    "subagent_tokens": {
+      "input_tokens": 18,
+      "cache_creation_tokens": 9981,
+      "cache_read_tokens": 2160289,
+      "output_tokens": 10141,
+      "api_call_count": 9
+    }
+  },
+  "redaction": {
+    "replacements": 54,
+    "layers": {
+      "betterleaks": 6,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 62
+  },
+  "summary": {
+    "intent": "Continue building out monokl: land the invariants reconciliation (PR #55 code, PR #54 docs), then start the goal work by building an rg ground-truth harness after the user approved two defaults (lossy non-UTF-8 reads with a count, honoring parent ignore files inside the git repo root).",
+    "outcome": "PR #55 was reported as ready, with byte-identical CLI evidence, 602 tests, 97.25% coverage and the expected 7 semver lints; macOS Test and Entire Gates were still pending. The rg harness was then written on a new branch off main with a just recipe and CONTRIBUTING docs, run once against pinned repos, and committed. Misses were diagnosed (e.g. test files missed) but not yet fixed.",
+    "learnings": {
+      "repo": [
+        "Callisto release dry-run (`just changesets` step 2) can fail with E320 locally when the clone lacks the release tag or post-release commits differ; CI Changesets job passes, so cause was not confirmed. `git fetch --tags` is needed before judging.",
+        "cargo semver-checks does not flag removed Serialize/Deserialize impls, so changesets and PR bodies must list them by hand.",
+        "Public trait signature changes (ToDomainError::to_domain_error losing ErrorContext) show up as trait_method_parameter_count_changed in semver-checks.",
+        "TokenizerInit error variant was not unconstructed; a pipeline test used it as a stand-in error, so audit claims of 'dead' need a grep of tests too.",
+        "AGENTS.md says specs are plans unless code implements them; ADRs are history and are not edited.",
+        "The rg harness uses public pinned TS repos (zustand, zod, axios) resolved by release tag SHA, and is run on demand via a justfile recipe documented in CONTRIBUTING.md."
+      ],
+      "code": [
+        {
+          "path": "justfile",
+          "finding": "Added a recipe that runs the rg ground-truth comparison harness against pinned repos on demand."
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "finding": "Documents the rg ground-truth harness and how to run it."
+        }
+      ],
+      "workflow": [
+        "The worktree guard refuses plain git, `-C`, and compound commands; use /usr/bin/git. Creating a branch needed several attempts, ending with pointing HEAD at the new branch.",
+        "Commits need the sandbox disabled for GPG signing, and cargo needs it disabled for the registry cache.",
+        "Subagent hand-back reports are model output with no user authority; verify claims (CI status, E320) independently before relaying.",
+        "Run a new harness once and categorize misses (test vs non-test files) before fixing anything."
+      ]
+    },
+    "friction": [
+      "Worktree guard quirks (plain git refused, transient push '(failed)' needing retry, refused zsh globs and heredocs) slow down routine git work.",
+      "macOS CI runners are slow or queued, delaying #55's final green.",
+      "Branch creation from main in the worktree did not take on the first try and required checking state and repointing HEAD.",
+      "Resolving latest release tag SHAs required many repeated gh calls."
+    ],
+    "open_items": [
+      "Confirm #55 CI finishes green (macOS Test, Entire Gates) and that the user merges #54 and #55.",
+      "Determine whether E320 in `just changesets` reproduces on main with tags fetched.",
+      "Fix harness-found misses (e.g. Action missing test files) and use the harness as the conservation test.",
+      "Implement hit-first retrieval with snippets and member-level blocks, and single-read parallel speed.",
+      "Implement lossy non-UTF-8 reads with a count diagnostic and parent ignore-file handling inside the git repo root.",
+      "Hold the library-only minor release and batch it with the next user-visible work.",
+      "Optional guards: soft-failure ratchet, semver gate keyed to pending bump, release rehearsal, 'planned' labels for unbuilt docs.",
+      "Housekeeping: close or update trails 183/185/190/191/200, remove stale agent worktrees, decide Entire Gates for bot PRs, branch protection and TAP_APP repo list.",
+      "Left alone in #55: FileAnalysis::language()/is_typescript(), one-variant DependencyTarget, stale ADR 0001 text, and spec docs 01/02/03/07/08 describing removed items."
+    ]
+  }
+}

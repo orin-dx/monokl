@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014FYijqPoCkpN2TSAx3abyS",
+  "agent_id": "a617037e4655d8572",
+  "subagent_type": "general-purpose",
+  "task_description": "Core types match the invariants",
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 246964,
+    "cache_read_tokens": 16029491,
+    "output_tokens": 55619,
+    "api_call_count": 102
+  },
+  "started_at": "2026-11-06T10:32:00.443747-08:00",
+  "completed_at": "2026-11-06T10:50:37.000781-08:00"
+}
