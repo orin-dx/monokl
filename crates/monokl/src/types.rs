@@ -298,7 +298,6 @@ pub struct SearchResponse {
     pub results: Vec<RankedBlock>,
     pub total_blocks_before_truncation: usize,
     pub truncated: bool,
-    pub truncation_marker: Option<String>,
     pub total_bytes: usize,
     pub total_tokens: usize,
     pub diagnostics: Vec<Diagnostic>,

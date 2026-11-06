@@ -12,8 +12,6 @@ use crate::types::{Diagnostic, RankedBlock, SearchLimits, SearchResponse};
 /// the fallback can only make a block look larger, never let one overspend the budget.
 const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
 
-const GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
-
 /// The three caps one search response must stay within.
 ///
 /// # Examples
@@ -86,7 +84,7 @@ pub fn count_tokens(text: &str) -> usize {
 ///
 /// let response = apply_budget(Vec::new(), 0, &Budget::default(), Vec::new());
 /// assert!(!response.truncated);
-/// assert_eq!(response.truncation_marker, None);
+/// assert_eq!(response.total_blocks_before_truncation, 0);
 /// ```
 pub fn apply_budget(
     ranked: Vec<RankedBlock>,
@@ -111,11 +109,9 @@ pub fn apply_budget(
     }
 
     let outcome = TruncationOutcome::new(kept, total_before);
-    let truncation_marker = outcome.hint(GUIDANCE).map(|hint| hint.as_str().to_owned());
     SearchResponse {
         total_blocks_before_truncation: outcome.total_before,
         truncated: outcome.truncated(),
-        truncation_marker,
         results: outcome.kept,
         total_bytes,
         total_tokens,
@@ -197,7 +193,6 @@ mod tests {
         assert_eq!(response.results.len(), 0);
         assert_eq!(response.total_blocks_before_truncation, 0);
         assert!(!response.truncated);
-        assert_eq!(response.truncation_marker, None);
         assert_eq!((response.total_bytes, response.total_tokens), (0, 0));
         assert_eq!(response.diagnostics.len(), 1);
         assert_eq!(response.diagnostics[0].kind, DiagnosticKind::Skipped);
@@ -214,10 +209,7 @@ mod tests {
         let over = apply_budget(blocks("a", 4), 4, &caps(3, 1000, 1000), Vec::new());
         assert_eq!(ranks(&over), [1, 2, 3]);
         assert!(over.truncated);
-        assert_eq!(
-            over.truncation_marker.as_deref(),
-            Some("showing 3 of 4; raise the cap or refine the query with +term or -term")
-        );
+        assert_eq!(over.total_blocks_before_truncation, 4);
     }
 
     #[test]
@@ -272,10 +264,7 @@ mod tests {
         let response = apply_budget(blocks(&"y".repeat(50), 2), 2, &caps(10, 1000, 49), Vec::new());
         assert_eq!(response.results.len(), 0);
         assert!(response.truncated);
-        assert_eq!(
-            response.truncation_marker.as_deref(),
-            Some("showing 0 of 2; raise the cap or refine the query with +term or -term")
-        );
+        assert_eq!(response.total_blocks_before_truncation, 2);
         assert_eq!((response.total_bytes, response.total_tokens), (0, 0));
     }
 
@@ -285,10 +274,6 @@ mod tests {
         assert_eq!(ranks(&response), [1, 2]);
         assert_eq!(response.total_blocks_before_truncation, 9);
         assert!(response.truncated);
-        assert_eq!(
-            response.truncation_marker.as_deref(),
-            Some("showing 2 of 9; raise the cap or refine the query with +term or -term")
-        );
     }
 
     #[test]
@@ -350,7 +335,7 @@ mod tests {
     fn apply_budget_is_deterministic() {
         let run = || {
             let r = apply_budget(blocks("fn a() {}", 6), 6, &caps(4, 1000, 1000), Vec::new());
-            (ranks(&r), r.total_bytes, r.total_tokens, r.truncation_marker)
+            (ranks(&r), r.total_bytes, r.total_tokens, r.truncated)
         };
         assert_eq!(run(), run());
     }

@@ -168,6 +168,8 @@ impl ToonProjection<9> for crate::types::SymbolsResult {
         rows
     }
 }
+const TRUNCATION_GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
+
 impl ToonProjection<7> for crate::types::SearchResponse {
     const TYPE_NAME: &'static str = "search";
     const FIELDS: [&'static str; 7] =
@@ -195,7 +197,8 @@ impl ToonProjection<7> for crate::types::SearchResponse {
     }
 
     fn toon_hints(&self) -> Vec<michi::Hint> {
-        let mut hints: Vec<michi::Hint> = self.truncation_marker.as_deref().map(michi::Hint::new).into_iter().collect();
+        let shown = michi::TruncationOutcome::new(self.results.iter().collect(), self.total_blocks_before_truncation);
+        let mut hints: Vec<michi::Hint> = shown.hint(TRUNCATION_GUIDANCE).into_iter().collect();
         hints.extend(diagnostic_lines(&self.diagnostics).into_iter().map(michi::Hint::new));
         if self.results.is_empty() {
             hints.push(michi::Hint::new(
@@ -331,7 +334,6 @@ mod projection_tests {
             }],
             total_blocks_before_truncation: 1,
             truncated: false,
-            truncation_marker: None,
             total_bytes: 100,
             total_tokens: 20,
             diagnostics: Vec::new(),
@@ -361,7 +363,6 @@ mod projection_tests {
             results: Vec::new(),
             total_blocks_before_truncation: 0,
             truncated: false,
-            truncation_marker: None,
             total_bytes: 0,
             total_tokens: 0,
             diagnostics: vec![
@@ -601,7 +602,6 @@ mod projection_tests {
             ],
             total_blocks_before_truncation: 3,
             truncated: false,
-            truncation_marker: None,
             total_bytes: 0,
             total_tokens: 0,
             diagnostics: Vec::new(),
