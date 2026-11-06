@@ -42,7 +42,6 @@ ignore.workspace = true
 regex.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 
 clap = { workspace = true, optional = true }
@@ -61,4 +60,5 @@ workspace = true
 [dev-dependencies]
 proptest.workspace = true
 rstest.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true

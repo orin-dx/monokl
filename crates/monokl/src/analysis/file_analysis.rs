@@ -62,19 +62,15 @@ pub struct FileAnalysis {
 }
 
 impl FileAnalysis {
-    /// The language name, matching the tag `LangData` serializes with.
+    /// The language name.
     #[must_use]
     pub fn language(&self) -> &str {
         match &self.lang {
             LangData::Ts(_) => "typescript",
-            LangData::Rust(_) => "rust",
-            LangData::Python(_) => "python",
-            LangData::Go(_) => "go",
-            LangData::Java(_) => "java",
         }
     }
 
-    /// The JSX elements of a TypeScript file, or an empty slice for any other language.
+    /// The JSX elements of the file.
     #[must_use]
     pub fn jsx_elements(&self) -> &[JsxElementEntry] {
         self.lang.jsx_elements()
@@ -92,7 +88,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::types::{GoData, JavaData, PythonData, RustData, TsData};
+    use crate::types::TsData;
 
     fn analysis(lang: LangData) -> FileAnalysis {
         FileAnalysis {
@@ -113,20 +109,11 @@ mod tests {
         JsxElementEntry { name: name.to_string(), is_html: false, line: 1, attributes: Vec::new() }
     }
 
-    #[rstest]
-    #[case(LangData::Ts(TsData::default()), "typescript", true)]
-    #[case(LangData::Rust(RustData::default()), "rust", false)]
-    #[case(LangData::Python(PythonData::default()), "python", false)]
-    #[case(LangData::Go(GoData::default()), "go", false)]
-    #[case(LangData::Java(JavaData::default()), "java", false)]
-    fn language_names_follow_the_lang_data_variant(
-        #[case] lang: LangData,
-        #[case] name: &str,
-        #[case] typescript: bool,
-    ) {
-        let analysis = analysis(lang);
-        assert_eq!(analysis.language(), name);
-        assert_eq!(analysis.is_typescript(), typescript);
+    #[test]
+    fn a_typescript_analysis_names_its_language() {
+        let analysis = analysis(LangData::Ts(TsData::default()));
+        assert_eq!(analysis.language(), "typescript");
+        assert!(analysis.is_typescript());
         assert!(analysis.jsx_elements().is_empty());
     }
 

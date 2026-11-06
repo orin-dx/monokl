@@ -11,7 +11,7 @@ use crate::file_io::FileIoError;
 #[cfg_attr(feature = "miette", derive(miette::Diagnostic))]
 #[non_exhaustive]
 pub enum MonoklError {
-    /// A file read or write failed.
+    /// A file read failed.
     #[error(transparent)]
     Io(#[from] FileIoError),
 
@@ -38,57 +38,6 @@ pub enum MonoklError {
     /// A query had more terms than the limit allows.
     #[error("query has too many terms: {count} > {limit}")]
     TooManyTerms { count: usize, limit: usize },
-
-    /// The tokenizer failed to initialize.
-    #[error("tokenizer init failed")]
-    TokenizerInit,
-
-    /// JSON parsing or serialization failed.
-    ///
-    /// The message mentions parsing because loading the disk cache deserializes JSON.
-    #[error("json parsing or serialization failed")]
-    Json(#[from] serde_json::Error),
-
-    /// A target path resolved outside the workspace root.
-    #[error("path outside workspace root: {path}")]
-    PathOutsideRoot { path: Utf8PathBuf },
-
-    /// The on-disk cache's version or config hash does not match the current build.
-    ///
-    /// A cache loader should treat this as a cache miss and start from an empty cache.
-    #[error("disk cache is stale (version or config hash mismatch)")]
-    StaleDiskCache,
-
-    /// A git ref failed validation before being passed to git.
-    ///
-    /// `reason` says whether the ref is empty, starts with `-` (and could be parsed as a git option), or contains
-    /// characters outside `A-Za-z0-9_/.@{}^~:+-`.
-    #[error("invalid git ref {ref_:?}: {reason}")]
-    InvalidGitRef { ref_: String, reason: &'static str },
-
-    /// A git subprocess failed.
-    #[error("git {operation} failed: {message}")]
-    Git { operation: &'static str, message: String },
-
-    /// A read was refused because the path is a symlink.
-    ///
-    /// The symlink check runs before the size check, so an oversized symlink reports this variant rather than
-    /// [`MonoklError::FileTooLarge`].
-    #[error("refusing to read symlink: {path}")]
-    SymlinkRejected { path: Utf8PathBuf },
-
-    /// A read was refused because the file exceeds the size cap.
-    #[error("file too large: {path} is {size} bytes, cap is {cap}")]
-    FileTooLarge { path: Utf8PathBuf, size: u64, cap: u64 },
-
-    /// A mutex was poisoned by an earlier panic.
-    ///
-    /// It is deliberately not recovered with `PoisonError::into_inner`, which would put possibly torn shared state
-    /// back into use.
-    #[error(
-        "internal lock poisoned in {context} — a prior panic left shared state possibly inconsistent; this is a bug, please report"
-    )]
-    LockPoisoned { context: &'static str },
 }
 
 /// The crate-wide result type.
@@ -106,10 +55,6 @@ mod tests {
 
     fn real_grep_regex_error() -> grep_regex::Error {
         grep_regex::RegexMatcherBuilder::new().build("(").unwrap_err()
-    }
-
-    fn real_serde_json_error() -> serde_json::Error {
-        serde_json::from_str::<serde_json::Value>("{not valid json").unwrap_err()
     }
 
     #[test]
@@ -142,69 +87,6 @@ mod tests {
         assert_eq!(err.to_string(), "query has too many terms: 12 > 8");
     }
 
-    #[test]
-    fn tokenizer_init_display() {
-        let err = MonoklError::TokenizerInit;
-        assert_eq!(err.to_string(), "tokenizer init failed");
-    }
-
-    #[test]
-    fn json_display() {
-        let err: MonoklError = real_serde_json_error().into();
-        assert_eq!(err.to_string(), "json parsing or serialization failed");
-    }
-
-    #[test]
-    fn path_outside_root_display() {
-        let err = MonoklError::PathOutsideRoot { path: Utf8PathBuf::from("/root/outside") };
-        assert_eq!(err.to_string(), "path outside workspace root: /root/outside");
-    }
-
-    #[test]
-    fn stale_disk_cache_display() {
-        let err = MonoklError::StaleDiskCache;
-        assert_eq!(err.to_string(), "disk cache is stale (version or config hash mismatch)");
-    }
-
-    #[test]
-    fn invalid_git_ref_display() {
-        let err = MonoklError::InvalidGitRef {
-            ref_: "-x".to_string(),
-            reason: "starts with '-' — refusing as it could be parsed as a git option",
-        };
-        assert_eq!(
-            err.to_string(),
-            "invalid git ref \"-x\": starts with '-' — refusing as it could be parsed as a git option"
-        );
-    }
-
-    #[test]
-    fn git_display() {
-        let err = MonoklError::Git { operation: "show", message: "not found".to_string() };
-        assert_eq!(err.to_string(), "git show failed: not found");
-    }
-
-    #[test]
-    fn symlink_rejected_display() {
-        let err = MonoklError::SymlinkRejected { path: Utf8PathBuf::from("/l") };
-        assert_eq!(err.to_string(), "refusing to read symlink: /l");
-    }
-
-    #[test]
-    fn file_too_large_display() {
-        let err = MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 100, cap: 50 };
-        assert_eq!(err.to_string(), "file too large: /big is 100 bytes, cap is 50");
-    }
-
-    #[test]
-    fn lock_poisoned_display() {
-        let err = MonoklError::LockPoisoned { context: "ctx" };
-        assert_eq!(
-            err.to_string(),
-            "internal lock poisoned in ctx — a prior panic left shared state possibly inconsistent; this is a bug, please report"
-        );
-    }
-
     #[cfg(feature = "miette")]
     #[test]
     fn variants_have_no_diagnostic_metadata() {
@@ -215,20 +97,8 @@ mod tests {
             real_grep_regex_error().into(),
             MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/bad") },
             MonoklError::TooManyTerms { count: 12, limit: 8 },
-            MonoklError::TokenizerInit,
-            real_serde_json_error().into(),
-            MonoklError::PathOutsideRoot { path: Utf8PathBuf::from("/root/outside") },
-            MonoklError::StaleDiskCache,
-            MonoklError::InvalidGitRef {
-                ref_: "-x".to_string(),
-                reason: "starts with '-' — refusing as it could be parsed as a git option",
-            },
-            MonoklError::Git { operation: "show", message: "not found".to_string() },
-            MonoklError::SymlinkRejected { path: Utf8PathBuf::from("/l") },
-            MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 100, cap: 50 },
-            MonoklError::LockPoisoned { context: "ctx" },
         ];
-        assert_eq!(variants.len(), 14);
+        assert_eq!(variants.len(), 5);
         for v in &variants {
             assert!(v.code().is_none());
             assert!(v.help().is_none());
