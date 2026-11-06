@@ -1,0 +1,16 @@
+{
+  "tool_use_id": "toolu_011stBW7c2goKACYtjWynGVi",
+  "agent_id": "af286df18d56a59f5",
+  "subagent_type": "general-purpose",
+  "task_description": "Lossy non-UTF-8 reads PR",
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 128969,
+    "cache_read_tokens": 4487877,
+    "output_tokens": 24176,
+    "api_call_count": 45
+  },
+  "started_at": "2026-11-06T11:40:56.175512-08:00",
+  "completed_at": "2026-11-06T11:47:29.394812-08:00",
+  "transcript_unavailable_reason": "transcript unreadable"
+}
