@@ -2,6 +2,8 @@
 
 **Status:** Accepted **Date:** 2026-10-23
 
+**Note:** the `core` and `agent` modules are not in place yet. Today `budget.rs`, `cli.rs` and `output/` form the agent layer, behind the `cli` feature; everything else in `lib.rs` is core.
+
 ## Context
 
 `08-library-session-api.md` §9.1 splits monokl into `monokl-core` (plumbing: analysis, indices, ranked uncapped results, no serde on result types, no budget) and `monokl-agent` (porcelain: budget, tiktoken, wire types, michi, CLI). The split's purpose is a boundary, not a second artifact: Wisp should depend on core without the CLI layer, and core result types must never become wire types. callisto merged its crates down to four because each crate adds versioning, release and dependency overhead.

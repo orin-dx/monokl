@@ -1,8 +1,7 @@
 //! The crate-wide [`MonoklError`] type and its [`Result`] alias.
 //!
-//! Every fallible `pub` and `pub(crate)` function returns [`Result`]. The one exception is
-//! `git_scope::blob_at_ref_in_repo`, whose bare `String` error is mapped into [`MonoklError::Git`] at its only call
-//! site.
+//! Every fallible `pub` and `pub(crate)` function returns [`Result`], except the output layer
+//! (`output::agent::render_projection`), which returns michi's `DomainError`.
 use camino::Utf8PathBuf;
 
 use crate::file_io::FileIoError;
@@ -56,8 +55,7 @@ pub enum MonoklError {
 
     /// The on-disk cache's version or config hash does not match the current build.
     ///
-    /// `persist::init` intercepts this variant, logs a warning, and starts from an empty cache; `persist::flush`'s
-    /// fallback load propagates it like any other error.
+    /// A cache loader should treat this as a cache miss and start from an empty cache.
     #[error("disk cache is stale (version or config hash mismatch)")]
     StaleDiskCache,
 
@@ -95,8 +93,7 @@ pub enum MonoklError {
 
 /// The crate-wide result type.
 ///
-/// Errors propagate to the caller by default; the only one handled internally is [`MonoklError::StaleDiskCache`],
-/// inside `persist::init`.
+/// Errors propagate to the caller.
 pub type Result<T> = std::result::Result<T, MonoklError>;
 
 #[cfg(test)]

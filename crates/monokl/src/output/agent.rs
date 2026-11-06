@@ -1,6 +1,7 @@
 //! Agent-facing output: TOON projections of command results and conversion of [`MonoklError`] into michi errors.
 use std::collections::BTreeMap;
 
+use camino::Utf8Path;
 use michi::toon::Value;
 
 use crate::error::MonoklError;
@@ -205,21 +206,30 @@ impl ToonProjection<7> for crate::types::SearchResponse {
     }
 }
 
-/// One line per distinct diagnostic message; a message tied to files is counted and says what happened to them.
+/// One line per distinct diagnostic message; a message tied to files is counted, says what happened to them and names
+/// the first few.
 fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
-    let mut counts: BTreeMap<(&str, Option<&'static str>), usize> = BTreeMap::new();
+    const LISTED_FILES: usize = 3;
+    let mut groups: BTreeMap<(&str, Option<&'static str>), Vec<&str>> = BTreeMap::new();
     for d in diagnostics {
         let verb = d.path.as_ref().map(|_| match d.kind {
             DiagnosticKind::Degraded => "degraded",
             DiagnosticKind::Skipped => "skipped",
             DiagnosticKind::Warning => "warned",
         });
-        *counts.entry((d.message.as_str(), verb)).or_insert(0) += 1;
+        let paths = groups.entry((d.message.as_str(), verb)).or_default();
+        paths.extend(d.path.as_deref().map(Utf8Path::as_str));
     }
-    counts
+    groups
         .into_iter()
-        .map(|((message, verb), n)| match verb {
-            Some(verb) => format!("{n} {} {verb}: {message}", if n == 1 { "file" } else { "files" }),
+        .map(|((message, verb), mut paths)| match verb {
+            Some(verb) => {
+                paths.sort_unstable();
+                let n = paths.len();
+                let listed = paths[..n.min(LISTED_FILES)].join(", ");
+                let more = if n > LISTED_FILES { format!(", ...and {} more", n - LISTED_FILES) } else { String::new() };
+                format!("{n} {} {verb}: {message}: {listed}{more}", if n == 1 { "file" } else { "files" })
+            }
             None => message.to_owned(),
         })
         .collect()
@@ -365,9 +375,36 @@ mod projection_tests {
         assert_eq!(
             render_projection(&response).expect("must render"),
             "search: []\n\
-             help[4]: \"1 file degraded: parse errors\",query has no positive terms,\"2 files skipped: unreadable\",\
+             help[4]: \"1 file degraded: parse errors: c.ts\",query has no positive terms,\
+             \"2 files skipped: unreadable: a.ts, b.ts\",\
              \"only top-level declarations are searched; for text in tests, calls or config try rg\""
         );
+    }
+
+    #[test]
+    fn diagnostic_lines_name_one_file() {
+        let diagnostics = [Diagnostic {
+            kind: DiagnosticKind::Degraded,
+            path: Some("src/big.ts".into()),
+            message: "file too large to parse (300000 bytes, over the cap of 260096)".to_owned(),
+        }];
+        assert_eq!(
+            diagnostic_lines(&diagnostics),
+            ["1 file degraded: file too large to parse (300000 bytes, over the cap of 260096): src/big.ts"]
+        );
+    }
+
+    #[test]
+    fn diagnostic_lines_name_three_files_and_count_the_rest() {
+        let diagnostics: Vec<Diagnostic> = ["e.ts", "b.ts", "d.ts", "a.ts", "c.ts"]
+            .into_iter()
+            .map(|path| Diagnostic {
+                kind: DiagnosticKind::Skipped,
+                path: Some(path.into()),
+                message: "unreadable".to_owned(),
+            })
+            .collect();
+        assert_eq!(diagnostic_lines(&diagnostics), ["5 files skipped: unreadable: a.ts, b.ts, c.ts, ...and 2 more"]);
     }
 
     #[test]
@@ -405,7 +442,7 @@ mod projection_tests {
              src/f1.rs,1,2,function,null,1,0.5\n  \
              src/f2.rs,2,3,function,null,2,0.5\n\
              totalCount: 3\n\
-             help[1]: showing 2 of 3; refine the query with +term or -term"
+             help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
         );
     }
 

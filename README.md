@@ -21,15 +21,13 @@ Grep finds text. Embeddings find _vibes_. monokl parses your code with a compile
 - **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching.
 - **A small query language.** Plain words, `"quoted phrases"`, `+required` and `-excluded` terms, and `regex:` patterns. See [Writing a query](#writing-a-query).
 - **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files and binary files are skipped by default, and each has a flag to include it.
-- **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests narrowing the query.
+- **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests raising the cap or narrowing the query.
 - **Predictable.** The same search on the same files gives the same output, in the same order, every time. A bad pattern fails the whole search with a clear error instead of being quietly dropped.
 - **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is skipped instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
 
-## Try it
-
 ## Install
 
-**Prebuilt binary** (from 0.3.0), from [GitHub Releases](https://github.com/orin-dx/monokl/releases) (tag `monokl@<version>`):
+**Prebuilt binary**, attached to each [GitHub release](https://github.com/orin-dx/monokl/releases) (tag `monokl@<version>`):
 
 ```
 curl -sL "https://github.com/orin-dx/monokl/releases/download/monokl@<version>/monokl-<target>.tar.gz" | tar -xz
@@ -54,7 +52,7 @@ search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
   src/utils/validation.ts,8,12,function,"function validatePrice(price: number): ValidationResult",2,3.07557
   src/index.ts,3,3,other,null,3,2.345138
 totalCount: 10
-help[1]: showing 3 of 10; refine the query with +term or -term
+help[1]: showing 3 of 10; raise the cap or refine the query with +term or -term
 ```
 
 Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
@@ -87,11 +85,11 @@ search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--max-results N` | 50 | Most results to print |
-| `--max-tokens N` | 20,000 | Most tokens of code to print |
-| `--max-bytes N` | 2 MiB | Most bytes of code to print |
+| `--max-tokens N` | 20,000 | Most tokens across the blocks the printed rows cover |
+| `--max-bytes N` | 2 MiB | Most bytes across the blocks the printed rows cover |
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`) |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude |
-| `--language L` | all | Search one language only: `typescript`, `javascript`, chosen by file extension: `.ts .tsx .mts .cts` or `.js .jsx .mjs .cjs` (`rust` and `python` are accepted but not supported yet) |
+| `--language L` | all | Search one language only: `typescript`, `javascript`, chosen by file extension: `.ts .tsx .mts .cts` or `.js .jsx .mjs .cjs` (`rust` and `python` are accepted but match nothing yet) |
 
 ## Errors and exit codes
 

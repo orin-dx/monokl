@@ -90,12 +90,14 @@ impl LanguageAnalyzer for TsAnalyzer {
             jsx_elements,
             type_only_imports,
             had_parse_errors,
+            degradation,
         } = parse::extract(path, &source, profile);
         Ok(Arc::new(FileAnalysis {
             source_path: path.to_owned(),
             digest,
             profile,
             had_parse_errors,
+            degradation,
             symbols,
             dependencies,
             exports,
@@ -113,6 +115,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::analysis::Degradation;
     use crate::error::MonoklError;
     use crate::types::{BindingKind, DependencyTarget, SymbolKind};
 
@@ -571,6 +574,7 @@ export const App = (p) => (
     fn an_unrecoverable_syntax_error_leaves_nothing_but_the_flag() {
         let analysis = analyze_source("fatal.ts", "export function good() {}\nconst x = ;\n", AnalysisProfile::Full);
         assert_degraded(&analysis);
+        assert_eq!(analysis.degradation, None);
     }
 
     #[test]
@@ -588,33 +592,117 @@ export const App = (p) => (
         assert_eq!(analysis.lang.ts().unwrap().type_only_imports, Vec::<String>::new());
     }
 
-    #[test]
-    fn a_file_nested_past_the_limit_is_degraded_without_parsing() {
-        let text = format!("import a from './a';\nconst x = {}1{};\n", "[".repeat(5000), "]".repeat(5000));
+    #[rstest]
+    #[case::brackets("[", "]")]
+    #[case::calls("f(", ")")]
+    #[case::object_literals("{a:", "}")]
+    fn brackets_nested_thousands_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
+        let text = nested("import a from './a';\nexport const x = ", open, "1", close, 5000);
         let analysis = analyze_source("deep.ts", &text, AnalysisProfile::Full);
-        assert_degraded(&analysis);
-        assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
-        assert_eq!(analysis.profile, AnalysisProfile::Full);
-    }
-
-    #[test]
-    fn a_file_nested_to_the_limit_is_still_parsed() {
-        // Runs on a 2 MiB test thread in a debug build, the tightest stack a caller is likely to give the parser.
-        for (open, close) in [("[", "]"), ("f(", ")"), ("{a:", "}")] {
-            let text = format!("export const x = {}1{};\n", open.repeat(256), close.repeat(256));
-            let analysis = analyze_source("limit.ts", &text, AnalysisProfile::Full);
-            assert!(!analysis.had_parse_errors, "{open}");
-            assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
-        }
-    }
-
-    #[test]
-    fn brackets_in_strings_and_comments_do_not_count_toward_nesting() {
-        let text =
-            format!("// {}\nexport const s = '{}';\n/* {} */\n", "[".repeat(5000), "(".repeat(5000), "{".repeat(5000));
-        let analysis = analyze_source("quiet.ts", &text, AnalysisProfile::Structural);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis).len(), 1);
+        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 2, None)]);
+        assert_eq!(dependencies(&analysis), [("./a", 1, vec![("default", "a", BindingKind::Default)])]);
+    }
+
+    #[test]
+    fn a_string_continued_across_crlf_line_breaks_may_hold_many_parentheses() {
+        let text = format!("export const s = \"{}\";\r\nexport function after() {{}}\r\n", "(\\\r\n".repeat(300));
+        let analysis = analyze_source("continued.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        let after = Some("function after()");
+        assert_eq!(
+            symbols(&analysis),
+            [("s", SymbolKind::Variable, 1, None), ("after", SymbolKind::Function, 302, after)]
+        );
+    }
+
+    #[test]
+    fn a_postfix_increment_before_a_division_is_not_a_regex() {
+        let text = format!(
+            "export function f(values: number[], count: number, total: number) {{\n{}}}\nexport const y = 1;\n",
+            "  values.push(count++ / total);\n".repeat(300)
+        );
+        let analysis = analyze_source("division.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            symbols(&analysis),
+            [
+                ("f", SymbolKind::Function, 1, Some("function f(values: number[], count: number, total: number)")),
+                ("y", SymbolKind::Variable, 303, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_longer_than_the_parse_limit_is_degraded_for_its_size() {
+        let head = "export const x = 1;\n";
+        let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN + 1 - head.len()));
+        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        assert_degraded(&analysis);
+        assert_eq!(
+            analysis.degradation,
+            Some(Degradation::TooLarge { bytes: parse::MAX_PARSED_SOURCE_LEN + 1, cap: parse::MAX_PARSED_SOURCE_LEN })
+        );
+        assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
+    }
+
+    #[test]
+    fn a_file_as_long_as_the_parse_limit_is_still_parsed() {
+        let head = "export const x = 1;\n";
+        let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN - head.len()));
+        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(analysis.degradation, None);
+        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
+    }
+
+    #[test]
+    fn a_quoted_regex_before_deeply_nested_type_brackets_still_parses() {
+        // Brackets in a type cost the most stack per byte.
+        let text = format!(
+            "export function f() {{ return /'/; }} export type T = {}number{};\n",
+            "[".repeat(20_000),
+            "]".repeat(20_000)
+        );
+        let analysis = analyze_source("regex.ts", &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            symbols(&analysis),
+            [("f", SymbolKind::Function, 1, Some("function f()")), ("T", SymbolKind::TypeAlias, 1, None)]
+        );
+    }
+
+    /// `head`, then `open` `depth` times, `middle`, and `close` `depth` times.
+    fn nested(head: &str, open: &str, middle: &str, close: &str, depth: usize) -> String {
+        format!("{head}{}{middle}{};\n", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[rstest]
+    #[case::generic_types(
+        "deep.ts",
+        nested("export type T = ", "Array<", "number", ">", 10_000),
+        ("T", SymbolKind::TypeAlias),
+        0
+    )]
+    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 12_000), ("f", SymbolKind::Variable), 0)]
+    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 10_000), ("t", SymbolKind::Variable), 0)]
+    #[case::jsx_elements(
+        "deep.tsx",
+        nested("export const j = ", "<div>", "", "</div>", 7_000),
+        ("j", SymbolKind::Variable),
+        7_000
+    )]
+    fn deep_nesting_without_brackets_still_parses(
+        #[case] path: &str,
+        #[case] text: String,
+        #[case] symbol: (&str, SymbolKind),
+        #[case] jsx_elements: usize,
+    ) {
+        let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(symbols(&analysis), [(symbol.0, symbol.1, 1, None)]);
+        assert_eq!(blocks(&analysis), [(1, 1, symbol.1, None)]);
+        assert_eq!(analysis.jsx_elements().len(), jsx_elements);
     }
 
     #[test]

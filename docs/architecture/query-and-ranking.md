@@ -8,7 +8,7 @@ pipeline stages (§20, ~L2315-2326) and design tenet #4 (§29, L3093).
 this doc and the code disagree, the code and its tests win.
 
 **Resolved (05 §18):** #7 (one fail-fast regex policy), #9 (total-order tie-break), #10 (sorted walk), #11 (`max_files`
-memory ceiling that keeps counting). **Still open:** #16 (query language). **Resolved since:** #21, as an empty result with one explanatory diagnostic (05 §21), and #8, where `+regex:`/`-regex:` keep their modifier (05 §23).
+memory ceiling that keeps counting). **Still open:** #16 (query language). **Resolved since:** #21, as an empty result with one explanatory diagnostic (05 §21), and #8, where `+regex:`/`-regex:` keep their modifier (05 §24).
 
 ## Lexer (`query/lexer.rs`)
 
@@ -35,7 +35,7 @@ pub fn parse(input: &str) -> Result<Vec<ParsedTerm>>
 - Bare `Word`/`QuotedString` → `Optional`, `pattern = regex::escape(...)`, `is_regex: false`.
 - `regex:<word|quoted>` (unprefixed) → `Optional`, `is_regex: true`, pattern used **raw**.
 - `+<word|quoted>` / `-<word|quoted>` → `Required`/`Excluded`, `is_regex: false`, escaped.
-- `+regex:foo` / `-regex:foo` → `Required`/`Excluded`, `is_regex: true`, pattern used raw (finding #8, closed by 05 §23).
+- `+regex:foo` / `-regex:foo` → `Required`/`Excluded`, `is_regex: true`, pattern used raw (finding #8, closed by 05 §24).
 
 ## `QueryPlan` (`query/plan.rs`)
 
@@ -104,7 +104,7 @@ than silently carrying spec-stage behavior into implementation.
    highlighting) silently drops compile failures instead. Same malformed input, two contradictory
    outcomes depending on which of two independently-written regex-compile paths trips. Decide one
    shared compile path with one failure policy (fail-fast or fail-soft), not both.
-2. **#8 — `+regex:foo` lost both modifier and regex semantics. Closed (05 §23):** the parser has a real
+2. **#8 — `+regex:foo` lost both modifier and regex semantics. Closed (05 §24):** the parser has a real
    `Required`/`Excluded` + `is_regex: true` arm.
 3. **#9 — the `(file, line_start)` tie-break tenet #4 claims does not exist in `rank_blocks`.** See
    ranking section above. Decide: implement it, or strike the claim.

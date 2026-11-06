@@ -281,11 +281,10 @@ fn retrieve_blocks(
         }
     };
     if analysis.had_parse_errors {
-        diagnostics.push(Diagnostic {
-            kind: DiagnosticKind::Degraded,
-            path: Some(path.to_owned()),
-            message: "parse errors; blocks may be incomplete".to_owned(),
-        });
+        let message = analysis
+            .degradation
+            .map_or_else(|| "parse errors; blocks may be incomplete".to_owned(), |reason| reason.to_string());
+        diagnostics.push(Diagnostic { kind: DiagnosticKind::Degraded, path: Some(path.to_owned()), message });
     }
     for block in &analysis.blocks {
         // Hits arrive in line order, so each block's slice of them is too.
@@ -358,9 +357,11 @@ fn document_frequencies(blocks: &[(CodeBlock, Vec<String>)], terms: &[String]) -
 mod tests {
     use std::sync::Arc;
 
+    use rstest::rstest;
+
     use super::*;
     use crate::analysis::LanguageId;
-    use crate::analysis::file_analysis::FileAnalysis;
+    use crate::analysis::file_analysis::{Degradation, FileAnalysis};
     use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer};
     use crate::digest::Digest;
     use crate::types::{LangData, SymbolKind, TsData};
@@ -370,6 +371,7 @@ mod tests {
     /// A stand-in analyzer for `.ts` and `.js` files whose blocks come from a closure instead of a parser.
     struct Canned {
         make: Box<MakeBlocks>,
+        degradation: Option<Degradation>,
     }
 
     impl LanguageAnalyzer for Canned {
@@ -405,6 +407,7 @@ mod tests {
                 digest: Digest::blake3(source.as_bytes()),
                 profile,
                 had_parse_errors,
+                degradation: self.degradation,
                 symbols: Vec::new(),
                 dependencies: Vec::new(),
                 exports: Vec::new(),
@@ -417,7 +420,7 @@ mod tests {
     fn registry(
         make: impl Fn(&Utf8Path, &str) -> Result<(Vec<CodeBlock>, bool)> + Send + Sync + 'static,
     ) -> AnalyzerRegistry {
-        AnalyzerRegistry::new(vec![Arc::new(Canned { make: Box::new(make) })])
+        AnalyzerRegistry::new(vec![Arc::new(Canned { make: Box::new(make), degradation: None })])
     }
 
     /// Lines `start..=end` (1-based) of `source` as a function block.
@@ -508,7 +511,8 @@ mod tests {
                 self.supports(path).then_some(LanguageId::Rust)
             }
             fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-                Canned { make: Box::new(|_, _| Ok((Vec::new(), false))) }.capabilities(LanguageId::Rust)
+                Canned { make: Box::new(|_, _| Ok((Vec::new(), false))), degradation: None }
+                    .capabilities(LanguageId::Rust)
             }
             fn analyze_with_profile(
                 &self,
@@ -522,6 +526,7 @@ mod tests {
                     digest: Digest::blake3(source.as_bytes()),
                     profile,
                     had_parse_errors: false,
+                    degradation: None,
                     symbols: Vec::new(),
                     dependencies: Vec::new(),
                     exports: Vec::new(),
@@ -532,7 +537,10 @@ mod tests {
         }
         let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.rs", "alpha\n")]);
         let mixed = AnalyzerRegistry::new(vec![
-            Arc::new(Canned { make: Box::new(|path, source| Ok((vec![block(path, source, 1, 1)], false))) }),
+            Arc::new(Canned {
+                make: Box::new(|path, source| Ok((vec![block(path, source, 1, 1)], false))),
+                degradation: None,
+            }),
             Arc::new(Rusty),
         ]);
         let everything = search(&mixed, &request(&root, "alpha")).unwrap();
@@ -798,6 +806,26 @@ mod tests {
         assert_eq!(
             summary(&result.diagnostics),
             [(DiagnosticKind::Degraded, Some(root.join("a.ts").as_str()), "parse errors; blocks may be incomplete")]
+        );
+    }
+
+    #[rstest]
+    #[case(
+        Degradation::TooLarge { bytes: 300_000, cap: 260_096 },
+        "file too large to parse (300000 bytes, over the cap of 260096)"
+    )]
+    #[case(Degradation::Panicked, "parser panicked")]
+    #[case(Degradation::ThreadUnavailable, "could not start a parse thread")]
+    fn a_degraded_file_names_its_reason_in_the_diagnostic(#[case] degradation: Degradation, #[case] message: &str) {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
+        let registry = AnalyzerRegistry::new(vec![Arc::new(Canned {
+            make: Box::new(|path, source| Ok((vec![block(path, source, 1, 1)], true))),
+            degradation: Some(degradation),
+        })]);
+        let result = search(&registry, &request(&root, "alpha")).unwrap();
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Degraded, Some(root.join("a.ts").as_str()), message)]
         );
     }
 
