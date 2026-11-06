@@ -32,7 +32,8 @@ pub struct SearchRequest<'a> {
     pub exact: bool,
     /// Searches test files too.
     pub allow_tests: bool,
-    /// Skips hidden files and what `.gitignore` and `.ignore` files inside the root exclude.
+    /// Skips hidden files and what `.gitignore` and `.ignore` files exclude: inside the root and, within a git
+    /// repository, in its parent directories up to the repository root.
     pub respect_ignore_files: bool,
     /// Restricts the search to one language; only TypeScript and JavaScript are supported.
     pub language: Option<Language>,
@@ -803,7 +804,7 @@ mod tests {
         let (_dir, root) = tree(&[("bad.ts", "alpha\n"), ("good.ts", "alpha\n")]);
         let registry = registry(|path, source| {
             if path.file_name() == Some("bad.ts") {
-                return Err(MonoklError::TokenizerInit);
+                return Err(MonoklError::TooManyTerms { count: 9, limit: 8 });
             }
             Ok((vec![block(path, source, 1, 1)], false))
         });
@@ -811,7 +812,11 @@ mod tests {
         assert_eq!(files(&result, &root), ["good.ts"]);
         assert_eq!(
             summary(&result.diagnostics),
-            [(DiagnosticKind::Skipped, Some(root.join("bad.ts").as_str()), "could not analyze: tokenizer init failed")]
+            [(
+                DiagnosticKind::Skipped,
+                Some(root.join("bad.ts").as_str()),
+                "could not analyze: query has too many terms: 9 > 8"
+            )]
         );
     }
 

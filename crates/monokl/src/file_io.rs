@@ -15,24 +15,6 @@ pub enum FileIoError {
         #[source]
         source: io::Error,
     },
-    #[error("failed to write {path}")]
-    Write {
-        path: Utf8PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to create directory {path}")]
-    CreateDir {
-        path: Utf8PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to remove {path}")]
-    Remove {
-        path: Utf8PathBuf,
-        #[source]
-        source: io::Error,
-    },
 }
 
 impl FileIoError {
@@ -42,32 +24,11 @@ impl FileIoError {
         Self::Read { path: path.into(), source }
     }
 
-    /// Creates a [`FileIoError::Write`].
-    #[must_use]
-    pub fn write(path: impl Into<Utf8PathBuf>, source: io::Error) -> Self {
-        Self::Write { path: path.into(), source }
-    }
-
-    /// Creates a [`FileIoError::CreateDir`].
-    #[must_use]
-    pub fn create_dir(path: impl Into<Utf8PathBuf>, source: io::Error) -> Self {
-        Self::CreateDir { path: path.into(), source }
-    }
-
-    /// Creates a [`FileIoError::Remove`].
-    #[must_use]
-    pub fn remove(path: impl Into<Utf8PathBuf>, source: io::Error) -> Self {
-        Self::Remove { path: path.into(), source }
-    }
-
     /// Returns the path the failed operation was acting on.
     #[must_use]
     pub fn path(&self) -> &Utf8Path {
         match self {
-            Self::Read { path, .. }
-            | Self::Write { path, .. }
-            | Self::CreateDir { path, .. }
-            | Self::Remove { path, .. } => path.as_path(),
+            Self::Read { path, .. } => path.as_path(),
         }
     }
 
@@ -75,10 +36,7 @@ impl FileIoError {
     #[must_use]
     pub fn io_source(&self) -> &io::Error {
         match self {
-            Self::Read { source, .. }
-            | Self::Write { source, .. }
-            | Self::CreateDir { source, .. }
-            | Self::Remove { source, .. } => source,
+            Self::Read { source, .. } => source,
         }
     }
 
@@ -99,21 +57,16 @@ impl FileIoError {
 mod tests {
     use std::error::Error as _;
 
-    use rstest::rstest;
-
     use super::*;
 
     fn not_found() -> io::Error {
         io::Error::new(io::ErrorKind::NotFound, "gone")
     }
 
-    #[rstest]
-    #[case(FileIoError::read("/a", not_found()), "failed to read /a")]
-    #[case(FileIoError::write("/a", not_found()), "failed to write /a")]
-    #[case(FileIoError::create_dir("/a", not_found()), "failed to create directory /a")]
-    #[case(FileIoError::remove("/a", not_found()), "failed to remove /a")]
-    fn display_names_the_operation_and_path(#[case] err: FileIoError, #[case] expected: &str) {
-        assert_eq!(err.to_string(), expected);
+    #[test]
+    fn display_names_the_operation_and_path() {
+        let err = FileIoError::read("/a", not_found());
+        assert_eq!(err.to_string(), "failed to read /a");
         assert_eq!(err.path(), Utf8Path::new("/a"));
         assert_eq!(err.source().map(ToString::to_string).as_deref(), Some("gone"));
     }
@@ -124,7 +77,7 @@ mod tests {
         assert_eq!(missing.io_kind(), io::ErrorKind::NotFound);
         assert!(missing.is_not_found());
 
-        let denied = FileIoError::write("/a", io::Error::new(io::ErrorKind::PermissionDenied, "no"));
+        let denied = FileIoError::read("/a", io::Error::new(io::ErrorKind::PermissionDenied, "no"));
         assert_eq!(denied.io_kind(), io::ErrorKind::PermissionDenied);
         assert!(!denied.is_not_found());
     }

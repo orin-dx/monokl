@@ -7,23 +7,23 @@ additions (§ "`SymbolEntry` — gained `owner`, `trait_impl`, `visibility`, `ki
 contain, which in two places (below) differs from what `docs/spec/04-analysis-fidelity.md`
 currently says.
 
+None of these types derives `Serialize` or `Deserialize`: wire shapes belong to the output layer. A type with no
+caller is not defined (see the decision-log entry "Removed public types nothing builds or consumes" in
+`05-research-and-decisions.md`), so the spec's `SearchOptions`, `SearchLimits`, `SymbolsResult`, `DependentsResult`,
+`TsconfigMode`, `WorkspaceOptions` and `ExtractRequest` are not in `types.rs` until a command uses them.
+
 ## SymbolEntry
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SymbolEntry {
     pub name: String,
     pub kind: SymbolKind,
     pub line: usize,
     pub signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trait_impl: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Visibility>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_detail: Option<String>,
 }
 ```
@@ -56,8 +56,7 @@ Field notes:
 ## Visibility
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
     Public,
     Crate,
@@ -105,12 +104,12 @@ pub struct CodeBlock {
     pub node_kind: SymbolKind,
     pub code: String,
     pub symbol_signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub matched_lines: Vec<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub matched_keywords: Vec<String>,
+    pub matched_lines: Vec<usize>,
+    pub matched_keywords: Vec<String>,
 }
 
 pub struct RankedBlock {
-    #[serde(flatten)] pub block: CodeBlock,
+    pub block: CodeBlock,
     pub bm25_score: f64,
     pub coverage_boost: f64,
     pub node_type_boost: f64,
@@ -122,46 +121,17 @@ pub struct RankedBlock {
 pub struct ParentContext { pub kind: SymbolKind, pub name: String, pub line: usize }
 ```
 
-`RankedBlock` flattens `CodeBlock` at serialization (no nested `block` key in JSON/TOON output).
+`RankedBlock` nests its `CodeBlock`; the output layer picks the columns it prints.
 Score breakdown fields (`bm25_score`, `coverage_boost`, `node_type_boost`) are additive inputs
 to `final_score`; see `query-and-ranking.md` for the ranking algorithm itself, not covered here.
 
-## SearchOptions / SearchLimits
+## `Language` vs `LanguageId` — do not conflate
+
+The CLI's `--language` flag is `Option<Language>`:
 
 ```rust
-pub struct SearchOptions {
-    pub query: String,
-    pub path: Utf8PathBuf,
-    pub allow_tests: bool,
-    pub no_gitignore: bool,
-    pub limits: SearchLimits,
-    pub exact: bool,
-    pub language: Option<Language>,
-}
-// Default: query="", path="", allow_tests=false, no_gitignore=false,
-//          limits=SearchLimits::default(), exact=false, language=None
-
-pub struct SearchLimits {
-    pub max_results: Option<usize>,   // default Some(Budget::default().max_results)
-    pub max_bytes: usize,             // default: Budget::default().max_bytes
-    pub max_tokens: Option<usize>,    // default Some(Budget::default().max_tokens)
-    pub max_candidates: usize,        // default 1_000
-}
-```
-
-Per the edge-case audit: `max_bytes` is the only one of these clamped to a hard ceiling;
-`max_results`, `max_tokens`, and `max_candidates` are caller-controlled with no enforced cap
-(07-edge-cases-and-failure-modes.md, overview finding on opt-out resource limits). Don't assume
-passing `None`/large values is bounded by the type — it isn't.
-
-### `Language` vs `LanguageId` — do not conflate
-
-`SearchOptions.language` is `Option<Language>`:
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[serde(rename_all = "lowercase")]
 pub enum Language { TypeScript, JavaScript, Rust, Python }
 ```
 
@@ -177,12 +147,11 @@ exists only so the two aren't reached for interchangeably.
 ```rust
 pub struct Diagnostic { pub kind: DiagnosticKind, pub path: Option<Utf8PathBuf>, pub message: String }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticKind { Degraded, Skipped, Warning }
 ```
 
-Every `*Result`/`*Response` type below carries a `diagnostics: Vec<Diagnostic>` field. Per the
+Every result type (today only `SearchResponse`) carries a `diagnostics: Vec<Diagnostic>` field. Per the
 edge-case audit, **population of that field is inconsistently specified** — do not assume every
 degradation path pushes a `Diagnostic`. Confirmed gaps: `dependents` drops unanalyzable files
 with only a `tracing::warn!`, never a `Diagnostic` (07-edge-cases..., Part 1 finding #1); most
@@ -190,76 +159,52 @@ Part 2 commands declare the field but never describe it being populated (Part 2 
 When implementing a command that can degrade, check that command's own spec text for whether
 `diagnostics` is actually supposed to be pushed to — don't infer it from the field's existence.
 
-## LangData + per-language variants
+## LangData
 
 ```rust
-#[serde(tag = "language", content = "data")]
 #[non_exhaustive]
 pub enum LangData {
-    #[serde(rename = "typescript")] Ts(TsData),
-    #[serde(rename = "rust")]       Rust(RustData),
-    #[serde(rename = "python")]     Python(PythonData),
-    #[serde(rename = "go")]         Go(GoData),
-    #[serde(rename = "java")]       Java(JavaData),
+    Ts(TsData),
 }
 
 pub struct TsData {
-    #[serde(default)] pub jsx_elements: Vec<JsxElementEntry>,
-    #[serde(default)] pub type_only_imports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub unresolved_aliases: Vec<String>,
+    pub jsx_elements: Vec<JsxElementEntry>,
+    pub type_only_imports: Vec<String>,
+    pub unresolved_aliases: Vec<String>,
 }
-pub struct RustData {}    // empty placeholder
-pub struct PythonData {}  // empty placeholder
-pub struct GoData {}      // empty placeholder
-pub struct JavaData {}    // empty placeholder
 ```
 
-`LangData` covers only 5 languages (a strict subset of `LanguageId`'s 12 — see above); `Go`/`Java`
-replaced an earlier `CSharp` variant on this enum specifically (roadmap dropped C#, added Go/Java)
-per `05-research-and-decisions.md` §6 — `LanguageId` still lists `CSharp` because it's a
-fallback-tier analyzer target, not a `LangData`-producing one. `RustData`/`PythonData`/`GoData`/`JavaData`
-are empty today; only `TsData` is populated. Access via `LangData::ts() -> Option<&TsData>` and
-`LangData.jsx_elements() -> &[JsxElementEntry]` (empty slice for non-TS).
+`LangData` has one variant, `Ts`. The spec's `Rust`, `Python`, `Go` and `Java` variants (and their empty `*Data`
+structs) return with the analyzer that fills them. `LanguageId` (see above) is the larger analyzer-dispatch enum.
+Access via `LangData::ts() -> &TsData` and `LangData::jsx_elements() -> &[JsxElementEntry]`.
 
 ## Dependency types
 
 ```rust
-pub struct DependencyRecord { pub line: usize, #[serde(default)] pub bindings: Vec<DependencyBinding>, pub target: DependencyTarget }
+pub struct DependencyRecord { pub line: usize, pub bindings: Vec<DependencyBinding>, pub target: DependencyTarget }
 pub struct DependencyBinding { pub imported: String, pub local: String, pub kind: BindingKind }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BindingKind { Named, Default, Namespace, Glob, NamespaceWide }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingKind { Named, Default, Namespace, Glob }
 
-#[serde(tag = "kind")]
 #[non_exhaustive]
 pub enum DependencyTarget {
     File { specifier: String, resolved: Option<Utf8PathBuf>, is_relative: bool },
-    RustPath { segments: Vec<String>, anchor: RustPathAnchor, resolved: Option<Utf8PathBuf> },
-    Namespace { segments: Vec<String>, is_static: bool, alias: Option<String> },
 }
-
-#[non_exhaustive]
-pub enum RustPathAnchor { Crate, Super, #[serde(rename = "self")] Selff, Extern(String) }
 ```
 
-`DependencyTarget::Namespace` is spec residue from the dropped C# roadmap item — present in the
-type, cosmetic/unused in practice, not a functional gap (07-edge-cases-and-failure-modes.md,
-Part 3 finding #20). `RustPathAnchor::Selff` (double-f) is the actual variant name — `self` is a
-reserved word, hence `#[serde(rename = "self")]` on a differently-spelled Rust identifier.
+The spec's `DependencyTarget::RustPath`, `DependencyTarget::Namespace`, `RustPathAnchor` and
+`BindingKind::NamespaceWide` are not in the code: no analyzer constructs them. They return with the analyzer that
+does.
 
 ## Minor types (one line each)
 
-- `SymbolKind` — universal (`Function, Method, Constructor, Class, Struct, Enum, Interface, TypeAlias, Property, Field, Variable, Module`) + Rust-only (`Impl, Macro`) + `Other` catch-all. `Copy`, camelCase serde.
+- `SymbolKind` — universal (`Function, Method, Constructor, Class, Struct, Enum, Interface, TypeAlias, Property, Field, Variable, Module`) + Rust-only (`Impl, Macro`) + `Other` catch-all. `Copy`.
 - `ExportRecord { name, line, re_export }` — one entry per exported symbol; `re_export: bool` distinguishes `export { x } from './y'` from a local export.
 - `JsxAttribute { name, string_value: Option<String>, is_expression, is_spread }` — TS/TSX only, lives under `TsData` via `JsxElementEntry`.
 - `JsxElementEntry { name, is_html, line, attributes: Vec<JsxAttribute> }` — `is_html` distinguishes `<div>` from `<MyComponent>`.
-- `SearchResponse { results: Vec<RankedBlock>, total_blocks_before_truncation, truncated, truncation_marker: Option<String>, total_bytes, total_tokens, diagnostics }` — top-level `search` command output.
-- `SymbolsResult { files: BTreeMap<Utf8PathBuf, Vec<SymbolEntry>>, total_symbol_count, truncation_marker, diagnostics }` — `BTreeMap` for deterministic file ordering.
-- `DependentsResult { file, dependents: Vec<Utf8PathBuf>, imports: Vec<Utf8PathBuf>, total_dependent_count, total_import_count, truncation_marker, diagnostics }`.
-- `LineHit { line_number, text }` — not `Serialize`; internal grep-hit representation only.
-- `TsconfigMode { Auto, Manual(Utf8PathBuf), Skip }` — workspace tsconfig resolution strategy.
-- `WorkspaceOptions { root, tsconfig }` — builder methods `new(root)`, `with_tsconfig(mode)` (consuming, `#[must_use]`).
-- `ExtractRequest { file, line_start: Option<usize>, line_end: Option<usize> }` — both bounds `None` means whole file.
+- `SearchResponse { results: Vec<RankedBlock>, total_blocks_before_truncation, truncated, total_bytes, total_tokens, diagnostics }` — top-level `search` command output. Counts only: the output layer words the truncation hint.
+- `LineHit { line_number, text }` — internal grep-hit representation only.
 
 ## Naming contract
 

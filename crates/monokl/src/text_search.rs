@@ -2,11 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
+use ignore::gitignore::Gitignore;
+use rustc_hash::FxHashMap;
 
 use crate::error::{MonoklError, Result};
 use crate::types::LineHit;
@@ -31,8 +34,11 @@ pub struct TextSearchOptions {
     /// `.spec.js`. Matching is case-sensitive.
     pub allow_tests: bool,
     /// Skips hidden files and what `.gitignore` and `.ignore` files inside the root exclude, with or without a `.git`
-    /// directory. Ignore files above the root, `.git/info/exclude` and the user's global excludes are never read, so
-    /// the same tree gives the same result on every machine.
+    /// directory. When the root lies inside a git repository (the nearest ancestor with a `.git` entry), the
+    /// `.gitignore` and `.ignore` files of the directories from the repository root down to the root's parent apply
+    /// too, as they do for ripgrep, and rules inside the root take precedence over them. Nothing above the repository
+    /// root is read, and without a `.git` ancestor no parent is read. `.git/info/exclude` and the user's global
+    /// excludes are never read, so the same checkout gives the same result on every machine.
     pub respect_ignore_files: bool,
     /// The most files whose hits are kept. Matching files past it are still searched and counted.
     pub max_files: usize,
@@ -56,7 +62,8 @@ pub struct TextSearchResult {
     /// Whether `files_total` exceeded [`TextSearchOptions::max_files`], so some matching files have no hits stored.
     pub ceiling_hit: bool,
     /// In walk order and each listed once, keyed like `hits`: files that could not be read, directories that could not
-    /// be listed, and ignore files that could not be read or parsed.
+    /// be listed, and ignore files that could not be read or parsed. A parent ignore file above the root is named by its
+    /// canonical path.
     pub unreadable: Vec<Utf8PathBuf>,
     /// How many regular files were skipped because their path is not UTF-8.
     pub non_utf8_paths: u64,
@@ -120,15 +127,27 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         .bom_sniffing(false)
         .passthru(true)
         .build();
-    // Only ignore files inside the root apply, so the same tree gives the same result on every machine.
-    let walk = WalkBuilder::new(root)
+    // The `ignore` crate's own parent support reads every ancestor up to `/`, so the walk covers the root and the
+    // repository's parent files are applied by `ParentIgnores`. Global and `.git/info/exclude` rules stay off so the
+    // same checkout gives the same result on every machine.
+    let parents = if opts.respect_ignore_files { ParentIgnores::load(root, &mut result) } else { None };
+    let mut builder = WalkBuilder::new(root);
+    builder
         .standard_filters(opts.respect_ignore_files)
         .parents(false)
         .git_global(false)
         .git_exclude(false)
         .require_git(false)
-        .sort_by_file_name(std::cmp::Ord::cmp)
-        .build();
+        .sort_by_file_name(std::cmp::Ord::cmp);
+    if let Some(parents) = parents {
+        let root = root.to_owned();
+        builder.filter_entry(move |entry| {
+            let Some(path) = Utf8Path::from_path(entry.path()) else { return true };
+            let Ok(relative) = path.strip_prefix(&root) else { return true };
+            !parents.excludes(relative, entry.file_type().is_some_and(|file_type| file_type.is_dir()))
+        });
+    }
+    let walk = builder.build();
     for entry in walk {
         let entry = match entry {
             Ok(entry) => entry,
@@ -168,6 +187,89 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         }
     }
     Ok(result)
+}
+
+/// The `.ignore` and `.gitignore` rules of the directories from a git repository's root down to the search root's
+/// parent, applied as the `ignore` crate applies parent files: a rule nearer the entry wins, `.ignore` wins over
+/// `.gitignore` in one directory, and rules inside the search root win over all of them.
+struct ParentIgnores {
+    /// The canonical search root, which the matchers' paths are built from.
+    base: Utf8PathBuf,
+    /// Nearest directory first.
+    parents: Vec<DirRules>,
+    /// Rules of the directories inside the root, read when first needed.
+    inside: Mutex<FxHashMap<Utf8PathBuf, Arc<DirRules>>>,
+}
+
+/// One directory's `.ignore` and `.gitignore` files.
+struct DirRules {
+    ignore: Gitignore,
+    gitignore: Gitignore,
+}
+
+impl DirRules {
+    /// Reads the directory's rules, with the errors from files that could not be read or parsed.
+    fn read(dir: &Utf8Path) -> (Self, Vec<ignore::Error>) {
+        let (ignore, ignore_err) = Gitignore::new(dir.join(".ignore"));
+        let (gitignore, gitignore_err) = Gitignore::new(dir.join(".gitignore"));
+        (Self { ignore, gitignore }, ignore_err.into_iter().chain(gitignore_err).collect())
+    }
+
+    /// Whether either file has a rule, ignoring or whitelisting, that matches. `Some(true)` is an ignore.
+    fn verdict(&self, path: &Utf8Path, is_dir: bool) -> Option<bool> {
+        let matched =
+            self.ignore.matched(path, is_dir).map(|_| ()).or(self.gitignore.matched(path, is_dir).map(|_| ()));
+        match matched {
+            ignore::Match::None => None,
+            ignore::Match::Ignore(()) => Some(true),
+            ignore::Match::Whitelist(()) => Some(false),
+        }
+    }
+}
+
+impl ParentIgnores {
+    /// Reads the parent rules for `root`, or `None` when `root` has no `.git` ancestor, is itself the repository
+    /// root, or no parent directory has a rule. Read errors go in `result` like walk errors do.
+    fn load(root: &Utf8Path, result: &mut TextSearchResult) -> Option<Self> {
+        let base = root.canonicalize_utf8().ok()?;
+        let repo_root = base.ancestors().find(|dir| dir.join(".git").symlink_metadata().is_ok())?;
+        let mut parents = Vec::new();
+        for dir in base.ancestors().skip(1).take_while(|dir| dir.starts_with(repo_root)) {
+            let (rules, errors) = DirRules::read(dir);
+            for err in &errors {
+                record_walk_error(err, result);
+            }
+            parents.push(rules);
+        }
+        parents.iter().any(|rules| !rules.ignore.is_empty() || !rules.gitignore.is_empty()).then(|| Self {
+            base,
+            parents,
+            inside: Mutex::new(FxHashMap::default()),
+        })
+    }
+
+    /// Whether a parent rule excludes the entry at `relative` below the root, and no rule inside the root matches it.
+    fn excludes(&self, relative: &Utf8Path, is_dir: bool) -> bool {
+        if relative.as_str().is_empty() {
+            return false;
+        }
+        let path = self.base.join(relative);
+        let decided_inside = path
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(&self.base))
+            .any(|dir| self.inside_rules(dir).verdict(&path, is_dir).is_some());
+        if decided_inside {
+            return false;
+        }
+        self.parents.iter().find_map(|rules| rules.verdict(&path, is_dir)).unwrap_or(false)
+    }
+
+    fn inside_rules(&self, dir: &Utf8Path) -> Arc<DirRules> {
+        let mut cache = self.inside.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Read errors are dropped: the walk reads the same files and reports them.
+        Arc::clone(cache.entry(dir.to_owned()).or_insert_with(|| Arc::new(DirRules::read(dir).0)))
+    }
 }
 
 /// Compiles each pattern alone, then all together, so an invalid one always fails the search. `None` when there are no
@@ -954,15 +1056,154 @@ mod tests {
         assert_eq!(hit_files(&root, &result), ["a.ts"]);
     }
 
+    /// A repository at `repo` below a temp dir, holding `files` (paths relative to `repo`), with a `.git` directory.
+    fn repo_tree(files: &[(&str, &[u8])]) -> (TempDir, Utf8PathBuf, Utf8PathBuf) {
+        let (dir, top) = tree(&[]);
+        let repo = top.join("repo");
+        write_files(&repo, files);
+        write_files(&repo, &[(".git/HEAD", b"ref: refs/heads/main\n")]);
+        (dir, top, repo)
+    }
+
+    fn found(root: &Utf8Path, opts: &TextSearchOptions) -> Vec<String> {
+        hit_files(root, &search_files(root, &["alpha"], opts).unwrap())
+    }
+
+    #[rstest]
+    #[case::gitignore(".gitignore")]
+    #[case::ignore(".ignore")]
+    fn a_parent_ignore_file_inside_the_repository_applies(#[case] name: &str) {
+        let (_dir, _top, repo) = repo_tree(&[
+            (name, b"b.ts\n/sub/anchored.ts\n"),
+            ("sub/a.ts", b"alpha\n"),
+            ("sub/b.ts", b"alpha\n"),
+            ("sub/anchored.ts", b"alpha\n"),
+        ]);
+        let root = repo.join("sub");
+        assert_eq!(found(&root, &TextSearchOptions::default()), ["a.ts"]);
+        assert_eq!(found(&root, &without_ignore_files()), ["a.ts", "anchored.ts", "b.ts"]);
+    }
+
+    #[test]
+    fn parent_ignore_files_apply_at_every_level_and_the_nearer_one_wins() {
+        let (_dir, _top, repo) = repo_tree(&[
+            (".gitignore", b"*.gen.ts\nkeep.ts\n"),
+            ("pkg/.gitignore", b"!keep.ts\nlocal.ts\n"),
+            ("pkg/src/a.ts", b"alpha\n"),
+            ("pkg/src/keep.ts", b"alpha\n"),
+            ("pkg/src/local.ts", b"alpha\n"),
+            ("pkg/src/x.gen.ts", b"alpha\n"),
+        ]);
+        assert_eq!(found(&repo.join("pkg/src"), &TextSearchOptions::default()), ["a.ts", "keep.ts"]);
+    }
+
+    #[test]
+    fn rules_inside_the_root_win_over_parent_rules() {
+        let (_dir, _top, repo) = repo_tree(&[
+            (".gitignore", b"b.ts\nc.ts\n"),
+            ("sub/.gitignore", b"!b.ts\n"),
+            ("sub/a.ts", b"alpha\n"),
+            ("sub/b.ts", b"alpha\n"),
+            ("sub/c.ts", b"alpha\n"),
+            ("sub/deep/b.ts", b"alpha\n"),
+        ]);
+        assert_eq!(found(&repo.join("sub"), &TextSearchOptions::default()), ["a.ts", "b.ts", "deep/b.ts"]);
+    }
+
+    /// The layout and result of `rg --files` run in `repo/sub` (ripgrep 15), with and without `--no-ignore`.
+    #[test]
+    fn parent_ignore_files_give_the_files_ripgrep_lists() {
+        let (_dir, top, repo) = repo_tree(&[
+            (".gitignore", b"b.ts\nc.ts\nanchored.ts\n"),
+            ("sub/.gitignore", b"!c.ts\n"),
+            ("sub/a.ts", b"alpha\n"),
+            ("sub/anchored.ts", b"alpha\n"),
+            ("sub/b.ts", b"alpha\n"),
+            ("sub/c.ts", b"alpha\n"),
+            ("sub/deep/b.ts", b"alpha\n"),
+        ]);
+        write_files(&top, &[(".gitignore", b"b.ts\n")]);
+        let root = repo.join("sub");
+        assert_eq!(found(&root, &TextSearchOptions::default()), ["a.ts", "c.ts"]);
+        assert_eq!(found(&root, &without_ignore_files()), ["a.ts", "anchored.ts", "b.ts", "c.ts", "deep/b.ts"]);
+    }
+
+    #[test]
+    fn a_parent_rule_naming_the_root_does_not_exclude_the_root() {
+        let (_dir, _top, repo) = repo_tree(&[
+            (".gitignore", b"sub/\nignored/\n"),
+            ("sub/a.ts", b"alpha\n"),
+            ("sub/ignored/b.ts", b"alpha\n"),
+        ]);
+        assert_eq!(found(&repo.join("sub"), &TextSearchOptions::default()), ["a.ts"]);
+    }
+
+    #[test]
+    fn parent_ignore_files_apply_when_the_root_is_not_in_canonical_form() {
+        let (_dir, _top, repo) =
+            repo_tree(&[(".gitignore", b"b.ts\n"), ("sub/a.ts", b"alpha\n"), ("sub/b.ts", b"alpha\n")]);
+        let root = repo.join("sub");
+        let walked = root.join("../sub");
+        assert_eq!(found(&walked, &TextSearchOptions::default()), ["a.ts"]);
+    }
+
     #[rstest]
     #[case::ignore(".ignore")]
     #[case::gitignore(".gitignore")]
-    fn ignore_files_above_the_root_do_not_apply(#[case] name: &str) {
-        let (_dir, parent) = tree(&[(name, b"b.ts\n"), (".git/HEAD", b"ref: refs/heads/main\n")]);
-        let root = parent.join("project");
-        write_files(&root, &[("a.ts", b"alpha\n"), ("b.ts", b"alpha\n")]);
-        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(hit_files(&root, &result), ["a.ts", "b.ts"]);
+    fn ignore_files_above_the_repository_root_do_not_apply(#[case] name: &str) {
+        let (_dir, top, repo) = repo_tree(&[("sub/a.ts", b"alpha\n"), ("sub/b.ts", b"alpha\n")]);
+        write_files(&top, &[(name, b"b.ts\n")]);
+        assert_eq!(found(&repo.join("sub"), &TextSearchOptions::default()), ["a.ts", "b.ts"]);
+        assert_eq!(found(&repo, &TextSearchOptions::default()), ["sub/a.ts", "sub/b.ts"]);
+    }
+
+    #[test]
+    fn an_unreadable_ignore_file_above_the_repository_root_is_never_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, top, repo) = repo_tree(&[("sub/a.ts", b"alpha\n")]);
+        write_files(&top, &[(".gitignore", b"a.ts\n")]);
+        fs::set_permissions(top.join(".gitignore"), fs::Permissions::from_mode(0o000)).unwrap();
+        let result = search_files(&repo.join("sub"), &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            (hit_files(&repo.join("sub"), &result), result.unreadable),
+            (["a.ts"].map(String::from).to_vec(), vec![])
+        );
+    }
+
+    #[rstest]
+    #[case::ignore(".ignore")]
+    #[case::gitignore(".gitignore")]
+    fn parent_ignore_files_do_not_apply_without_a_git_ancestor(#[case] name: &str) {
+        let (_dir, top) = tree(&[(name, b"b.ts\n"), ("sub/a.ts", b"alpha\n"), ("sub/b.ts", b"alpha\n")]);
+        assert_eq!(found(&top.join("sub"), &TextSearchOptions::default()), ["a.ts", "b.ts"]);
+    }
+
+    #[test]
+    fn a_git_file_marks_the_repository_root_too() {
+        let (_dir, top) = tree(&[
+            (".git", b"gitdir: /elsewhere\n"),
+            (".gitignore", b"b.ts\n"),
+            ("sub/a.ts", b"alpha\n"),
+            ("sub/b.ts", b"alpha\n"),
+        ]);
+        assert_eq!(found(&top.join("sub"), &TextSearchOptions::default()), ["a.ts"]);
+    }
+
+    #[test]
+    fn a_root_that_is_the_repository_root_reads_no_parent_files() {
+        let (_dir, top) = tree(&[(".gitignore", b"a.ts\n"), ("repo/.git/HEAD", b"x\n"), ("repo/a.ts", b"alpha\n")]);
+        assert_eq!(found(&top.join("repo"), &TextSearchOptions::default()), ["a.ts"]);
+    }
+
+    #[test]
+    fn an_unparsable_parent_ignore_file_is_unreadable_and_its_valid_lines_still_apply() {
+        let (_dir, _top, repo) =
+            repo_tree(&[(".gitignore", b"[z-a]\nb.ts\n"), ("sub/a.ts", b"alpha\n"), ("sub/b.ts", b"alpha\n")]);
+        let result = search_files(&repo.join("sub"), &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            (hit_files(&repo.join("sub"), &result), result.unreadable),
+            (vec!["a.ts".to_string()], vec![repo.canonicalize_utf8().unwrap().join(".gitignore")])
+        );
     }
 
     #[test]

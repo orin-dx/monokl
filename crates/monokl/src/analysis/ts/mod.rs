@@ -150,9 +150,7 @@ mod tests {
             .dependencies
             .iter()
             .map(|dep| {
-                let DependencyTarget::File { specifier, resolved, is_relative } = &dep.target else {
-                    panic!("expected a file target");
-                };
+                let DependencyTarget::File { specifier, resolved, is_relative } = &dep.target;
                 assert_eq!(*resolved, None);
                 assert_eq!(*is_relative, specifier.starts_with('.'));
                 let bindings = dep.bindings.iter().map(|b| (b.imported.as_str(), b.local.as_str(), b.kind)).collect();
@@ -250,7 +248,7 @@ mod tests {
                 ("./utils/validation", 4, vec![("validatePrice", "validatePrice", BindingKind::Named)]),
             ]
         );
-        assert_eq!(analysis.lang.ts().unwrap().type_only_imports, Vec::<String>::new());
+        assert_eq!(analysis.lang.ts().type_only_imports, Vec::<String>::new());
         assert_eq!(blocks(&analysis), (1..=5).map(|n| (n, n, SymbolKind::Other, None)).collect::<Vec<_>>());
         assert_eq!(analysis.blocks[0].code, "export { Button } from './components/Button';");
     }
@@ -311,7 +309,7 @@ mod tests {
                 ("../utils/validation", 2, vec![("validatePrice", "validatePrice", BindingKind::Named)]),
             ]
         );
-        assert_eq!(analysis.lang.ts().unwrap().type_only_imports, ["../utils/validation"]);
+        assert_eq!(analysis.lang.ts().type_only_imports, ["../utils/validation"]);
         assert_eq!(
             blocks(&analysis),
             [(5, 9, SymbolKind::Interface, None), (11, 25, SymbolKind::Function, Some("function useCart()"))]
@@ -399,7 +397,7 @@ mod tests {
     #[test]
     fn type_only_imports_survive_the_dependencies_profile() {
         let analysis = analyze_fixture("hooks/useCart.ts", AnalysisProfile::Dependencies);
-        assert_eq!(analysis.lang.ts().unwrap().type_only_imports, ["../utils/validation"]);
+        assert_eq!(analysis.lang.ts().type_only_imports, ["../utils/validation"]);
         assert_eq!(analysis.dependencies.len(), 2);
     }
 
@@ -589,7 +587,7 @@ export const App = (p) => (
         assert_eq!(dependencies(analysis), []);
         assert_eq!(blocks(analysis), []);
         assert!(analysis.jsx_elements().is_empty());
-        assert_eq!(analysis.lang.ts().unwrap().type_only_imports, Vec::<String>::new());
+        assert_eq!(analysis.lang.ts().type_only_imports, Vec::<String>::new());
     }
 
     #[rstest]

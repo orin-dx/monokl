@@ -1,0 +1,4 @@
+# name url sha  (release tags, pinned by commit so runs are reproducible)
+zustand https://github.com/pmndrs/zustand.git 9fed2eb2f3af672da9f7bf694b996df3831fc207
+zod https://github.com/colinhacks/zod.git b500a2ee95134f81d74da7911d7378dd2853d042
+axios https://github.com/axios/axios.git aa54a5e1e0e50cd1a2561b854ae5490ff589d065

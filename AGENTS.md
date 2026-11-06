@@ -28,22 +28,24 @@ One crate, `crates/monokl`, with the error types, core data types, query languag
 
 ## Non-negotiables
 
-- No `unwrap()`/`expect()`/`panic!()`/`unreachable!()`/`unimplemented!()` outside `#[cfg(test)]`. The workspace lint table denies them.
-- One `thiserror` error enum, `MonoklError`. Compose failure modes with `#[from]`/`#[source]`; no `String`-message variant when a structured one is possible. File I/O failures are `FileIoError` ([ADR 0001](docs/adr/0001-file-io-error-lives-in-monokl.md)).
-- `LanguageAnalyzer` implementations return fully owned data. No arena-borrowed AST node or parser-allocator lifetime in any field of `FileAnalysis`.
-- `camino::Utf8Path`/`Utf8PathBuf` wherever a path appears.
-- `FxHashMap`/`FxHashSet` for internal hot-path maps; `BTreeMap` for anything serialized, because output order must be deterministic.
-- Core result types are not `Serialize`; wire shapes live in the output layer. See [`08-library-session-api.md`](docs/spec/08-library-session-api.md#9-plumbing-and-porcelain-two-crates).
-- No caps or pre-rendered truncation strings in core. Counts only (`items_returned`/`items_total`); the output layer renders the marker.
-- `unsafe_code` is denied workspace-wide.
+Each rule ends with what holds it: `[lint]` the workspace lint table or CI, `[type]` the shape of the types, `[convention]` review only. Treat a `[convention]` rule as the most likely to have drifted and check it when you touch the area.
+
+- No `unwrap()`/`expect()`/`panic!()`/`unreachable!()`/`unimplemented!()` outside `#[cfg(test)]`. `[lint]`
+- One `thiserror` error enum, `MonoklError`. Compose failure modes with `#[from]`/`#[source]`; no `String`-message variant when a structured one is possible. File I/O failures are `FileIoError` ([ADR 0001](docs/adr/0001-file-io-error-lives-in-monokl.md)), and a value type may own its parse error (`DigestParseError`). `[convention]`
+- `LanguageAnalyzer` implementations return fully owned data. No arena-borrowed AST node or parser-allocator lifetime in any field of `FileAnalysis`. `[type]`
+- `camino::Utf8Path`/`Utf8PathBuf` wherever a path appears, except where the path may not be UTF-8 (`MonoklError::NonUtf8Path` holds a `PathBuf`). `[convention]`
+- `FxHashMap`/`FxHashSet` for internal hot-path maps; `BTreeMap` for anything serialized, because output order must be deterministic. `[convention]`
+- Core result types are not `Serialize`; wire shapes live in the output layer. See [`08-library-session-api.md`](docs/spec/08-library-session-api.md#9-plumbing-and-porcelain-two-crates). `[convention]`
+- No caps or pre-rendered truncation strings in core. Counts only (`items_returned`/`items_total`); the output layer renders the marker. `[convention]`
+- `unsafe_code` is denied workspace-wide. `[lint]`
 
 ## Rust style
 
 Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (control flow, matching, naming), `rust-types` (public type checklist, "wire or don't define"), `rustdoc` (doc comment format), `adr`.
 
-- `pub(crate)` for implementation modules; `pub` only for the consumer API.
-- No wildcard `_` arm on enums this crate owns; a compile error on a new variant is the point.
-- Code never cites spec, criterion or plan IDs (`SPEC-001`, `AC-007`, `T-009`). Specs change; the code says what it guarantees in its own words, and tests name the behavior they prove.
+- `pub(crate)` for implementation modules; `pub` only for the consumer API. Every module is `pub` today because the library API is not designed yet, so none of it is stable before 1.0. `[convention]`
+- No wildcard `_` arm on enums this crate owns; a compile error on a new variant is the point. Clippy cannot scope this lint to owned enums, so it is not enabled. `[convention]`
+- Code never cites spec, criterion or plan IDs (`SPEC-001`, `AC-007`, `T-009`). Specs change; the code says what it guarantees in its own words, and tests name the behavior they prove. `[convention]`
 
 ## Testing
 

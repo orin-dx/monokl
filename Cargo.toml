@@ -57,11 +57,11 @@ thiserror = "2"
 miette = { version = "7.6", features = ["fancy"] }
 
 # Serde
-serde = { version = "1.0", features = ["derive"] }
+serde = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 # Core data
-camino = { version = "1.2", features = ["serde1"] }
+camino = "1.2"
 rustc-hash = "2.1"
 dashmap = "6.1"
 blake3 = "1"

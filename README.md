@@ -88,7 +88,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
 | `--max-tokens N` | 20,000 | Most tokens across the blocks the printed rows cover |
 | `--max-bytes N` | 2 MiB | Most bytes across the blocks the printed rows cover |
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`) |
-| `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude |
+| `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
 | `--language L` | all | Search one language only: `typescript`, `javascript`, chosen by file extension: `.ts .tsx .mts .cts` or `.js .jsx .mjs .cjs` (`rust` and `python` are accepted but match nothing yet) |
 
 ## Errors and exit codes

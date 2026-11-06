@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::budget::{Budget, apply_budget};
 use crate::error::MonoklError;
-use crate::output::agent::{ErrorContext, ToDomainError, render_projection};
+use crate::output::agent::{ToDomainError, render_projection};
 use crate::pipeline::{SearchRequest, search};
 use crate::text_search::DEFAULT_MAX_FILES;
 use crate::types::{Diagnostic, DiagnosticKind, Language};
@@ -45,7 +45,7 @@ struct SearchArgs {
     /// Searches test files too.
     #[arg(long)]
     tests: bool,
-    /// Searches hidden files and files that .gitignore or .ignore would exclude.
+    /// Searches hidden files and files that .gitignore or .ignore (in the search path or its parents) would exclude.
     #[arg(long)]
     no_ignore: bool,
     /// Searches only this language.
@@ -152,7 +152,7 @@ fn relativize(path: &mut Utf8PathBuf, base: &Utf8PathBuf) {
 }
 
 fn error_text(error: &MonoklError) -> String {
-    error.to_domain_error(ErrorContext { command: "search" }).render()
+    error.to_domain_error().render()
 }
 
 #[cfg(test)]

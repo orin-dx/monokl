@@ -29,6 +29,3 @@ pub mod rank;
 pub mod text_search;
 pub mod tokens;
 pub mod types;
-
-#[cfg(test)]
-mod tests_types;
