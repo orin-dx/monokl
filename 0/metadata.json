@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M6S1V954JKNMWF41X8PGXSSD",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-06T18:27:48.2135Z",
+  "branch": "chore/evidence-guards",
+  "checkpoints_count": 14,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "ec9eff64a0dd",
+  "checkpoint_transcript_start": 16506,
+  "transcript_lines_at_start": 16506,
+  "compact_transcript_start": 1144,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 465,
+    "cache_read_tokens": 1852378,
+    "output_tokens": 359,
+    "api_call_count": 2
+  },
+  "redaction": {
+    "replacements": 52,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 59
+  },
+  "summary": {
+    "intent": "Stage and commit edits to a template and AGENTS.md as part of a development session.",
+    "outcome": "The template and AGENTS.md changes were staged and committed with a signed commit. The transcript shows only the tool calls, not their results, so success is not confirmed.",
+    "learnings": {
+      "repo": [
+        "The repo has an AGENTS.md file that is maintained alongside templates, so the two are changed together.",
+        "Commits are expected to be signed."
+      ],
+      "code": [],
+      "workflow": [
+        "Staging and committing were done as two separate steps, which keeps the staged set explicit before the signed commit.",
+        "Signed commits depend on the signing setup working in the environment."
+      ]
+    },
+    "friction": [
+      "The transcript has no tool output, so it is unknown whether the commit succeeded or hit signing problems."
+    ],
+    "open_items": [
+      "Confirm the signed commit was created and the signature verifies.",
+      "The transcript does not say what changed in the template or AGENTS.md, so any follow-up work is unknown."
+    ]
+  }
+}
