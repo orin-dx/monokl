@@ -1,14 +1,10 @@
 # Error Taxonomy — Semantic Model
 
 Source: `docs/spec/01-core-architecture.md` §3 (error.rs), verbatim enum at lines 190–252.
-`crates/monokl/src/error.rs` and `file_io.rs` exist and implement part of this enum; the rest is **normative**, not
-descriptive. Reconcile against the source, and treat deviating from the enum below as a spec change, not an
-implementation detail.
-
-The enum shown is already the **post-research-correction** state: `InvalidGitRef`/`Git`/
-`SymlinkRejected`/`FileTooLarge` were added late (Part 3 constructs all four but an earlier
-draft never declared them — a compile-breaking gap). See "Removed variants" below for what
-was cut in the same pass.
+`crates/monokl/src/error.rs` and `file_io.rs` hold the enum below, which is the part of the spec's enum that code
+constructs. The variants the spec declares for unbuilt modules (cache, git scope, I/O safety) are not in the code; see
+"Removed variants" below. The code is authoritative; the spec text for the missing variants is the design to build from
+when the module lands.
 
 ## `MonoklError`
 
@@ -22,15 +18,6 @@ pub enum MonoklError {
     RegexBuild(#[from] grep_regex::Error),
     NonUtf8Path { path: std::path::PathBuf },
     TooManyTerms { count: usize, limit: usize },
-    TokenizerInit,
-    Json(#[from] serde_json::Error),
-    PathOutsideRoot { path: Utf8PathBuf },
-    StaleDiskCache,
-    InvalidGitRef { ref_: String, reason: &'static str },
-    Git { operation: &'static str, message: String },
-    SymlinkRejected { path: Utf8PathBuf },
-    FileTooLarge { path: Utf8PathBuf, size: u64, cap: u64 },
-    LockPoisoned { context: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, MonoklError>;
@@ -41,30 +28,23 @@ non-breaking. `miette::Diagnostic` derive is present whenever the `miette` featu
 `cli` always pulls in (`cli = ["dep:clap", "miette"]`) — i.e. every CLI build has it, whether or
 not anything actually renders it (see gap 5).
 
-`FileIoError` (`io_errors` crate, §"types.rs" cross-ref, 01-core-architecture.md:2959) has its
-own `#[non_exhaustive]` enum: `Read`/`Write`/`CreateDir`/`Remove { path: Utf8PathBuf, #[source]
-source: io::Error }`. `MonoklError::Io` wraps it transparently via `#[from]`.
+`FileIoError` (`file_io.rs`, ADR 0001) has its own `#[non_exhaustive]` enum with one variant today:
+`Read { path: Utf8PathBuf, #[source] source: io::Error }`. `MonoklError::Io` wraps it transparently via `#[from]`.
 
 ## When each variant fires
 
 | Variant | Fires when | Construction site(s) |
 |---|---|---|
-| `Io` | Any `FileIoError::{read,write,create_dir,remove}` — filesystem op failed | Root canonicalization, cache load/write, `read_to_string_capped`'s underlying read; auto via `#[from]` on any `?` |
+| `Io` | `FileIoError::read` — a file read failed | The text searcher and the analyzer's file read; auto via `#[from]` on any `?` |
 | `Walk` | `ignore::WalkBuilder` iterator yields `Err` mid-traversal (perm denied, loop, etc.) | `text_search::search_files` raises it only for the root itself (missing, not a directory, cannot be listed); errors below the root go in `TextSearchResult::unreadable`/`walk_errors_without_path` (05 §18). Index-build walker (01-core:2206), 03-multi:2033. `path` is the walk root, not the failing entry |
 | `RegexBuild` | `RegexMatcherBuilder::build()` fails to compile a query pattern | `text_search::search_files` compiles each pattern alone, then all together, before walking; auto via `#[from]`/`?`. The per-term highlighting compile must fail the same way (05 §18, #7) — see gap 3 |
 | `NonUtf8Path` | `Utf8PathBuf::from_path_buf` fails at a canonicalization boundary | `search` stage 3 (root canon.), `dependents` (file+root canon.), `pipeline::session::canonicalize_utf8`/`current_dir` fallback (03-multi:1289-1292). NOT raised mid-walk — see gap 4 |
 | `TooManyTerms` | Query term count exceeds `LIMIT: usize = 64` | Query parse, `parse(&opts.query)` (01-core:831) |
-| `TokenizerInit` | `tiktoken_rs::o200k_base()` fails to build the BPE tokenizer | `budget`/token counting (01-core:1240). No fields — unparameterized init failure |
-| `Json` | `serde_json::{from_str,to_string}` fails | `load_cache`'s `serde_json::from_str::<CacheFile>(&content)` (01-core:1602) when `cache.json` isn't valid JSON. Auto via `#[from]`. Hard-fail path in gap 1 |
-| `PathOutsideRoot` | Canonicalized file path doesn't `starts_with` the canonicalized workspace root | `dependents`: `!abs_file.starts_with(&abs_root)` (01-core:2332). Enforced per-command, not centralized in `io_safety.rs` (03-multi:2131) |
-| `StaleDiskCache` | `cache.version != CACHE_VERSION \|\| cache.config_hash != config_hash` | `load_cache` (01-core:1603-1604). Caught by `init()`'s own match arm (01-core:1572) when reached via `init()` — but `persist::flush`'s fallback also calls `load_cache` (01-core:1657) with no interception at all, so this variant is NOT unconditionally caller-invisible (see gap 2; SPEC-001 AC-013B) |
-| `InvalidGitRef` | `validate_git_ref`: ref is empty, starts with `-` (git-option-injection guard), or contains a char outside the allowed safe set | `git_scope::validate_git_ref` (03-multi:1365-1385), three `reason` strings |
-| `Git` | Any `gix` operation fails, tagged with a static `operation` label | `merge_base` (`operation: "merge-base"`, 03-multi:1397), `blob_at_ref_in_repo` (03-multi:1540), diff `changes()` (03-multi:1428) |
-| `SymlinkRejected` | `symlink_metadata(path).file_type().is_symlink()` is true | `io_safety::read_to_string_capped` (03-multi:2113-2114) is the only place this variant is ever constructed — and that helper has zero call sites anywhere in the corpus (SPEC-001 AC-016, verified against 07-edge-cases Part 3 findings #2 and #16). The Part 3 prose claiming it guards search/inspect/extract/refs/definition (03-multi:2131) is refuted, not just unconfirmed: `extract` and the `refs`/`definition` path use raw `fs::read_to_string` instead. This variant is currently unconstructible via any shown command path, not merely narrowly reachable |
-| `FileTooLarge` | `meta.len() > MAX_INSPECTABLE_FILE_SIZE` (50 MiB) | Same helper as `SymlinkRejected`, same total unreachability (03-multi:2117-2122; SPEC-001 AC-017) |
-| `LockPoisoned` | `Mutex::lock()` returns `Err` — a prior panic left the lock's data possibly torn | `analysis::persist::CacheState` (01-core:1560), `pipeline::session::WorkspaceSession::standard_index` (03-multi:1248). Deliberately NOT auto-recovered via `PoisonError::into_inner()` — comment at 01-core:1556-1559 explains recovering would launder torn state back into use |
 
 ## Known contract gaps — must be resolved, not ported as-is
+
+Gaps 1 and 2 concern the disk cache, which is not built: `Json` and `StaleDiskCache` are not in the enum above, and
+they return with `persist.rs`.
 
 These are audit findings (`docs/spec/07-edge-cases-and-failure-modes.md`, Part 1) where the
 spec text produces two different outcomes for the same underlying failure condition. Do not
@@ -144,10 +124,14 @@ silently pick one when implementing — spec@1 for this subsystem must state the
 
 ## Removed variants — caller contract
 
-An earlier draft also declared `Parse { path, details: String }` and
-`Query { input, message: String }`. Both were removed — nothing in the spec ever constructs
-either: parse failures surface via `FileAnalysis::had_parse_errors` + `tracing::warn!` (§17),
-and query failures only ever raise `TooManyTerms`. Removal was a clean cut, not a breaking one,
+Two earlier spec drafts declared `Parse { path, details: String }` and `Query { input, message: String }`; both were
+removed because nothing constructs them: parse failures surface via `FileAnalysis::had_parse_errors` +
+`tracing::warn!` (§17), and query failures only ever raise `TooManyTerms`.
+
+The code also lacks the variants whose only construction sites are in unbuilt modules: `Json`, `StaleDiskCache` and
+`LockPoisoned` (cache), `InvalidGitRef` and `Git` (git-scoped queries), `SymlinkRejected` and `FileTooLarge` (I/O
+safety), `PathOutsideRoot` (`dependents`) and `TokenizerInit` (`tiktoken_rs::o200k_base_singleton` cannot fail), and
+`FileIoError`'s `Write`, `CreateDir` and `Remove`. The spec text for each stays the design. Removal is a clean cut,
 because `#[non_exhaustive]` already forces external `match` arms to carry a wildcard.
 
 **Contract:** don't reintroduce a variant speculatively. A new `MonoklError` variant earns its

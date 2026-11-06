@@ -13,7 +13,7 @@ No cache code exists yet: `crates/monokl` has no cache or persist module. Re-poi
 2. **On-disk** — `<root>/.monokl/cache.json`: `CacheFile { version: u32, config_hash: String,
    entries: BTreeMap<Utf8PathBuf, PersistedFileAnalysis> }` (§16). Gated on `version ==
    CACHE_VERSION` (`2`) and `config_hash == "monokl-{CARGO_PKG_VERSION}-oxc-0.128-lang-ts-{tsconfig_blake3_or_'no-tsconfig'}"`
-   — an upgrade or tsconfig change invalidates the file. Mismatch → `MonoklError::StaleDiskCache`,
+   — an upgrade or tsconfig change invalidates the file. Mismatch → `MonoklError::StaleDiskCache` (a variant that returns with the cache; it is not in the code today),
    caught in `persist::init()` and treated as cold start, never propagated to the caller.
 
 ## Intended Invariant: ContentHash Is Authoritative
