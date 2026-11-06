@@ -1491,10 +1491,11 @@ use crate::types::DiagnosticKind;
 
 #[test]
 fn diagnostic_kind_lowercase_forms() {
-    let pairs: [(DiagnosticKind, &str); 3] = [
+    let pairs: [(DiagnosticKind, &str); 4] = [
         (DiagnosticKind::Degraded, "\"degraded\""),
         (DiagnosticKind::Skipped, "\"skipped\""),
         (DiagnosticKind::Warning, "\"warning\""),
+        (DiagnosticKind::LossyRead, "\"lossyread\""),
     ];
     for (variant, expected) in pairs {
         let s = serde_json::to_string(&variant).unwrap();
@@ -1507,13 +1508,14 @@ fn diagnostic_kind_lowercase_forms() {
 #[test]
 fn diagnostic_kind_variant_count_and_order_pinned() {
     let assert_shape = |k: DiagnosticKind| match k {
-        DiagnosticKind::Degraded | DiagnosticKind::Skipped | DiagnosticKind::Warning => {}
+        DiagnosticKind::Degraded | DiagnosticKind::Skipped | DiagnosticKind::Warning | DiagnosticKind::LossyRead => {}
     };
     assert_shape(DiagnosticKind::Degraded);
 
     assert_eq!(DiagnosticKind::Degraded as usize, 0);
     assert_eq!(DiagnosticKind::Skipped as usize, 1);
     assert_eq!(DiagnosticKind::Warning as usize, 2);
+    assert_eq!(DiagnosticKind::LossyRead as usize, 3);
 }
 
 use crate::types::Diagnostic;

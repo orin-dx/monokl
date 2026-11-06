@@ -55,8 +55,8 @@ pub struct TextSearchResult {
     pub files_total: u64,
     /// Whether `files_total` exceeded [`TextSearchOptions::max_files`], so some matching files have no hits stored.
     pub ceiling_hit: bool,
-    /// In walk order and each listed once, keyed like `hits`: files that could not be read or whose matching lines are
-    /// not UTF-8, directories that could not be listed, and ignore files that could not be read or parsed.
+    /// In walk order and each listed once, keyed like `hits`: files that could not be read, directories that could not
+    /// be listed, and ignore files that could not be read or parsed.
     pub unreadable: Vec<Utf8PathBuf>,
     /// How many regular files were skipped because their path is not UTF-8.
     pub non_utf8_paths: u64,
@@ -72,8 +72,9 @@ pub struct TextSearchResult {
 ///
 /// Each directory's entries are visited in byte order of their file names, so the result is the same on every run.
 /// Symbolic links are neither followed nor searched. Binary files (any NUL byte) are skipped silently, even when a
-/// matching line is also not UTF-8. A file that cannot be read, or whose matching line is not UTF-8, and any walk
-/// failure below `root`, go in [`unreadable`](TextSearchResult::unreadable) and the search continues. No patterns
+/// matching line is also not UTF-8. A matching line that is not UTF-8 is a hit with each invalid byte sequence
+/// replaced by U+FFFD. A file that cannot be read, and any walk failure below `root`, go in
+/// [`unreadable`](TextSearchResult::unreadable) and the search continues. No patterns
 /// means nothing to search: once `root` is checked, the result is empty and nothing is walked.
 ///
 /// # Errors
@@ -222,14 +223,13 @@ fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path)
     match searcher.search_path(matcher, path.as_std_path(), &mut sink) {
         Err(_) => FileOutcome::Unreadable,
         Ok(()) if sink.binary => FileOutcome::Binary,
-        Ok(()) if sink.not_utf8 => FileOutcome::Unreadable,
         Ok(()) => FileOutcome::Lines(sink.hits),
     }
 }
 
 /// Collects matching lines, and stops at the first sign of binary data so the caller can discard the whole file,
-/// including lines matched before the NUL byte was reached. A matching line that is not UTF-8 does not stop the
-/// search, so a NUL later in the file still marks it binary.
+/// including lines matched before the NUL byte was reached. A matching line that is not UTF-8 is kept with its invalid
+/// bytes replaced by U+FFFD, and does not stop the search, so a NUL later in the file still marks it binary.
 ///
 /// The searcher strips only the `\n` before matching, so a line ending in `\r\n` is matched again here against its
 /// text without the terminator: a pattern always sees exactly the text a hit reports.
@@ -241,7 +241,6 @@ struct LineCollector<'m> {
     line_buf: Vec<u8>,
     hits: Vec<LineHit>,
     binary: bool,
-    not_utf8: bool,
 }
 
 impl<'m> LineCollector<'m> {
@@ -252,7 +251,6 @@ impl<'m> LineCollector<'m> {
             line_buf: Vec::new(),
             hits: Vec::new(),
             binary: false,
-            not_utf8: false,
         }
     }
 
@@ -267,10 +265,7 @@ impl<'m> LineCollector<'m> {
         let line_number = line_number
             .and_then(|line_number| usize::try_from(line_number).ok())
             .ok_or_else(|| io::Error::other("matched line has no usable line number"))?;
-        match std::str::from_utf8(text) {
-            Ok(text) => self.hits.push(LineHit { line_number, text: text.to_owned() }),
-            Err(_) => self.not_utf8 = true,
-        }
+        self.hits.push(LineHit { line_number, text: String::from_utf8_lossy(text).into_owned() });
         Ok(())
     }
 
@@ -739,16 +734,6 @@ mod tests {
     }
 
     #[test]
-    fn walk_order_is_by_file_name_within_each_directory() {
-        // "a" sorts before "a.ts", so the directory's contents come first, unlike a sort of the full path strings.
-        let files: &[(&str, &[u8])] =
-            &[("b.ts", b"alpha \xff\n"), ("a/x.ts", b"alpha \xff\n"), ("a.ts", b"alpha \xff\n")];
-        let (_dir, root) = tree(files);
-        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.unreadable, [root.join("a/x.ts"), root.join("a.ts"), root.join("b.ts")]);
-    }
-
-    #[test]
     fn the_files_kept_under_the_ceiling_are_the_first_in_walk_order() {
         let (_dir, root) = tree(&[("b.ts", b"alpha\n"), ("a/x.ts", b"alpha\n"), ("a.ts", b"alpha\n")]);
         let result = search_files(&root, &["alpha"], &with_max_files(2)).unwrap();
@@ -764,14 +749,20 @@ mod tests {
         assert_eq!(search_files(&root, &["alpha"], &with_max_files(2)).unwrap(), result);
     }
 
+    #[cfg(unix)]
     #[test]
     fn unreadable_files_are_listed_in_walk_order() {
-        let (_dir, root) = tree(&[
-            ("z.ts", b"alpha \xff\n"),
-            ("m/n.ts", b"alpha \xfe\n"),
-            ("b.ts", b"alpha \xff\n"),
-            ("a.ts", b"alpha\n"),
-        ]);
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) =
+            tree(&[("z.ts", b"alpha\n"), ("m/n.ts", b"alpha\n"), ("b.ts", b"alpha\n"), ("a.ts", b"alpha\n")]);
+        for name in ["z.ts", "m/n.ts", "b.ts"] {
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        if fs::read(root.join("b.ts")).is_ok() {
+            // Running as root: permissions cannot make the file unreadable.
+            return;
+        }
         let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
         assert_eq!(
             result,
@@ -817,18 +808,10 @@ mod tests {
     }
 
     #[test]
-    fn files_past_the_ceiling_are_still_searched_for_unreadable_lines() {
+    fn files_past_the_ceiling_count_when_a_matching_line_is_not_utf8() {
         let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.ts", b"alpha \xff\n"), ("c.ts", b"alpha\n")]);
         let result = search_files(&root, &["alpha"], &with_max_files(0)).unwrap();
-        assert_eq!(
-            result,
-            TextSearchResult {
-                files_total: 2,
-                ceiling_hit: true,
-                unreadable: vec![root.join("b.ts")],
-                ..TextSearchResult::default()
-            }
-        );
+        assert_eq!(result, TextSearchResult { files_total: 3, ceiling_hit: true, ..TextSearchResult::default() });
     }
 
     #[test]
@@ -1053,15 +1036,17 @@ mod tests {
     }
 
     #[test]
-    fn invalid_utf8_in_a_matching_line_makes_the_file_unreadable_and_drops_its_hits() {
+    fn invalid_utf8_in_a_matching_line_is_a_hit_with_the_bytes_replaced() {
         let (_dir, root) = tree(&[("a.ts", b"alpha\nalpha \xff\n"), ("b.ts", b"alpha\n")]);
         let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
         assert_eq!(
             result,
             TextSearchResult {
-                hits: hits(&root, &[("b.ts", vec![hit(1, "alpha")])]),
-                files_total: 1,
-                unreadable: vec![root.join("a.ts")],
+                hits: hits(
+                    &root,
+                    &[("a.ts", vec![hit(1, "alpha"), hit(2, "alpha \u{FFFD}")]), ("b.ts", vec![hit(1, "alpha")])]
+                ),
+                files_total: 2,
                 ..TextSearchResult::default()
             }
         );

@@ -57,7 +57,7 @@ help[1]: showing 3 of 10; raise the cap or refine the query with +term or -term
 
 Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
 
-To read a row's code, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, syntax errors and an empty query are reported as `help` lines under the table.
+To read a row's code, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, files read lossily because they are not valid UTF-8, syntax errors and an empty query are reported as `help` lines under the table.
 
 ## Writing a query
 

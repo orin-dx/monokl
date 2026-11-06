@@ -95,6 +95,24 @@ fn a_deeply_nested_file_is_searched_like_any_other() {
 }
 
 #[test]
+fn files_that_are_not_valid_utf8_are_searched_and_reported_as_read_lossily() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("legacy.ts"), b"// caf\xe9\nexport function needle() {}\n").unwrap();
+    std::fs::write(dir.path().join("modern.ts"), "export function needle() {}\n").unwrap();
+
+    let output = monokl_in(dir.path(), &["search", "needle", "."]);
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4, "got: {text}");
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
+    assert!(lines[1].starts_with("  legacy.ts,2,2,function,function needle(),1,"), "got: {text}");
+    assert!(lines[2].starts_with("  modern.ts,1,1,function,function needle(),2,"), "got: {text}");
+    assert_eq!(lines[3], "help[1]: \"1 file read lossily: invalid UTF-8 replaced with U+FFFD: legacy.ts\"");
+}
+
+#[test]
 fn a_missing_query_is_a_usage_error() {
     let output = monokl(&["search"]);
     assert_eq!(output.status.code(), Some(2));

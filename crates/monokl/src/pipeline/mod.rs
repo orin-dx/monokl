@@ -204,8 +204,19 @@ fn canonicalize(root: &Utf8Path) -> Result<Utf8PathBuf> {
     Utf8PathBuf::from_path_buf(path).map_err(|path| MonoklError::NonUtf8Path { path })
 }
 
-fn read_source(path: &Utf8Path) -> io::Result<String> {
-    std::fs::read_to_string(path)
+/// A file's text, and whether getting it meant replacing bytes that are not UTF-8.
+struct Source {
+    text: String,
+    lossy: bool,
+}
+
+/// Reads `path`, replacing each invalid UTF-8 sequence with U+FFFD so the file is still searched and extracted.
+fn read_source(path: &Utf8Path) -> io::Result<Source> {
+    let bytes = std::fs::read(path)?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => Source { text, lossy: false },
+        Err(err) => Source { text: String::from_utf8_lossy(err.as_bytes()).into_owned(), lossy: true },
+    })
 }
 
 /// Whether `matcher` matches `text`. Matching in memory cannot fail, so an error counts as no match.
@@ -218,7 +229,7 @@ fn skipped(path: Option<&Utf8Path>, message: impl Into<String>) -> Diagnostic {
 }
 
 fn unreadable_diagnostic(path: &Utf8Path) -> Diagnostic {
-    skipped(Some(path), "file could not be read, or a matching line is not UTF-8")
+    skipped(Some(path), "file could not be read")
 }
 
 /// Turns what text search could not read into diagnostics: one per unreadable path, then one per non-zero count.
@@ -258,7 +269,7 @@ fn retrieve_blocks(
     ctx: &FileContext<'_>,
     path: &Utf8Path,
     hits: &[LineHit],
-    read: &dyn Fn(&Utf8Path) -> io::Result<String>,
+    read: &dyn Fn(&Utf8Path) -> io::Result<Source>,
     out: &mut Vec<(CodeBlock, Vec<String>)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -266,14 +277,21 @@ fn retrieve_blocks(
     if ctx.language.is_some_and(|language| !has_language_extension(language, path)) {
         return;
     }
-    let source = match read(path) {
+    let Source { text, lossy } = match read(path) {
         Ok(source) => source,
         Err(err) => {
             diagnostics.push(skipped(Some(path), format!("could not read source: {err}")));
             return;
         }
     };
-    let analysis = match analyzer.analyze(path, Box::new(move || Ok(source))) {
+    if lossy {
+        diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::LossyRead,
+            path: Some(path.to_owned()),
+            message: "invalid UTF-8 replaced with U+FFFD".to_owned(),
+        });
+    }
+    let analysis = match analyzer.analyze(path, Box::new(move || Ok(text))) {
         Ok(analysis) => analysis,
         Err(err) => {
             diagnostics.push(skipped(Some(path), format!("could not analyze: {err}")));
@@ -837,7 +855,7 @@ mod tests {
         let ctx = FileContext { registry: &registry, plan: &plan, matchers: &matchers, language: None };
         let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
-        let failing = |_: &Utf8Path| Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        let failing = |_: &Utf8Path| -> io::Result<Source> { Err(io::Error::from(io::ErrorKind::PermissionDenied)) };
         retrieve_blocks(&ctx, Utf8Path::new("/r/a.ts"), &hits, &failing, &mut out, &mut diagnostics);
         assert!(out.is_empty());
         assert_eq!(
@@ -854,7 +872,7 @@ mod tests {
             walk_errors_without_path: 3,
             ..TextSearchResult::default()
         };
-        let unreadable = "file could not be read, or a matching line is not UTF-8";
+        let unreadable = "file could not be read";
         assert_eq!(
             summary(&text_search_diagnostics(&found)),
             [
@@ -867,25 +885,47 @@ mod tests {
         assert!(text_search_diagnostics(&TextSearchResult::default()).is_empty());
     }
 
+    const LOSSY: &str = "invalid UTF-8 replaced with U+FFFD";
+
     #[test]
-    fn file_with_a_non_utf8_matching_line_is_reported_unreadable() {
+    fn file_with_a_non_utf8_matching_line_is_searched_and_reported_read_lossily() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), b"alpha \xff\n").unwrap();
         std::fs::write(dir.path().join("b.ts"), b"alpha\n").unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
         let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
-        assert_eq!(files(&result, &root), ["b.ts"]);
+        assert_eq!(files(&result, &root), ["a.ts", "b.ts"]);
+        let codes: Vec<&str> = result.ranked.iter().map(|ranked| ranked.block.code.as_str()).collect();
+        assert_eq!(codes, ["alpha \u{FFFD}", "alpha"]);
+        assert_eq!(result.files_total, 2);
         assert_eq!(
             summary(&result.diagnostics),
-            [(
-                DiagnosticKind::Skipped,
-                Some(root.join("a.ts").as_str()),
-                "file could not be read, or a matching line is not UTF-8"
-            )]
+            [(DiagnosticKind::LossyRead, Some(root.join("a.ts").as_str()), LOSSY)]
         );
     }
 
-    const UNREADABLE: &str = "file could not be read, or a matching line is not UTF-8";
+    #[test]
+    fn file_with_invalid_utf8_outside_the_matching_line_is_searched_and_reported_read_lossily() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"// caf\xe9\nalpha\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(result.ranked[0].block.code, "// caf\u{FFFD}\nalpha");
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::LossyRead, Some(root.join("a.ts").as_str()), LOSSY)]
+        );
+    }
+
+    #[test]
+    fn a_valid_utf8_file_is_not_reported_read_lossily() {
+        let (_dir, root) = tree(&[("a.ts", "caf\u{e9} alpha\n")]);
+        let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(result.ranked[0].block.code, "caf\u{e9} alpha");
+        assert_eq!(summary(&result.diagnostics), []);
+    }
 
     #[test]
     fn an_excluded_pass_is_not_run_when_nothing_matches_a_positive_term() {
@@ -899,31 +939,25 @@ mod tests {
     }
 
     #[test]
-    fn a_file_unreadable_only_for_the_excluded_terms_gets_one_diagnostic() {
+    fn a_file_with_a_non_utf8_line_matching_only_the_excluded_term_is_excluded_without_a_diagnostic() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), b"alpha\n").unwrap();
         std::fs::write(dir.path().join("b.ts"), b"gamma \xff\n").unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
         let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(
-            summary(&result.diagnostics),
-            [(DiagnosticKind::Skipped, Some(root.join("b.ts").as_str()), UNREADABLE)]
-        );
+        assert_eq!(summary(&result.diagnostics), []);
     }
 
     #[test]
-    fn a_file_unreadable_for_both_the_main_and_the_excluded_terms_gets_one_diagnostic() {
+    fn a_file_with_a_non_utf8_line_matching_the_main_and_the_excluded_terms_is_excluded() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.ts"), b"alpha\n").unwrap();
         std::fs::write(dir.path().join("b.ts"), b"alpha gamma \xff\n").unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
         let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(
-            summary(&result.diagnostics),
-            [(DiagnosticKind::Skipped, Some(root.join("b.ts").as_str()), UNREADABLE)]
-        );
+        assert_eq!(summary(&result.diagnostics), []);
     }
 
     #[test]

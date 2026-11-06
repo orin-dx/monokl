@@ -266,6 +266,9 @@ pub enum DiagnosticKind {
     Degraded,
     Skipped,
     Warning,
+    /// The file held bytes that are not UTF-8, so it was searched and extracted with each invalid sequence replaced by
+    /// U+FFFD.
+    LossyRead,
 }
 
 /// A non-fatal problem reported alongside a command's results.

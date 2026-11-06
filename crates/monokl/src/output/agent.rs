@@ -216,6 +216,7 @@ fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
             DiagnosticKind::Degraded => "degraded",
             DiagnosticKind::Skipped => "skipped",
             DiagnosticKind::Warning => "warned",
+            DiagnosticKind::LossyRead => "read lossily",
         });
         let paths = groups.entry((d.message.as_str(), verb)).or_default();
         paths.extend(d.path.as_deref().map(Utf8Path::as_str));
@@ -405,6 +406,26 @@ mod projection_tests {
             })
             .collect();
         assert_eq!(diagnostic_lines(&diagnostics), ["5 files skipped: unreadable: a.ts, b.ts, c.ts, ...and 2 more"]);
+    }
+
+    #[test]
+    fn diagnostic_lines_count_files_read_lossily_and_name_the_first_three() {
+        let diagnostics: Vec<Diagnostic> = ["d.ts", "b.ts", "a.ts", "c.ts"]
+            .into_iter()
+            .map(|path| Diagnostic {
+                kind: DiagnosticKind::LossyRead,
+                path: Some(path.into()),
+                message: "invalid UTF-8 replaced with U+FFFD".to_owned(),
+            })
+            .collect();
+        assert_eq!(
+            diagnostic_lines(&diagnostics),
+            ["4 files read lossily: invalid UTF-8 replaced with U+FFFD: a.ts, b.ts, c.ts, ...and 1 more"]
+        );
+        assert_eq!(
+            diagnostic_lines(&diagnostics[..1]),
+            ["1 file read lossily: invalid UTF-8 replaced with U+FFFD: d.ts"]
+        );
     }
 
     #[test]
