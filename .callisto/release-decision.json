@@ -3,7 +3,7 @@
   "entries": [
     {
       "package": "cargo/monokl",
-      "targetVersion": "0.3.0",
+      "targetVersion": "0.4.0",
       "reasons": [
         {
           "kind": "changeset"
@@ -11,5 +11,5 @@
       ]
     }
   ],
-  "digest": "a7801da23f13b1840c603cf0e06f8f6127adbe7f0d08bd6e67fd7b18811c4de6"
+  "digest": "a4e134cb6989c66bfd14c2e04f657ffe07d10f3882dfa05d52ec568dad7a62be"
 }
