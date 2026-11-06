@@ -1,4 +1,4 @@
-//! Monokl's core data types: symbols, dependencies, per-language data, search results, and command options.
+//! Monokl's core data types: symbols, dependencies, per-language data and search results.
 use camino::Utf8PathBuf;
 
 /// The classification of a symbol.
@@ -58,30 +58,14 @@ pub enum BindingKind {
     Default,
     Namespace,
     Glob,
-    NamespaceWide,
-}
-
-/// The anchor of a resolved Rust module path.
-///
-/// `Selff` stands for `self`, which is a keyword and cannot name a variant.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum RustPathAnchor {
-    Crate,
-    Super,
-    Selff,
-    Extern(String),
 }
 
 /// The resolved target of a dependency statement.
 ///
-/// No analyzer constructs `RustPath` or `Namespace` yet.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DependencyTarget {
     File { specifier: String, resolved: Option<Utf8PathBuf>, is_relative: bool },
-    RustPath { segments: Vec<String>, anchor: RustPathAnchor, resolved: Option<Utf8PathBuf> },
-    Namespace { segments: Vec<String>, is_static: bool, alias: Option<String> },
 }
 
 /// A single binding introduced by a [`DependencyRecord`].
@@ -126,22 +110,6 @@ pub struct JsxElementEntry {
     pub attributes: Vec<JsxAttribute>,
 }
 
-/// Rust-specific analysis output, empty until the Rust analyzer lands.
-#[derive(Debug, Clone, Default)]
-pub struct RustData {}
-
-/// Python-specific analysis output, empty until the Python analyzer lands.
-#[derive(Debug, Clone, Default)]
-pub struct PythonData {}
-
-/// Go-specific analysis output, empty until the Go analyzer lands.
-#[derive(Debug, Clone, Default)]
-pub struct GoData {}
-
-/// Java-specific analysis output, empty until the Java analyzer lands.
-#[derive(Debug, Clone, Default)]
-pub struct JavaData {}
-
 /// TypeScript-specific analysis output.
 #[derive(Debug, Clone, Default)]
 pub struct TsData {
@@ -155,21 +123,19 @@ pub struct TsData {
 #[non_exhaustive]
 pub enum LangData {
     Ts(TsData),
-    Rust(RustData),
-    Python(PythonData),
-    Go(GoData),
-    Java(JavaData),
 }
 
 impl LangData {
-    /// Returns the TypeScript data if this is [`LangData::Ts`].
-    pub fn ts(&self) -> Option<&TsData> {
-        if let LangData::Ts(ts) = self { Some(ts) } else { None }
+    /// Returns the TypeScript data.
+    pub fn ts(&self) -> &TsData {
+        match self {
+            LangData::Ts(ts) => ts,
+        }
     }
 
-    /// Returns the JSX elements for TypeScript data, or an empty slice for any other language.
+    /// Returns the JSX elements of the TypeScript data.
     pub fn jsx_elements(&self) -> &[JsxElementEntry] {
-        self.ts().map_or(&[], |ts| ts.jsx_elements.as_slice())
+        &self.ts().jsx_elements
     }
 }
 
@@ -245,53 +211,6 @@ pub enum Language {
     Python,
 }
 
-/// Resource limits for the search command.
-///
-/// The [`Default`] values do not apply when deserializing: `max_bytes` and `max_candidates` are required, and a
-/// missing `max_results` or `max_tokens` becomes `None`.
-#[derive(Debug, Clone)]
-pub struct SearchLimits {
-    pub max_results: Option<usize>,
-    pub max_bytes: usize,
-    pub max_tokens: Option<usize>,
-    pub max_candidates: usize,
-}
-
-impl Default for SearchLimits {
-    fn default() -> Self {
-        Self { max_results: Some(50), max_bytes: 2_097_152, max_tokens: Some(20_000), max_candidates: 1_000 }
-    }
-}
-
-/// Request options for the search command.
-///
-/// As with [`SearchLimits`], the [`Default`] values do not apply when deserializing; every field except `language`
-/// is required.
-#[derive(Debug, Clone)]
-pub struct SearchOptions {
-    pub query: String,
-    pub path: Utf8PathBuf,
-    pub allow_tests: bool,
-    pub no_gitignore: bool,
-    pub limits: SearchLimits,
-    pub exact: bool,
-    pub language: Option<Language>,
-}
-
-impl Default for SearchOptions {
-    fn default() -> Self {
-        Self {
-            query: String::new(),
-            path: Utf8PathBuf::new(),
-            allow_tests: false,
-            no_gitignore: false,
-            limits: SearchLimits::default(),
-            exact: false,
-            language: None,
-        }
-    }
-}
-
 /// The search command's response.
 #[derive(Debug, Clone)]
 pub struct SearchResponse {
@@ -301,63 +220,4 @@ pub struct SearchResponse {
     pub total_bytes: usize,
     pub total_tokens: usize,
     pub diagnostics: Vec<Diagnostic>,
-}
-
-/// The symbols command's response.
-#[derive(Debug, Clone)]
-pub struct SymbolsResult {
-    /// A `BTreeMap` so files serialize in a deterministic order.
-    pub files: std::collections::BTreeMap<Utf8PathBuf, Vec<SymbolEntry>>,
-    pub total_symbol_count: usize,
-    pub truncation_marker: Option<String>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-/// The dependents command's response.
-#[derive(Debug, Clone)]
-pub struct DependentsResult {
-    pub file: Utf8PathBuf,
-    pub dependents: Vec<Utf8PathBuf>,
-    pub imports: Vec<Utf8PathBuf>,
-    pub total_dependent_count: usize,
-    pub total_import_count: usize,
-    pub truncation_marker: Option<String>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-/// How a workspace locates its `tsconfig.json`.
-#[derive(Debug, Clone)]
-pub enum TsconfigMode {
-    Auto,
-    Manual(Utf8PathBuf),
-    Skip,
-}
-
-/// Options for building a workspace.
-#[derive(Debug, Clone)]
-pub struct WorkspaceOptions {
-    pub root: Utf8PathBuf,
-    pub tsconfig: TsconfigMode,
-}
-
-impl WorkspaceOptions {
-    /// Creates options for `root` with [`TsconfigMode::Auto`]; use [`with_tsconfig`](Self::with_tsconfig) to change it.
-    pub fn new(root: impl Into<Utf8PathBuf>) -> Self {
-        Self { root: root.into(), tsconfig: TsconfigMode::Auto }
-    }
-
-    /// Sets the tsconfig mode.
-    #[must_use]
-    pub fn with_tsconfig(mut self, mode: TsconfigMode) -> Self {
-        self.tsconfig = mode;
-        self
-    }
-}
-
-/// A request to extract a file, optionally limited to a line range.
-#[derive(Debug, Clone)]
-pub struct ExtractRequest {
-    pub file: Utf8PathBuf,
-    pub line_start: Option<usize>,
-    pub line_end: Option<usize>,
 }

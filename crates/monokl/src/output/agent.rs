@@ -5,12 +5,7 @@ use camino::Utf8Path;
 use michi::toon::Value;
 
 use crate::error::MonoklError;
-use crate::types::{Diagnostic, DiagnosticKind, SymbolKind, Visibility};
-
-/// The CLI command currently executing, so a recovery hint can name the right tool to retry.
-pub struct ErrorContext<'a> {
-    pub command: &'a str,
-}
+use crate::types::{Diagnostic, DiagnosticKind, SymbolKind};
 
 /// Converts a string into a TOON cell value.
 ///
@@ -61,7 +56,7 @@ mod cell_tests {
     }
 }
 
-/// Returns the same `camelCase` name that serde produces for a [`SymbolKind`].
+/// Returns the `camelCase` name of a [`SymbolKind`].
 pub fn symbol_kind_str(k: SymbolKind) -> &'static str {
     match k {
         SymbolKind::Function => "function",
@@ -82,22 +77,12 @@ pub fn symbol_kind_str(k: SymbolKind) -> &'static str {
     }
 }
 
-/// Returns the same `camelCase` name that serde produces for a [`Visibility`].
-pub fn visibility_str(v: Visibility) -> &'static str {
-    match v {
-        Visibility::Public => "public",
-        Visibility::Crate => "crate",
-        Visibility::Module => "module",
-        Visibility::Private => "private",
-    }
-}
-
 #[cfg(test)]
 mod kind_str_tests {
     use super::*;
 
     #[test]
-    fn symbol_kind_str_matches_serde_camel_case_form() {
+    fn symbol_kind_str_is_camel_case() {
         assert_eq!(symbol_kind_str(SymbolKind::Function), "function");
         assert_eq!(symbol_kind_str(SymbolKind::Method), "method");
         assert_eq!(symbol_kind_str(SymbolKind::Constructor), "constructor");
@@ -113,14 +98,6 @@ mod kind_str_tests {
         assert_eq!(symbol_kind_str(SymbolKind::Impl), "impl");
         assert_eq!(symbol_kind_str(SymbolKind::Macro), "macro");
         assert_eq!(symbol_kind_str(SymbolKind::Other), "other");
-    }
-
-    #[test]
-    fn visibility_str_matches_serde_camel_case_form() {
-        assert_eq!(visibility_str(Visibility::Public), "public");
-        assert_eq!(visibility_str(Visibility::Crate), "crate");
-        assert_eq!(visibility_str(Visibility::Module), "module");
-        assert_eq!(visibility_str(Visibility::Private), "private");
     }
 }
 
@@ -141,31 +118,6 @@ pub trait ToonProjection<const N: usize> {
     /// Returns hints rendered after the table.
     fn toon_hints(&self) -> Vec<michi::Hint> {
         Vec::new()
-    }
-}
-impl ToonProjection<9> for crate::types::SymbolsResult {
-    const TYPE_NAME: &'static str = "symbols";
-    const FIELDS: [&'static str; 9] =
-        ["file", "name", "kind", "line", "signature", "owner", "traitImpl", "visibility", "kindDetail"];
-
-    fn toon_rows(&self) -> Vec<[Value; 9]> {
-        let mut rows = Vec::new();
-        for (file, entries) in &self.files {
-            for e in entries {
-                rows.push([
-                    cell(file.as_str()),
-                    cell(&e.name),
-                    cell(symbol_kind_str(e.kind)),
-                    Value::from(e.line),
-                    opt_cell(e.signature.as_deref()),
-                    opt_cell(e.owner.as_deref()),
-                    opt_cell(e.trait_impl.as_deref()),
-                    opt_cell(e.visibility.map(visibility_str)),
-                    opt_cell(e.kind_detail.as_deref()),
-                ]);
-            }
-        }
-        rows
     }
 }
 const TRUNCATION_GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
@@ -271,41 +223,6 @@ pub fn render_projection<const N: usize, T: ToonProjection<N>>(value: &T) -> Res
 #[cfg(test)]
 mod projection_tests {
     use super::*;
-
-    #[test]
-    fn render_projection_symbols_result_end_to_end() {
-        use crate::types::{SymbolEntry, SymbolKind, SymbolsResult};
-        use camino::Utf8PathBuf;
-        use std::collections::BTreeMap;
-
-        let mut files = BTreeMap::new();
-        files.insert(
-            Utf8PathBuf::from("src/lib.rs"),
-            vec![SymbolEntry {
-                name: "foo".to_string(),
-                kind: SymbolKind::Function,
-                line: 10,
-                // The newline must render as the escape `\n` inside a quoted cell, neither breaking the row nor vanishing.
-                signature: Some("fn foo(x)\nsecond line".to_string()),
-                // Distinct values in every optional column, so a hardcoded `Value::Null` for any of them shows up.
-                owner: Some("MyOwner".to_string()),
-                trait_impl: Some("MyTrait".to_string()),
-                visibility: Some(crate::types::Visibility::Public),
-                kind_detail: Some("static".to_string()),
-            }],
-        );
-        let result = SymbolsResult { files, total_symbol_count: 1, truncation_marker: None, diagnostics: Vec::new() };
-
-        let rendered = render_projection(&result).expect("valid projection must render");
-        assert!(
-            rendered.starts_with("symbols[1]{file,name,kind,line,signature,owner,traitImpl,visibility,kindDetail}:\n"),
-            "got: {rendered}"
-        );
-        assert!(
-            rendered.contains("src/lib.rs,foo,function,10,\"fn foo(x)\\nsecond line\",MyOwner,MyTrait,public,static"),
-            "got: {rendered}"
-        );
-    }
 
     #[test]
     fn render_projection_search_response_includes_extract_hint() {
@@ -530,24 +447,9 @@ mod projection_tests {
 
     // The other projection tests render one row each, which would not catch a projection that drops later rows.
     #[test]
-    fn multi_row_flattening_symbols_and_search() {
-        use crate::types::{CodeBlock, RankedBlock, SearchResponse, SymbolEntry, SymbolsResult};
+    fn multi_row_flattening_search() {
+        use crate::types::{CodeBlock, RankedBlock, SearchResponse};
         use camino::Utf8PathBuf;
-        use std::collections::BTreeMap;
-
-        fn entry(name: &str, line: usize) -> SymbolEntry {
-            SymbolEntry {
-                name: name.to_string(),
-                kind: SymbolKind::Function,
-                line,
-                signature: None,
-                owner: None,
-                trait_impl: None,
-                visibility: None,
-                kind_detail: None,
-            }
-        }
-
         fn block(file: &str, line_start: usize, line_end: usize, rank: usize, final_score: f64) -> RankedBlock {
             RankedBlock {
                 block: CodeBlock {
@@ -568,31 +470,6 @@ mod projection_tests {
                 parent_context: None,
             }
         }
-
-        let mut files = BTreeMap::new();
-        // Inserted out of key order to show that key order, not insertion order, decides row order.
-        files.insert(Utf8PathBuf::from("src/z.rs"), vec![entry("z1", 1), entry("z2", 2)]);
-        files.insert(Utf8PathBuf::from("src/a.rs"), vec![entry("a1", 3)]);
-        let symbols = SymbolsResult { files, total_symbol_count: 3, truncation_marker: None, diagnostics: Vec::new() };
-
-        assert_eq!(
-            symbols.toon_rows().len(),
-            3,
-            "all (file, entry) pairs across every BTreeMap key must flatten into rows"
-        );
-
-        let rendered = render_projection(&symbols).expect("valid projection must render");
-        assert!(
-            rendered.starts_with("symbols[3]{file,name,kind,line,signature,owner,traitImpl,visibility,kindDetail}:\n"),
-            "got: {rendered}"
-        );
-        let a1_pos = rendered.find("src/a.rs,a1,").expect("a1 row must be present");
-        let z1_pos = rendered.find("src/z.rs,z1,").expect("z1 row must be present");
-        let z2_pos = rendered.find("src/z.rs,z2,").expect("z2 row must be present");
-        assert!(
-            a1_pos < z1_pos && z1_pos < z2_pos,
-            "rows must render in BTreeMap key order (src/a.rs before src/z.rs), then Vec order within a key: got {rendered}"
-        );
 
         let search = SearchResponse {
             results: vec![
@@ -730,7 +607,7 @@ pub trait ToDomainError {
     fn monokl_code(&self) -> &'static str;
     /// Converts the error, prefixing the message with [`monokl_code`](Self::monokl_code) and carrying its source chain
     /// as causes.
-    fn to_domain_error(&self, ctx: ErrorContext<'_>) -> michi::DomainError;
+    fn to_domain_error(&self) -> michi::DomainError;
 }
 
 impl ToDomainError for MonoklError {
@@ -741,34 +618,16 @@ impl ToDomainError for MonoklError {
             MonoklError::RegexBuild(_) => "regex_build",
             MonoklError::NonUtf8Path { .. } => "non_utf8_path",
             MonoklError::TooManyTerms { .. } => "too_many_terms",
-            MonoklError::TokenizerInit => "tokenizer_init",
-            MonoklError::Json(_) => "json",
-            MonoklError::PathOutsideRoot { .. } => "path_outside_root",
-            MonoklError::StaleDiskCache => "stale_disk_cache",
-            MonoklError::InvalidGitRef { .. } => "invalid_git_ref",
-            MonoklError::Git { .. } => "git",
-            MonoklError::SymlinkRejected { .. } => "symlink_rejected",
-            MonoklError::FileTooLarge { .. } => "file_too_large",
-            MonoklError::LockPoisoned { .. } => "lock_poisoned",
         }
     }
 
-    #[expect(clippy::cast_possible_wrap, reason = "limits and caps are far below i64::MAX; KvValue::Int takes an i64")]
-    fn to_domain_error(&self, ctx: ErrorContext<'_>) -> michi::DomainError {
+    fn to_domain_error(&self) -> michi::DomainError {
         use michi::ErrorCode;
 
         let code = match self {
-            MonoklError::RegexBuild(_)
-            | MonoklError::NonUtf8Path { .. }
-            | MonoklError::TooManyTerms { .. }
-            | MonoklError::InvalidGitRef { .. }
-            | MonoklError::FileTooLarge { .. } => ErrorCode::InvalidInput,
-            MonoklError::PathOutsideRoot { .. } | MonoklError::SymlinkRejected { .. } => ErrorCode::Forbidden,
-            MonoklError::StaleDiskCache => ErrorCode::Conflict,
-            MonoklError::TokenizerInit
-            | MonoklError::Json(_)
-            | MonoklError::Git { .. }
-            | MonoklError::LockPoisoned { .. } => ErrorCode::ExternalFailure,
+            MonoklError::RegexBuild(_) | MonoklError::NonUtf8Path { .. } | MonoklError::TooManyTerms { .. } => {
+                ErrorCode::InvalidInput
+            }
             MonoklError::Io(err) => io_error_code(err.io_kind()),
             MonoklError::Walk { source, .. } => walk_error_code(source),
         };
@@ -781,27 +640,10 @@ impl ToDomainError for MonoklError {
             MonoklError::TooManyTerms { count, limit } => {
                 domain_err.hint(format!("you supplied {count} terms; the limit is {limit}"))
             }
-            MonoklError::FileTooLarge { path, size, cap } => {
-                domain_err.hint(format!("{path} is {size} bytes; the cap is {cap} bytes")).recovery(
-                    michi::RecoveryHint::new(ctx.command)
-                        .param("maxBytes", michi::KvValue::Int(*cap as i64))
-                        .reason("the file exceeds this workspace's size cap"),
-                )
-            }
-            MonoklError::InvalidGitRef { ref_, reason } => {
-                domain_err.hint(format!("{ref_:?} is not a valid git ref: {reason}"))
-            }
             MonoklError::Io(_)
             | MonoklError::Walk { .. }
             | MonoklError::RegexBuild(_)
-            | MonoklError::NonUtf8Path { .. }
-            | MonoklError::TokenizerInit
-            | MonoklError::Json(_)
-            | MonoklError::PathOutsideRoot { .. }
-            | MonoklError::StaleDiskCache
-            | MonoklError::Git { .. }
-            | MonoklError::SymlinkRejected { .. }
-            | MonoklError::LockPoisoned { .. } => domain_err,
+            | MonoklError::NonUtf8Path { .. } => domain_err,
         };
 
         domain_err
@@ -813,10 +655,6 @@ mod error_tests {
     use super::*;
     use camino::Utf8PathBuf;
 
-    fn ctx() -> ErrorContext<'static> {
-        ErrorContext { command: "search" }
-    }
-
     #[test]
     fn monokl_code_is_distinct_and_nonempty_per_variant() {
         let errs: Vec<MonoklError> = vec![
@@ -824,40 +662,14 @@ mod error_tests {
             grep_regex::RegexMatcherBuilder::new().build("(").unwrap_err().into(),
             MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/bad") },
             MonoklError::TooManyTerms { count: 1, limit: 1 },
-            MonoklError::TokenizerInit,
-            serde_json::from_str::<serde_json::Value>("{not valid").unwrap_err().into(),
-            MonoklError::PathOutsideRoot { path: Utf8PathBuf::from("/x") },
-            MonoklError::StaleDiskCache,
-            MonoklError::InvalidGitRef { ref_: "-x".to_string(), reason: "bad" },
-            MonoklError::Git { operation: "show", message: "e".to_string() },
-            MonoklError::SymlinkRejected { path: Utf8PathBuf::from("/l") },
-            MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 1, cap: 1 },
-            MonoklError::LockPoisoned { context: "ctx" },
         ];
-        assert_eq!(errs.len(), 13);
+        assert_eq!(errs.len(), 4);
         let codes: Vec<&str> = errs.iter().map(ToDomainError::monokl_code).collect();
-        assert_eq!(
-            codes,
-            vec![
-                "walk",
-                "regex_build",
-                "non_utf8_path",
-                "too_many_terms",
-                "tokenizer_init",
-                "json",
-                "path_outside_root",
-                "stale_disk_cache",
-                "invalid_git_ref",
-                "git",
-                "symlink_rejected",
-                "file_too_large",
-                "lock_poisoned",
-            ]
-        );
+        assert_eq!(codes, vec!["walk", "regex_build", "non_utf8_path", "too_many_terms"]);
         let mut dedup = codes.clone();
         dedup.sort_unstable();
         dedup.dedup();
-        assert_eq!(dedup.len(), 13, "all monokl_code() values must be distinct");
+        assert_eq!(dedup.len(), 4, "all monokl_code() values must be distinct");
         for c in &codes {
             assert!(!c.is_empty() && !c.contains(' '), "code must be non-empty with no whitespace: {c:?}");
         }
@@ -866,51 +678,25 @@ mod error_tests {
     #[test]
     fn error_code_mapping() {
         assert_eq!(
-            MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/x") }.to_domain_error(ctx()).code,
+            MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/x") }.to_domain_error().code,
             michi::ErrorCode::InvalidInput
-        );
-        assert_eq!(
-            MonoklError::PathOutsideRoot { path: Utf8PathBuf::from("/x") }.to_domain_error(ctx()).code,
-            michi::ErrorCode::Forbidden
-        );
-        assert_eq!(MonoklError::StaleDiskCache.to_domain_error(ctx()).code, michi::ErrorCode::Conflict);
-        assert_eq!(MonoklError::TokenizerInit.to_domain_error(ctx()).code, michi::ErrorCode::ExternalFailure);
-        assert_eq!(
-            MonoklError::LockPoisoned { context: "ctx" }.to_domain_error(ctx()).code,
-            michi::ErrorCode::ExternalFailure
         );
 
         // `Walk` is covered by the walk-specific tests.
         let regex_err: MonoklError = grep_regex::RegexMatcherBuilder::new().build("(").unwrap_err().into();
-        assert_eq!(regex_err.to_domain_error(ctx()).code, michi::ErrorCode::InvalidInput);
+        assert_eq!(regex_err.to_domain_error().code, michi::ErrorCode::InvalidInput);
         assert_eq!(
-            MonoklError::TooManyTerms { count: 1, limit: 1 }.to_domain_error(ctx()).code,
+            MonoklError::TooManyTerms { count: 1, limit: 1 }.to_domain_error().code,
             michi::ErrorCode::InvalidInput
-        );
-        assert_eq!(
-            MonoklError::InvalidGitRef { ref_: "-x".to_string(), reason: "bad" }.to_domain_error(ctx()).code,
-            michi::ErrorCode::InvalidInput
-        );
-        assert_eq!(
-            MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 1, cap: 1 }.to_domain_error(ctx()).code,
-            michi::ErrorCode::InvalidInput
-        );
-        assert_eq!(
-            MonoklError::SymlinkRejected { path: Utf8PathBuf::from("/l") }.to_domain_error(ctx()).code,
-            michi::ErrorCode::Forbidden
-        );
-        let json_err: MonoklError = serde_json::from_str::<serde_json::Value>("{not valid").unwrap_err().into();
-        assert_eq!(json_err.to_domain_error(ctx()).code, michi::ErrorCode::ExternalFailure);
-        assert_eq!(
-            MonoklError::Git { operation: "show", message: "e".to_string() }.to_domain_error(ctx()).code,
-            michi::ErrorCode::ExternalFailure
         );
     }
 
     #[test]
     fn retryable_always_false_even_for_external_failure_codes() {
-        let err = MonoklError::LockPoisoned { context: "ctx" };
-        let domain_err = err.to_domain_error(ctx());
+        let loop_err =
+            ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
+        let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: loop_err };
+        let domain_err = err.to_domain_error();
         assert_eq!(domain_err.code, michi::ErrorCode::ExternalFailure);
         assert!(!domain_err.retryable, "monokl errors must never be retryable");
         let michi_err = michi::Error::Domain(domain_err);
@@ -922,7 +708,7 @@ mod error_tests {
     fn head_is_the_variants_own_display_not_its_sources() {
         // `path` appears only in `Walk`'s own display text, never in the wrapped error's.
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/some/root"), source: ignore::Error::InvalidDefinition };
-        let domain_err = err.to_domain_error(ctx());
+        let domain_err = err.to_domain_error();
         assert!(domain_err.message.contains("/some/root"), "got: {}", domain_err.message);
         assert!(domain_err.message.starts_with("walk: walker error at /some/root"), "got: {}", domain_err.message);
     }
@@ -930,13 +716,16 @@ mod error_tests {
     // michi escapes line breaks when it renders, so a multi-line message stays whole and adds no rendered lines.
     #[test]
     fn multiline_message_is_kept_whole_and_renders_on_one_line() {
-        let err = MonoklError::Git { operation: "show", message: "line one\nline two".to_string() };
-        let domain_err = err.to_domain_error(ctx());
+        let err = MonoklError::Walk {
+            path: Utf8PathBuf::from("line one\nline two"),
+            source: ignore::Error::InvalidDefinition,
+        };
+        let domain_err = err.to_domain_error();
 
-        assert_eq!(domain_err.message, "git: git show failed: line one\nline two");
-        assert!(domain_err.causes.is_empty(), "got: {:?}", domain_err.causes);
+        assert_eq!(domain_err.message, "walk: walker error at line one\nline two");
+        assert_eq!(domain_err.causes, vec!["invalid definition (format is type:glob, e.g., html:*.html)"]);
         assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
-        assert_eq!(domain_err.render().lines().count(), 3, "got: {}", domain_err.render());
+        assert_eq!(domain_err.render().lines().count(), 4, "got: {}", domain_err.render());
     }
 
     // `ignore::Error` has no `source()`, so the chain is the one wrapped walker error.
@@ -944,7 +733,7 @@ mod error_tests {
     fn source_chain_becomes_causes_not_hints() {
         let source = ignore::Error::Io(std::io::Error::other("io line one\nio line two"));
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source };
-        let domain_err = err.to_domain_error(ctx());
+        let domain_err = err.to_domain_error();
 
         assert_eq!(domain_err.message, "walk: walker error at /x");
         assert_eq!(domain_err.causes, vec!["io line one\nio line two"]);
@@ -955,7 +744,7 @@ mod error_tests {
     #[test]
     fn io_cause_is_the_wrapped_io_error_once() {
         let err: MonoklError = crate::file_io::FileIoError::read("/x", std::io::Error::other("boom")).into();
-        let domain_err = err.to_domain_error(ctx());
+        let domain_err = err.to_domain_error();
 
         assert_eq!(domain_err.message, "io: failed to read /x");
         assert_eq!(domain_err.causes, vec!["boom"]);
@@ -964,7 +753,7 @@ mod error_tests {
     #[test]
     fn too_many_terms_enrichment() {
         let err = MonoklError::TooManyTerms { count: 12, limit: 8 };
-        let domain_err = err.to_domain_error(ctx());
+        let domain_err = err.to_domain_error();
         assert!(
             domain_err.hints.iter().any(|h| h.as_str() == "you supplied 12 terms; the limit is 8"),
             "got: {:?}",
@@ -977,43 +766,15 @@ mod error_tests {
     fn a_file_as_the_search_root_is_invalid_input() {
         let io_err = ignore::Error::Io(std::io::Error::from(std::io::ErrorKind::NotADirectory));
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x/a.ts"), source: io_err };
-        let domain_err = err.to_domain_error(ctx());
+        let domain_err = err.to_domain_error();
         assert_eq!(domain_err.code, michi::ErrorCode::InvalidInput);
         assert!(domain_err.message.contains("/x/a.ts"), "got: {}", domain_err.message);
     }
 
     #[test]
-    fn file_too_large_enrichment() {
-        let err = MonoklError::FileTooLarge { path: Utf8PathBuf::from("/big"), size: 100, cap: 50 };
-        let domain_err = err.to_domain_error(ctx());
-        assert!(
-            domain_err.hints.iter().any(|h| h.as_str() == "/big is 100 bytes; the cap is 50 bytes"),
-            "got: {:?}",
-            domain_err.hints
-        );
-        let recovery = domain_err.recovery.expect("recovery must be set");
-        assert_eq!(recovery.tool, "search");
-        assert_eq!(recovery.params, vec![("maxBytes".to_string(), michi::KvValue::Int(50))]);
-        assert_eq!(recovery.reason.as_deref(), Some("the file exceeds this workspace's size cap"));
-    }
-
-    #[test]
-    fn invalid_git_ref_enrichment_has_no_recovery() {
-        let err = MonoklError::InvalidGitRef { ref_: "-x".to_string(), reason: "bad ref" };
-        let domain_err = err.to_domain_error(ctx());
-        // An exact match pins the quotes that `{ref_:?}` adds.
-        assert!(
-            domain_err.hints.iter().any(|h| h.as_str() == "\"-x\" is not a valid git ref: bad ref"),
-            "got: {:?}",
-            domain_err.hints
-        );
-        assert!(domain_err.recovery.is_none());
-    }
-
-    #[test]
     fn remaining_variants_get_no_enrichment_beyond_head() {
-        let err = MonoklError::LockPoisoned { context: "ctx" };
-        let domain_err = err.to_domain_error(ctx());
+        let err = MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/bad") };
+        let domain_err = err.to_domain_error();
         assert!(domain_err.hints.is_empty(), "got: {:?}", domain_err.hints);
         assert!(domain_err.causes.is_empty(), "got: {:?}", domain_err.causes);
         assert!(domain_err.recovery.is_none());
@@ -1024,14 +785,14 @@ mod error_tests {
         let glob_err = ignore::overrides::OverrideBuilder::new(".").add("[").unwrap_err();
         assert!(matches!(glob_err, ignore::Error::Glob { .. }), "expected a bare Glob error, got: {glob_err:?}");
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: glob_err };
-        assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::InvalidInput);
+        assert_eq!(err.to_domain_error().code, michi::ErrorCode::InvalidInput);
     }
 
     #[test]
     fn walk_io_not_found_maps_to_not_found() {
         let io_err = ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: io_err };
-        assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::NotFound);
+        assert_eq!(err.to_domain_error().code, michi::ErrorCode::NotFound);
     }
 
     #[test]
@@ -1045,7 +806,7 @@ mod error_tests {
             }),
         };
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: nested };
-        assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::InvalidInput);
+        assert_eq!(err.to_domain_error().code, michi::ErrorCode::InvalidInput);
     }
 
     #[test]
@@ -1053,6 +814,6 @@ mod error_tests {
         let loop_err =
             ignore::Error::Loop { ancestor: std::path::PathBuf::from("/a"), child: std::path::PathBuf::from("/a/b") };
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: loop_err };
-        assert_eq!(err.to_domain_error(ctx()).code, michi::ErrorCode::ExternalFailure);
+        assert_eq!(err.to_domain_error().code, michi::ErrorCode::ExternalFailure);
     }
 }

@@ -3,7 +3,7 @@
 //! Core returns every ranked block and holds no caps; this module is the first thing a caller does with that result.
 use michi::TruncationOutcome;
 
-use crate::types::{Diagnostic, RankedBlock, SearchLimits, SearchResponse};
+use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
 /// Texts longer than this many bytes are measured by their byte length instead of being tokenized.
 ///
@@ -35,18 +35,6 @@ pub struct Budget {
 impl Default for Budget {
     fn default() -> Self {
         Self { max_results: 50, max_tokens: 20_000, max_bytes: 2_097_152 }
-    }
-}
-
-impl From<&SearchLimits> for Budget {
-    /// Fills an unset result or token cap with the default and clamps the byte cap to the 2 MiB ceiling.
-    fn from(limits: &SearchLimits) -> Self {
-        let default = Self::default();
-        Self {
-            max_results: limits.max_results.unwrap_or(default.max_results),
-            max_tokens: limits.max_tokens.unwrap_or(default.max_tokens),
-            max_bytes: limits.max_bytes.min(default.max_bytes),
-        }
     }
 }
 
@@ -162,24 +150,6 @@ mod tests {
     #[test]
     fn default_budget_is_the_agent_default() {
         assert_eq!(Budget::default(), caps(50, 20_000, 2_097_152));
-    }
-
-    #[test]
-    fn search_limits_default_carries_the_budget_default() {
-        let limits = SearchLimits::default();
-        let budget = Budget::default();
-        assert_eq!(
-            (limits.max_results, limits.max_tokens, limits.max_bytes),
-            (Some(budget.max_results), Some(budget.max_tokens), budget.max_bytes)
-        );
-    }
-
-    #[test]
-    fn budget_from_search_limits_fills_defaults_and_clamps_bytes() {
-        let unset = SearchLimits { max_results: None, max_bytes: 10_000_000, max_tokens: None, max_candidates: 1 };
-        assert_eq!(Budget::from(&unset), caps(50, 20_000, 2_097_152));
-        let set = SearchLimits { max_results: Some(3), max_bytes: 100, max_tokens: Some(7), max_candidates: 1 };
-        assert_eq!(Budget::from(&set), caps(3, 7, 100));
     }
 
     #[test]
