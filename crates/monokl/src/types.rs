@@ -1,12 +1,10 @@
 //! Monokl's core data types: symbols, dependencies, per-language data, search results, and command options.
 use camino::Utf8PathBuf;
-use serde::{Deserialize, Serialize};
 
 /// The classification of a symbol.
 ///
 /// Most variants apply to every language analyzer; `Impl` and `Macro` are Rust-specific, and `Other` is the catch-all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SymbolKind {
     Function,
@@ -29,8 +27,7 @@ pub enum SymbolKind {
 /// The visibility of a symbol.
 ///
 /// There is no `Super` variant: Rust's `pub(super)` and `pub(in ...)` map to [`Visibility::Module`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Visibility {
     Public,
@@ -40,27 +37,21 @@ pub enum Visibility {
 }
 
 /// A symbol found in a source file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SymbolEntry {
     pub name: String,
     pub kind: SymbolKind,
     pub line: usize,
     pub signature: Option<String>,
     /// The type that owns this symbol, such as the target of the enclosing `impl` block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trait_impl: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Visibility>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_detail: Option<String>,
 }
 
 /// The kind of a single import binding within a [`DependencyBinding`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BindingKind {
     Named,
@@ -72,24 +63,20 @@ pub enum BindingKind {
 
 /// The anchor of a resolved Rust module path.
 ///
-/// `Selff` is renamed to `"self"` on the wire because `self` is a keyword and cannot name a variant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// `Selff` stands for `self`, which is a keyword and cannot name a variant.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum RustPathAnchor {
     Crate,
     Super,
-    #[serde(rename = "self")]
     Selff,
     Extern(String),
 }
 
 /// The resolved target of a dependency statement.
 ///
-/// Internally tagged on `"kind"`, so each variant's fields sit beside the tag in one JSON object. `rename_all` renames
-/// only the tags; the fields stay `snake_case` (`is_relative`, `is_static`). No analyzer constructs `Namespace` yet.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+/// No analyzer constructs `RustPath` or `Namespace` yet.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DependencyTarget {
     File { specifier: String, resolved: Option<Utf8PathBuf>, is_relative: bool },
@@ -98,8 +85,7 @@ pub enum DependencyTarget {
 }
 
 /// A single binding introduced by a [`DependencyRecord`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct DependencyBinding {
     pub imported: String,
     pub local: String,
@@ -107,20 +93,15 @@ pub struct DependencyBinding {
 }
 
 /// A single dependency statement in a source file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct DependencyRecord {
     pub line: usize,
-    /// Always serialized, even when empty; a missing key deserializes to an empty vec. Serde gives a `Vec` field no
-    /// missing-key leniency without `#[serde(default)]`.
-    #[serde(default)]
     pub bindings: Vec<DependencyBinding>,
     pub target: DependencyTarget,
 }
 
 /// A single named export statement.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ExportRecord {
     pub name: String,
     pub line: usize,
@@ -128,8 +109,7 @@ pub struct ExportRecord {
 }
 
 /// A single JSX attribute.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct JsxAttribute {
     pub name: String,
     pub string_value: Option<String>,
@@ -138,67 +118,46 @@ pub struct JsxAttribute {
 }
 
 /// A single JSX element usage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct JsxElementEntry {
     pub name: String,
     pub is_html: bool,
     pub line: usize,
-    /// Required on deserialize, unlike [`DependencyRecord::bindings`].
     pub attributes: Vec<JsxAttribute>,
 }
 
 /// Rust-specific analysis output, empty until the Rust analyzer lands.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub struct RustData {}
 
 /// Python-specific analysis output, empty until the Python analyzer lands.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub struct PythonData {}
 
 /// Go-specific analysis output, empty until the Go analyzer lands.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub struct GoData {}
 
 /// Java-specific analysis output, empty until the Java analyzer lands.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub struct JavaData {}
 
 /// TypeScript-specific analysis output.
-///
-/// Every field tolerates a missing key, but only `unresolved_aliases` is omitted from output when empty.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub struct TsData {
-    #[serde(default)]
     pub jsx_elements: Vec<JsxElementEntry>,
-    #[serde(default)]
     pub type_only_imports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved_aliases: Vec<String>,
 }
 
 /// Per-language analysis output.
-///
-/// Adjacently tagged, so `Ts` serializes as `{"language":"typescript","data":{...}}`. An unrecognized `"language"`
-/// fails to deserialize.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "language", content = "data")]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum LangData {
-    #[serde(rename = "typescript")]
     Ts(TsData),
-    #[serde(rename = "rust")]
     Rust(RustData),
-    #[serde(rename = "python")]
     Python(PythonData),
-    #[serde(rename = "go")]
     Go(GoData),
-    #[serde(rename = "java")]
     Java(JavaData),
 }
 
@@ -215,11 +174,7 @@ impl LangData {
 }
 
 /// A block of code matched by the search pipeline.
-///
-/// Deserializing does not check that `line_start <= line_end` or that `matched_lines` falls in range, so consumers
-/// must not assume either.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct CodeBlock {
     pub file: Utf8PathBuf,
     pub line_start: usize,
@@ -227,15 +182,12 @@ pub struct CodeBlock {
     pub node_kind: SymbolKind,
     pub code: String,
     pub symbol_signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matched_lines: Vec<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matched_keywords: Vec<String>,
 }
 
 /// The symbol enclosing a [`CodeBlock`] match.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ParentContext {
     pub kind: SymbolKind,
     pub name: String,
@@ -243,12 +195,8 @@ pub struct ParentContext {
 }
 
 /// A [`CodeBlock`] with its ranking scores.
-///
-/// The block's fields are flattened into the same JSON object. `serde_json` writes a non-finite score as `null`.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct RankedBlock {
-    #[serde(flatten)]
     pub block: CodeBlock,
     pub bm25_score: f64,
     pub coverage_boost: f64,
@@ -259,8 +207,7 @@ pub struct RankedBlock {
 }
 
 /// The kind of a [`Diagnostic`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiagnosticKind {
     Degraded,
@@ -269,8 +216,7 @@ pub enum DiagnosticKind {
 }
 
 /// A non-fatal problem reported alongside a command's results.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
     pub path: Option<Utf8PathBuf>,
@@ -278,8 +224,6 @@ pub struct Diagnostic {
 }
 
 /// A single line matched by the text searcher.
-///
-/// It is internal and deliberately has no serde derives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineHit {
     pub line_number: usize,
@@ -287,8 +231,7 @@ pub struct LineHit {
 }
 
 /// The language filter for the search command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[non_exhaustive]
 pub enum Language {
@@ -306,8 +249,7 @@ pub enum Language {
 ///
 /// The [`Default`] values do not apply when deserializing: `max_bytes` and `max_candidates` are required, and a
 /// missing `max_results` or `max_tokens` becomes `None`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SearchLimits {
     pub max_results: Option<usize>,
     pub max_bytes: usize,
@@ -325,8 +267,7 @@ impl Default for SearchLimits {
 ///
 /// As with [`SearchLimits`], the [`Default`] values do not apply when deserializing; every field except `language`
 /// is required.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub query: String,
     pub path: Utf8PathBuf,
@@ -352,8 +293,7 @@ impl Default for SearchOptions {
 }
 
 /// The search command's response.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SearchResponse {
     pub results: Vec<RankedBlock>,
     pub total_blocks_before_truncation: usize,
@@ -365,8 +305,7 @@ pub struct SearchResponse {
 }
 
 /// The symbols command's response.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SymbolsResult {
     /// A `BTreeMap` so files serialize in a deterministic order.
     pub files: std::collections::BTreeMap<Utf8PathBuf, Vec<SymbolEntry>>,
@@ -376,8 +315,7 @@ pub struct SymbolsResult {
 }
 
 /// The dependents command's response.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct DependentsResult {
     pub file: Utf8PathBuf,
     pub dependents: Vec<Utf8PathBuf>,
@@ -418,8 +356,7 @@ impl WorkspaceOptions {
 }
 
 /// A request to extract a file, optionally limited to a line range.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ExtractRequest {
     pub file: Utf8PathBuf,
     pub line_start: Option<usize>,
