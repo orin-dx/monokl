@@ -94,7 +94,7 @@ check-drift:
 verify-release version:
     scripts/verify-release.sh {{ version }}
 
-# Compare search results with ripgrep on pinned public repos. Needs network and `rg`; on demand, not part of `just ci`.
+# Score search targeting and output size against ripgrep on pinned public repos. Needs network and `rg`; on demand, not part of `just ci`.
 rg-compare *args:
     cargo build --release -q
     python3 -I scripts/rg-compare.py {{ args }}
