@@ -26,6 +26,7 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just mutants` | Mutation testing, on demand only |
 | `just changeset <bump> "<summary>"` | Record a pending change for the next release (Callisto) |
 | `just changesets` | Check Callisto config and pending changesets |
+| `just verify-release <version>` | Check a published release: tag, assets, crates.io, attestation, binary |
 
 ## Where things stand
 

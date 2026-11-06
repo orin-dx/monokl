@@ -56,6 +56,21 @@ Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (co
 
 Look for structurally identical siblings and fix them in the same change. If one is deliberately left, say where and why.
 
+A change is done when:
+
+- CI has passed on the PR. Until it has run, say it is pending.
+- Docs, comments, tests and dead code that described the old behavior are updated or removed.
+- A test guards the change and fails without it.
+- Nothing is skipped, dropped or defaulted without a count or a message.
+- Claims in the PR, docs and comments hold for the current code. Anything taken from another agent or an earlier run is rechecked or marked unverified.
+
+## Facts a reviewer should know
+
+- Supported platforms are macOS and Linux. There is no Windows target.
+- The crate is pre-1.0: a minor bump may break the public API. The changeset's bump says which.
+- A release happens when the Callisto release PR merges. `Cargo.toml` can be ahead of what is published, so check crates.io or `just verify-release <version>` before calling something released.
+- Designs in `docs/spec/` and `docs/architecture/` are plans unless the code has them. `README.md` describes what works today.
+
 When the spec itself is wrong, fix the spec file and add an entry to [`05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md) explaining what was wrong and why the fix is right. A decision that departs from the spec with a credible alternative gets an ADR.
 
 ## Writing and commits

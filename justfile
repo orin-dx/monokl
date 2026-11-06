@@ -90,6 +90,10 @@ zizmor:
 check-drift:
     scripts/check-drift.sh
 
+# Checks a published release is complete and usable, e.g. `just verify-release 0.4.0`. Needs network and gh.
+verify-release version:
+    scripts/verify-release.sh {{ version }}
+
 # Mutation testing. Slow, so on demand only, not part of `just ci`.
 mutants:
     cargo mutants --workspace
