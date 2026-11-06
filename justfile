@@ -94,6 +94,11 @@ check-drift:
 verify-release version:
     scripts/verify-release.sh {{ version }}
 
+# Score search targeting and output size against ripgrep on pinned public repos. Needs network and `rg`; on demand, not part of `just ci`.
+rg-compare *args:
+    cargo build --release -q
+    python3 -I scripts/rg-compare.py {{ args }}
+
 # Mutation testing. Slow, so on demand only, not part of `just ci`.
 mutants:
     cargo mutants --workspace

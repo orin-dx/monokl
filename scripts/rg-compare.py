@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Compares `monokl search` with ripgrep on pinned public repositories.
+
+monokl is meant to return the few right answers, not everything that matches. So ripgrep supplies the ground truth for
+what is right, and the score rewards targeting:
+
+- definitions: files that declare the identifier. The gate is whether one of them is among monokl's first `--top` files
+  (hit@top), because an agent that asks for a symbol must be shown where it is declared, early.
+- cost: files and output size monokl returns with its default caps, against one `rg -n` call. rg wins on a bare
+  identifier, so this is the floor to beat; monokl's case is the question that takes rg several calls.
+- test files are left out of the lists, as monokl leaves them out by default. `--tests` also runs monokl with its test
+  flag and reports how many test files with the word it returned, ungated.
+
+Wall time is reported. Repositories are cloned on demand into target/rg-compare.
+"""
+
+import argparse
+import json
+import re
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = ROOT / "scripts" / "rg-compare.repos"
+CACHE = ROOT / "target" / "rg-compare"
+GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"]
+DECLARATION = r"\b(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_][A-Za-z0-9_]{3,})"
+UNCAPPED = "1000000"
+TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
+TEST_SUFFIXES = tuple(
+    f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
+)
+
+
+def is_test_path(relative):
+    """Mirrors `is_test_path` in crates/monokl/src/text_search.rs; change both together."""
+    path = "/" + relative
+    return any(d in path for d in TEST_DIRS) or path.endswith(TEST_SUFFIXES)
+
+
+def run(args, cwd=None, check=True):
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=check)
+
+
+def repositories(only):
+    for line in MANIFEST.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            name, url, sha = line.split()
+            if not only or name in only:
+                yield name, url, sha
+
+
+def checkout(name, url, sha):
+    path = CACHE / name
+    if (path / ".git").exists() and run(["git", "rev-parse", "HEAD"], cwd=path).stdout.strip() == sha:
+        return path
+    path.mkdir(parents=True, exist_ok=True)
+    run(["git", "init", "-q"], cwd=path)
+    run(["git", "fetch", "-q", "--depth", "1", url, sha], cwd=path)
+    run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=path)
+    return path
+
+
+def rg_files(pattern, path, extra=()):
+    args = ["rg", "--files-with-matches", *extra]
+    for glob in GLOBS:
+        args += ["--glob", glob]
+    out = run([*args, "-e", pattern, "."], cwd=path, check=False).stdout
+    return {line.removeprefix("./") for line in out.splitlines() if line}
+
+
+def mentions(term, path):
+    return rg_files(re.escape(term), path, ["--ignore-case", "--word-regexp"])
+
+
+def definitions(term, path):
+    return rg_files(rf"\b(?:function|class|interface|type|enum|const|let|var)\s+{re.escape(term)}\b", path)
+
+
+def monokl_files(binary, term, path, tests):
+    """Runs monokl with its default caps, as an agent would, and returns the files in rank order and the output size."""
+    args = [binary, "search", term, "."]
+    if tests:
+        args.append("--tests")
+    out = run(args, cwd=path, check=False).stdout
+    files = []
+    for line in out.splitlines():
+        if line.startswith("  ") and "," in line:
+            file = line.strip().split(",", 1)[0].removeprefix("./")
+            if file not in files:
+                files.append(file)
+    return files, len(out.encode())
+
+
+def rg_output_bytes(term, path):
+    """Size of the lines an agent reads from one `rg -n` call, the cheapest rg route to the same files."""
+    args = ["rg", "-n", "--word-regexp", "--ignore-case"]
+    for glob in GLOBS:
+        args += ["--glob", glob]
+    return len(run([*args, "-e", re.escape(term), "."], cwd=path, check=False).stdout.encode())
+
+
+def sample_terms(path, count):
+    args = ["rg", "--no-filename", "--only-matching", "--no-line-number", "--replace", "$1"]
+    for glob in GLOBS:
+        args += ["--glob", glob]
+    out = run([*args, "-e", DECLARATION, "."], cwd=path, check=False).stdout
+    names = sorted(set(out.split()))
+    if len(names) <= count:
+        return names
+    step = len(names) / count
+    return [names[int(i * step)] for i in range(count)]
+
+
+def timed(fn, *args):
+    start = time.perf_counter()
+    result = fn(*args)
+    return result, (time.perf_counter() - start) * 1000
+
+
+def split(files):
+    tests = {f for f in files if is_test_path(f)}
+    return set(files) - tests, tests
+
+
+def first_rank(ordered, wanted):
+    """1-based position of the first file in `ordered` that is in `wanted`, or None."""
+    return next((i for i, f in enumerate(ordered, 1) if f in wanted), None)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--binary", default=str(ROOT / "target" / "release" / "monokl"))
+    parser.add_argument("--repo", action="append", help="limit to a repository name from rg-compare.repos")
+    parser.add_argument("--terms", type=int, default=25, help="identifiers sampled per repository")
+    parser.add_argument("--top", type=int, default=3, help="a declaration must appear within this many files")
+    parser.add_argument("--min-recall", type=float, default=1.0, help="fail when the share of hits is lower")
+    parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
+    parser.add_argument("--json", help="write the full result to this path")
+    args = parser.parse_args()
+
+    if not Path(args.binary).exists():
+        sys.exit(f"{args.binary} not found; run `cargo build --release` or pass --binary")
+
+    report = []
+    for name, url, sha in repositories(args.repo):
+        path = checkout(name, url, sha)
+        rows = []
+        for term in sample_terms(path, args.terms):
+            defs, def_tests = split(definitions(term, path))
+            seen, seen_tests = split(mentions(term, path))
+            (ordered, monokl_bytes), monokl_ms = timed(monokl_files, args.binary, term, path, args.tests)
+            non_test = [f for f in ordered if not is_test_path(f)]
+            found, found_tests = split(ordered)
+            _, rg_ms = timed(mentions, term, path)
+            rank = first_rank(non_test, defs)
+            rows.append(
+                {
+                    "term": term,
+                    "defs": len(defs),
+                    "def_rank": rank,
+                    "returned": len(non_test),
+                    "rg_files": len(seen | defs),
+                    "monokl_bytes": monokl_bytes,
+                    "rg_bytes": rg_output_bytes(term, path),
+                    "tests": len(seen_tests | def_tests),
+                    "tests_hit": len((seen_tests | def_tests) & found_tests),
+                    "rg_ms": rg_ms,
+                    "monokl_ms": monokl_ms,
+                    "top": non_test[:3],
+                }
+            )
+        report.append({"repo": name, "sha": sha, "rows": rows})
+
+    scored = hits = 0
+    for repo in report:
+        rows = [r for r in repo["rows"] if r["defs"]]
+        repo_hits = sum(1 for r in rows if r["def_rank"] is not None and r["def_rank"] <= args.top)
+        scored += len(rows)
+        hits += repo_hits
+        ranks = [r["def_rank"] for r in rows if r["def_rank"] is not None]
+        returned = sum(r["returned"] for r in repo["rows"])
+        rg_files = sum(r["rg_files"] for r in repo["rows"])
+        line = (
+            f"{repo['repo']:<10} defined_terms={len(rows):<3} hit@{args.top}={repo_hits}/{len(rows)} "
+            f"median_rank={statistics.median(ranks) if ranks else '-'} "
+            f"files={returned} vs rg={rg_files} "
+            f"output_kb monokl={sum(r['monokl_bytes'] for r in repo['rows']) / 1024:.0f} "
+            f"rg_n={sum(r['rg_bytes'] for r in repo['rows']) / 1024:.0f} "
+            f"median_ms rg={statistics.median(r['rg_ms'] for r in repo['rows']):.0f} "
+            f"monokl={statistics.median(r['monokl_ms'] for r in repo['rows']):.0f}"
+        )
+        if args.tests:
+            line += f" tests={sum(r['tests_hit'] for r in repo['rows'])}/{sum(r['tests'] for r in repo['rows'])}"
+        print(line)
+        for row in rows:
+            if row["def_rank"] is None or row["def_rank"] > args.top:
+                rank = row["def_rank"] or "absent"
+                print(f"    declaration at rank {rank}: {row['term']} (top: {', '.join(row['top']) or 'nothing'})")
+
+    rate = hits / max(scored, 1)
+    print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+    if args.json:
+        Path(args.json).write_text(json.dumps(report, indent=2))
+    sys.exit(0 if rate >= args.min_recall else 1)
+
+
+if __name__ == "__main__":
+    main()
