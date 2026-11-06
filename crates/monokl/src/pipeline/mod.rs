@@ -912,11 +912,11 @@ mod tests {
     #[test]
     fn file_with_invalid_utf8_outside_the_matching_line_is_searched_and_reported_read_lossily() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.ts"), b"// caf\xe9\nalpha\n").unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"// zed\xe9\nalpha\n").unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
         let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.code, "// caf\u{FFFD}\nalpha");
+        assert_eq!(result.ranked[0].block.code, "// zed\u{FFFD}\nalpha");
         assert_eq!(
             summary(&result.diagnostics),
             [(DiagnosticKind::LossyRead, Some(root.join("a.ts").as_str()), LOSSY)]
@@ -925,10 +925,10 @@ mod tests {
 
     #[test]
     fn a_valid_utf8_file_is_not_reported_read_lossily() {
-        let (_dir, root) = tree(&[("a.ts", "caf\u{e9} alpha\n")]);
+        let (_dir, root) = tree(&[("a.ts", "zed\u{e9} alpha\n")]);
         let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.code, "caf\u{e9} alpha");
+        assert_eq!(result.ranked[0].block.code, "zed\u{e9} alpha");
         assert_eq!(summary(&result.diagnostics), []);
     }
 

@@ -97,7 +97,7 @@ fn a_deeply_nested_file_is_searched_like_any_other() {
 #[test]
 fn files_that_are_not_valid_utf8_are_searched_and_reported_as_read_lossily() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("legacy.ts"), b"// caf\xe9\nexport function needle() {}\n").unwrap();
+    std::fs::write(dir.path().join("legacy.ts"), b"// zed\xe9\nexport function needle() {}\n").unwrap();
     std::fs::write(dir.path().join("modern.ts"), "export function needle() {}\n").unwrap();
 
     let output = monokl_in(dir.path(), &["search", "needle", "."]);
