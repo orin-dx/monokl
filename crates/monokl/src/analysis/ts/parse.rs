@@ -2,7 +2,7 @@
 //!
 //! The parse owns its arena. Everything leaving this module is owned data, so no arena-borrowed node escapes.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::thread;
 
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
@@ -16,16 +16,30 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
 
-use crate::analysis::AnalysisProfile;
+use crate::analysis::{AnalysisProfile, Degradation};
 use crate::types::{
     BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord, JsxAttribute,
     JsxElementEntry, SymbolEntry, SymbolKind,
 };
 
-/// Files nested deeper than this are not parsed: the parser recurses once per level and overflowing the stack aborts
-/// the process. A 2 MiB debug-build stack, the tightest a worker thread is likely to have, overflows between 700 and
-/// 850 nested arrays; real code stays far below this.
-const MAX_SOURCE_NESTING_DEPTH: usize = 256;
+/// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
+/// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
+/// level measured, a `[` in a type, uses 1.7 KB of stack optimized and 4.6 KB unoptimized: this is over twice that.
+///
+/// `debug_assertions` stands in for "unoptimized", which `cfg!` cannot ask for directly. A release profile with debug
+/// assertions pays the larger budget and the smaller length cap for nothing; a profile that disables optimizations
+/// without them gets the smaller budget and could overflow. Change the constant if the workspace adds such a profile.
+const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
+
+/// Stack for what does not grow with the source.
+const BASE_STACK: usize = 8 << 20;
+
+/// The most stack one parse reserves. Only touched pages are committed, but a hostile file of the longest parsed length
+/// can touch about half of it (460 MiB measured), so this also bounds a parse's memory.
+const MAX_STACK: usize = 1 << 30;
+
+/// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
+pub(super) const MAX_PARSED_SOURCE_LEN: usize = (MAX_STACK - BASE_STACK) / STACK_PER_SOURCE_BYTE;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
@@ -37,72 +51,39 @@ pub(super) struct Extraction {
     pub(super) jsx_elements: Vec<JsxElementEntry>,
     pub(super) type_only_imports: Vec<String>,
     pub(super) had_parse_errors: bool,
+    pub(super) degradation: Option<Degradation>,
 }
 
 impl Extraction {
-    /// The result for a file that could not be analyzed: no data, flagged as having errors.
-    fn degraded() -> Self {
-        Self { had_parse_errors: true, ..Self::default() }
+    /// The result for a file that could not be analyzed: no data, flagged as having errors and the reason.
+    fn degraded(degradation: Degradation) -> Self {
+        Self { had_parse_errors: true, degradation: Some(degradation), ..Self::default() }
     }
 }
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// A file nested too deeply to parse safely, or one whose parse or extraction panics, yields
-/// [`Extraction::degraded`].
+/// A file too long to be sure of its stack, or one whose parse or extraction panics, yields [`Extraction::degraded`]
+/// with the reason.
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
-    if max_bracket_nesting_depth(source) > MAX_SOURCE_NESTING_DEPTH {
-        return Extraction::degraded();
+    if source.len() > MAX_PARSED_SOURCE_LEN {
+        return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
-    guarded(|| parse_and_extract(path, source, profile))
+    let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
+    guarded(stack_size, || parse_and_extract(path, source, profile))
 }
 
-fn guarded(run: impl FnOnce() -> Extraction) -> Extraction {
-    // The closure's output is discarded on a panic, so no torn state is observable afterwards.
-    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|_| Extraction::degraded())
-}
-
-/// The deepest bracket nesting in `source`, skipping comments and string literals.
-///
-/// A cheap linear scan used as a proxy for how deep the parser will recurse. It undercounts around apostrophes in
-/// JSX text and regex literals, which only ever lets a file through, never rejects a valid one.
-fn max_bracket_nesting_depth(source: &str) -> usize {
-    let bytes = source.as_bytes();
-    let (mut depth, mut max_depth, mut i) = (0usize, 0usize, 0usize);
-    while i < bytes.len() {
-        match bytes[i] {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i += 2;
-            }
-            quote @ (b'\'' | b'"' | b'`') => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
-            }
-            b'(' | b'{' | b'[' => {
-                depth += 1;
-                max_depth = max_depth.max(depth);
-                i += 1;
-            }
-            b')' | b'}' | b']' => {
-                depth = depth.saturating_sub(1);
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    max_depth
+/// Runs `run` on its own thread with `stack_size` bytes of stack. A panic, or a thread that cannot be started, yields
+/// [`Extraction::degraded`] with the reason.
+fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extraction {
+    thread::scope(|scope| {
+        let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(stack_size);
+        let Ok(handle) = builder.spawn_scoped(scope, run) else {
+            return Extraction::degraded(Degradation::ThreadUnavailable);
+        };
+        // The closure's output is discarded on a panic, so no torn state is observable afterwards.
+        handle.join().unwrap_or_else(|_| Extraction::degraded(Degradation::Panicked))
+    })
 }
 
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
@@ -542,8 +523,9 @@ mod tests {
 
     #[test]
     fn a_panic_becomes_the_degraded_extraction() {
-        let extraction = guarded(|| panic!("boom"));
+        let extraction = guarded(BASE_STACK, || panic!("boom"));
         assert!(extraction.had_parse_errors);
+        assert_eq!(extraction.degradation, Some(Degradation::Panicked));
         assert!(extraction.symbols.is_empty());
         assert!(extraction.dependencies.is_empty());
         assert!(extraction.exports.is_empty());
@@ -554,60 +536,30 @@ mod tests {
 
     #[test]
     fn a_run_that_does_not_panic_is_returned_untouched() {
-        let extraction = guarded(|| Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
+        let extraction =
+            guarded(BASE_STACK, || Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
         assert!(!extraction.had_parse_errors);
+        assert_eq!(extraction.degradation, None);
         assert_eq!(extraction.type_only_imports, ["x"]);
     }
 
-    #[rstest]
-    #[case("", 0)]
-    #[case("a(b[c{}])", 3)]
-    #[case("(((", 3)]
-    #[case(")))(", 1)]
-    #[case("// (((\n[", 1)]
-    #[case("/* ((( */ [", 1)]
-    #[case("'(((' + [[", 2)]
-    #[case("\"\\\"(((\" + [", 1)]
-    #[case("`(((` + {", 1)]
-    #[case("()()", 1)]
-    #[case("[](){}", 1)]
-    #[case("}}}]]]))) [", 1)]
-    #[case("4 / 2 + [", 1)]
-    #[case("a / b * c [", 1)]
-    #[case("// (((", 0)]
-    #[case("[ // (((", 1)]
-    #[case("/* (((", 0)]
-    #[case("/* ((( *", 0)]
-    #[case("/* a * ( */ [", 1)]
-    #[case("/* a / ( */ [", 1)]
-    #[case("[[[[[[[[ /**/ [", 9)]
-    #[case("[[[[ /* ( */ [[", 6)]
-    #[case("'(((", 0)]
-    #[case("\"((\\", 0)]
-    #[case("[[[ 'ab\\'cd(' ]", 3)]
-    #[case("[[ `a\\`(`(", 3)]
-    #[case("([{([{", 6)]
-    fn nesting_depth_counts_brackets_outside_comments_and_strings(#[case] source: &str, #[case] depth: usize) {
-        assert_eq!(max_bracket_nesting_depth(source), depth);
+    /// Recurses `depth` times with a 1 KiB frame and returns how many frames it went through.
+    fn recurse(depth: usize) -> usize {
+        let frame = std::hint::black_box([1u8; 1024]);
+        if depth == 0 {
+            return 0;
+        }
+        recurse(depth - 1) + usize::from(std::hint::black_box(frame)[0])
     }
 
     #[test]
-    fn nesting_depth_at_the_limit_is_parsed_and_one_past_it_is_degraded() {
-        let at_limit = format!(
-            "export const x = {}0{};\n",
-            "[".repeat(MAX_SOURCE_NESTING_DEPTH - 1),
-            "]".repeat(MAX_SOURCE_NESTING_DEPTH - 1)
-        );
-        assert_eq!(max_bracket_nesting_depth(&at_limit), MAX_SOURCE_NESTING_DEPTH - 1);
-        let exactly = format!("[{}", "[".repeat(MAX_SOURCE_NESTING_DEPTH - 1));
-        assert_eq!(max_bracket_nesting_depth(&exactly), MAX_SOURCE_NESTING_DEPTH);
-        let over = format!("[{}", "[".repeat(MAX_SOURCE_NESTING_DEPTH));
-        assert_eq!(max_bracket_nesting_depth(&over), MAX_SOURCE_NESTING_DEPTH + 1);
-        let path = Utf8Path::new("a.ts");
-        assert!(!extract(path, &at_limit, AnalysisProfile::Full).had_parse_errors);
-        let degraded = extract(path, &over, AnalysisProfile::Full);
-        assert!(degraded.had_parse_errors);
-        assert!(degraded.blocks.is_empty());
+    fn the_run_gets_the_stack_it_asks_for() {
+        // 32 MiB of frames would overflow both the 8 MiB main thread and the 2 MiB a test thread gets.
+        let extraction = guarded(256 << 20, || Extraction {
+            type_only_imports: vec![recurse(32 << 10).to_string()],
+            ..Extraction::default()
+        });
+        assert_eq!(extraction.type_only_imports, ["32768"]);
     }
 
     #[test]

@@ -182,6 +182,7 @@ mod tests {
             digest: Digest::blake3(b"x"),
             profile,
             had_parse_errors: false,
+            degradation: None,
             symbols: Vec::new(),
             dependencies: Vec::new(),
             exports: Vec::new(),
