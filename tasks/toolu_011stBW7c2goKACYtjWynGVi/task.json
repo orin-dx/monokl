@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_011stBW7c2goKACYtjWynGVi",
+  "agent_id": "af286df18d56a59f5",
+  "subagent_type": "general-purpose",
+  "task_description": "Lossy non-UTF-8 reads PR",
+  "started_at": "2026-11-06T11:40:56.175512-08:00"
+}
