@@ -32,7 +32,8 @@ pub struct SearchRequest<'a> {
     pub exact: bool,
     /// Searches test files too.
     pub allow_tests: bool,
-    /// Skips hidden files and what `.gitignore` and `.ignore` files inside the root exclude.
+    /// Skips hidden files and what `.gitignore` and `.ignore` files exclude: inside the root and, within a git
+    /// repository, in its parent directories up to the repository root.
     pub respect_ignore_files: bool,
     /// Restricts the search to one language; only TypeScript and JavaScript are supported.
     pub language: Option<Language>,
