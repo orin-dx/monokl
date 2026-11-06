@@ -45,7 +45,7 @@ struct SearchArgs {
     /// Searches test files too.
     #[arg(long)]
     tests: bool,
-    /// Searches hidden files and files that .gitignore or .ignore would exclude.
+    /// Searches hidden files and files that .gitignore or .ignore (in the search path or its parents) would exclude.
     #[arg(long)]
     no_ignore: bool,
     /// Searches only this language.

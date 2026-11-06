@@ -135,6 +135,37 @@ fn no_ignore_searches_ignored_directories() {
     assert!(lines.next().unwrap().starts_with("  build/out.ts,1,1,function,"), "got: {text}");
 }
 
+/// A repository whose root `.gitignore` excludes `build/`, which holds the only match for `generated` in `pkg/build/`.
+fn repository_with_a_gitignored_match_below_a_subdirectory() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("pkg/build")).unwrap();
+    std::fs::write(dir.path().join("pkg/build/out.ts"), "export function generated() {}\n").unwrap();
+    dir
+}
+
+#[test]
+fn a_parent_gitignore_in_the_repository_excludes_files_below_the_search_path() {
+    let dir = repository_with_a_gitignored_match_below_a_subdirectory();
+    let output = monokl_in(&dir.path().join("pkg"), &["search", "generated", "."]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).starts_with("search: []"), "got: {}", stdout(&output));
+}
+
+#[test]
+fn no_ignore_also_skips_parent_ignore_files() {
+    let dir = repository_with_a_gitignored_match_below_a_subdirectory();
+    let output = monokl_in(&dir.path().join("pkg"), &["search", "generated", ".", "--no-ignore"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert_eq!(
+        text.lines().next(),
+        Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:")
+    );
+    assert!(text.lines().nth(1).unwrap().starts_with("  build/out.ts,1,1,function,"), "got: {text}");
+}
+
 #[test]
 fn a_missing_search_root_exits_with_a_structured_error() {
     let dir = tempfile::tempdir().unwrap();
