@@ -11,7 +11,6 @@ use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::LanguageId;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::dedup::dedup_blocks;
 use crate::error::{MonoklError, Result};
@@ -245,6 +244,15 @@ struct FileContext<'a> {
     language: Option<Language>,
 }
 
+/// The TypeScript analyzer owns both languages, so the `--language` filter goes by extension.
+fn has_language_extension(language: Language, path: &Utf8Path) -> bool {
+    match language {
+        Language::TypeScript => matches!(path.extension(), Some("ts" | "tsx" | "mts" | "cts")),
+        Language::JavaScript => matches!(path.extension(), Some("js" | "jsx" | "mjs" | "cjs")),
+        Language::Rust | Language::Python => false,
+    }
+}
+
 /// Analyzes one surviving file and pushes the annotated blocks that contain a matching line onto `out`.
 fn retrieve_blocks(
     ctx: &FileContext<'_>,
@@ -255,8 +263,7 @@ fn retrieve_blocks(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(analyzer) = ctx.registry.analyzer_for(path) else { return };
-    // JavaScript files belong to the TypeScript analyzer.
-    if ctx.language.is_some() && !ctx.registry.supports_language(path, &[LanguageId::TypeScript]) {
+    if ctx.language.is_some_and(|language| !has_language_extension(language, path)) {
         return;
     }
     let source = match read(path) {
@@ -353,6 +360,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::analysis::LanguageId;
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
     use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer};
     use crate::digest::Digest;
@@ -479,12 +487,12 @@ mod tests {
     }
 
     #[test]
-    fn typescript_and_javascript_languages_search_typescript_analyzer_files() {
+    fn typescript_and_javascript_languages_select_files_by_extension() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.js", "alpha\n")]);
-        for language in [Language::TypeScript, Language::JavaScript] {
+        for (language, expected) in [(Language::TypeScript, ["a.ts"]), (Language::JavaScript, ["b.js"])] {
             let request = SearchRequest { language: Some(language), ..request(&root, "alpha") };
             let result = search(&whole_file_registry(), &request).unwrap();
-            assert_eq!(files(&result, &root), ["a.ts", "b.js"]);
+            assert_eq!(files(&result, &root), expected);
             assert_eq!(result.diagnostics.len(), 0);
         }
     }

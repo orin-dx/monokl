@@ -55,7 +55,7 @@ impl LanguageAnalyzer for TsAnalyzer {
     }
 
     fn supports(&self, path: &Utf8Path) -> bool {
-        !path.as_str().ends_with(".d.ts")
+        !(path.as_str().ends_with(".d.ts") || path.as_str().ends_with(".d.mts") || path.as_str().ends_with(".d.cts"))
             && matches!(path.extension(), Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs"))
     }
 
@@ -183,6 +183,8 @@ mod tests {
     #[case("a.cjs", true)]
     #[case("src/deep/dir/a.ts", true)]
     #[case("types.d.ts", false)]
+    #[case("types.d.mts", false)]
+    #[case("types.d.cts", false)]
     #[case("src/types/global.d.ts", false)]
     #[case("a.rs", false)]
     #[case("a.json", false)]

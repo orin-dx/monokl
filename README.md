@@ -68,6 +68,7 @@ To read a row's code, open the file at `lineStart`–`lineEnd`. Skipped or unrea
 | `+cart` | Files must mention `cart` |
 | `-Button` | Skip files that mention `Button` |
 | `regex:use[A-Z]\w+` | Lines matching a regular expression |
+| `regex:"a pattern with spaces"` | A regular expression with whitespace, quoted. `+` and `-` work in front of `regex:` too |
 | `--exact` | Treat the whole query as one literal, operators and quotes included |
 
 Matching ignores case. A `-term` removes whole files, not single results. If one query mixes terms, `+cart -Button` finds code in files that mention `cart` but never `Button`:
@@ -86,9 +87,9 @@ search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
 | `--max-results N` | 50 | Most results to print |
 | `--max-tokens N` | 20,000 | Most tokens across the blocks the printed rows cover |
 | `--max-bytes N` | 2 MiB | Most bytes across the blocks the printed rows cover |
-| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.ts`, `*.test.tsx`, `*.test.js` and the `.spec` equivalents |
+| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`) |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude |
-| `--language L` | all | Search one language only: `typescript`, `javascript` (`rust` and `python` are accepted but match nothing yet) |
+| `--language L` | all | Search one language only: `typescript`, `javascript`, chosen by file extension: `.ts .tsx .mts .cts` or `.js .jsx .mjs .cjs` (`rust` and `python` are accepted but match nothing yet) |
 
 ## Errors and exit codes
 

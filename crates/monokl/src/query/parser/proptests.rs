@@ -6,7 +6,7 @@ use super::*;
 #[derive(Debug, Clone)]
 enum Written {
     Literal(Modifier, String),
-    Regex(String),
+    Regex(Modifier, String),
 }
 
 // No backslash: `\"` is the only escape, so a backslash next to a quote has no faithful rendering.
@@ -14,12 +14,14 @@ fn text() -> impl Strategy<Value = String> {
     "[a-zA-Z0-9 .*+?()\\[\\]{}|^$:\"-]{0,12}"
 }
 
+fn modifier() -> impl Strategy<Value = Modifier> {
+    prop_oneof![Just(Modifier::Required), Just(Modifier::Excluded), Just(Modifier::Optional)]
+}
+
 fn written() -> impl Strategy<Value = Written> {
     prop_oneof![
-        (prop_oneof![Just(Modifier::Required), Just(Modifier::Excluded), Just(Modifier::Optional)], text())
-            .prop_map(|(modifier, text)| Written::Literal(modifier, text)),
-        // A modifier before `regex:` is dropped by the parser, so a regex term is always optional.
-        text().prop_map(Written::Regex),
+        (modifier(), text()).prop_map(|(modifier, text)| Written::Literal(modifier, text)),
+        (modifier(), text()).prop_map(|(modifier, text)| Written::Regex(modifier, text)),
     ]
 }
 
@@ -31,7 +33,9 @@ fn render(terms: &[Written]) -> String {
             Written::Literal(Modifier::Required, text) => format!("+{}", quote(text)),
             Written::Literal(Modifier::Excluded, text) => format!("-{}", quote(text)),
             Written::Literal(Modifier::Optional, text) => quote(text),
-            Written::Regex(text) => format!("regex:{}", quote(text)),
+            Written::Regex(Modifier::Required, text) => format!("+regex:{}", quote(text)),
+            Written::Regex(Modifier::Excluded, text) => format!("-regex:{}", quote(text)),
+            Written::Regex(Modifier::Optional, text) => format!("regex:{}", quote(text)),
         })
         .collect();
     rendered.join(" ")
@@ -40,9 +44,13 @@ fn render(terms: &[Written]) -> String {
 fn expected(terms: &[Written]) -> Vec<(Modifier, String, bool)> {
     terms
         .iter()
-        .map(|term| match term {
-            Written::Literal(modifier, text) => (modifier.clone(), regex::escape(text), false),
-            Written::Regex(text) => (Modifier::Optional, text.clone(), true),
+        .filter_map(|term| match term {
+            // An empty phrase yields no term.
+            Written::Literal(_, text) if text.is_empty() => None,
+            Written::Literal(modifier, text) => Some((modifier.clone(), regex::escape(text), false)),
+            // An empty regex pattern yields no term.
+            Written::Regex(_, text) if text.is_empty() => None,
+            Written::Regex(modifier, text) => Some((modifier.clone(), text.clone(), true)),
         })
         .collect()
 }

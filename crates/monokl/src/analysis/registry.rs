@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use camino::Utf8Path;
 
-use super::lang::{LanguageAnalyzer, LanguageId};
+use super::lang::LanguageAnalyzer;
 
 /// Analyzers in registration order.
 ///
@@ -40,30 +40,13 @@ impl AnalyzerRegistry {
     pub fn analyzer_for(&self, path: &Utf8Path) -> Option<&dyn LanguageAnalyzer> {
         self.analyzers.iter().find(|analyzer| analyzer.supports(path)).map(Arc::as_ref)
     }
-
-    /// Returns whether the analyzer that owns `path` reports one of `languages` for it.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monokl::analysis::LanguageId;
-    /// use monokl::analysis::registry::AnalyzerRegistry;
-    ///
-    /// let registry = AnalyzerRegistry::new(Vec::new());
-    /// assert!(!registry.supports_language("a.ts".into(), &[LanguageId::TypeScript]));
-    /// ```
-    pub fn supports_language(&self, path: &Utf8Path, languages: &[LanguageId]) -> bool {
-        self.analyzer_for(path)
-            .and_then(|analyzer| analyzer.language_for(path))
-            .is_some_and(|language| languages.contains(&language))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis::file_analysis::FileAnalysis;
-    use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision};
+    use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageId};
     use crate::error::{MonoklError, Result};
 
     /// Claims every path ending in `extension` and reports its one language for it.
@@ -124,17 +107,5 @@ mod tests {
         let registry = AnalyzerRegistry::new(vec![analyzer("ts", LanguageId::TypeScript)]);
         assert!(registry.analyzer_for(Utf8Path::new("README.md")).is_none());
         assert!(AnalyzerRegistry::new(Vec::new()).analyzer_for(Utf8Path::new("a.ts")).is_none());
-    }
-
-    #[test]
-    fn supports_language_checks_the_owning_analyzers_language() {
-        let registry =
-            AnalyzerRegistry::new(vec![analyzer("ts", LanguageId::TypeScript), analyzer("rs", LanguageId::Rust)]);
-        let ts = Utf8Path::new("a.ts");
-        assert!(registry.supports_language(ts, &[LanguageId::TypeScript]));
-        assert!(registry.supports_language(ts, &[LanguageId::Go, LanguageId::TypeScript]));
-        assert!(!registry.supports_language(ts, &[LanguageId::Rust]));
-        assert!(!registry.supports_language(ts, &[]));
-        assert!(!registry.supports_language(Utf8Path::new("a.md"), &[LanguageId::TypeScript]));
     }
 }

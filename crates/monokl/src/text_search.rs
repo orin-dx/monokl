@@ -335,9 +335,19 @@ fn is_test_path(relative: &Utf8Path) -> bool {
         || path.ends_with(".test.ts")
         || path.ends_with(".test.tsx")
         || path.ends_with(".test.js")
+        || path.ends_with(".test.jsx")
+        || path.ends_with(".test.mjs")
+        || path.ends_with(".test.cjs")
+        || path.ends_with(".test.mts")
+        || path.ends_with(".test.cts")
         || path.ends_with(".spec.ts")
         || path.ends_with(".spec.tsx")
         || path.ends_with(".spec.js")
+        || path.ends_with(".spec.jsx")
+        || path.ends_with(".spec.mjs")
+        || path.ends_with(".spec.cjs")
+        || path.ends_with(".spec.mts")
+        || path.ends_with(".spec.cts")
 }
 
 #[cfg(test)]
@@ -896,6 +906,16 @@ mod tests {
     #[case("src/a.spec.ts")]
     #[case("src/a.spec.tsx")]
     #[case("src/a.spec.js")]
+    #[case("src/a.test.jsx")]
+    #[case("src/a.test.mjs")]
+    #[case("src/a.test.cjs")]
+    #[case("src/a.test.mts")]
+    #[case("src/a.test.cts")]
+    #[case("src/a.spec.jsx")]
+    #[case("src/a.spec.mjs")]
+    #[case("src/a.spec.cjs")]
+    #[case("src/a.spec.mts")]
+    #[case("src/a.spec.cts")]
     fn test_paths_are_classified_as_tests(#[case] relative: &str) {
         assert!(is_test_path(Utf8Path::new(relative)));
     }
@@ -909,8 +929,6 @@ mod tests {
     #[case("src/contest/a.ts")]
     #[case("src/latest/a.ts")]
     #[case("src/specs/a.ts")]
-    #[case("src/a.test.mjs")]
-    #[case("src/a.spec.jsx")]
     #[case("src/a.test.ts.map")]
     #[case("Test/a.ts")]
     #[case("src/Spec/a.ts")]
