@@ -173,7 +173,13 @@ def main():
             # The first 40 characters of the declaration's line, because a signature or snippet may cut a long one.
             # TOON quotes and escapes cells, so compare with quotes and backslashes removed on both sides.
             bare = str.maketrans("", "", '"\\')
-            answered = declaration is not None and declaration[:40].translate(bare) in output.translate(bare)
+            # A signature drops the opening brace, so compare without trailing braces and semicolons.
+            # and its export, default and declare keywords.
+            wanted = None
+            if declaration:
+                bare_declaration = re.sub(r"^(?:export\s+|default\s+|declare\s+)+", "", declaration).rstrip(" {;")
+                wanted = bare_declaration[:40].translate(bare)
+            answered = wanted is not None and wanted in output.translate(bare)
             non_test = [f for f in ordered if not is_test_path(f)]
             found, found_tests = split(ordered)
             _, rg_ms = timed(mentions, term, path)
