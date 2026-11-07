@@ -38,8 +38,8 @@ coverage threshold="90":
 coverage-html:
     cargo llvm-cov nextest --workspace --all-features --locked --html --open
 
-# Format check and clippy, with and without default features
-lint:
+# Format check, clippy with and without default features, and typos, the same as CI's lint job
+lint: typos
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings

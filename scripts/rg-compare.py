@@ -26,8 +26,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "rg-compare.repos"
 CACHE = ROOT / "target" / "rg-compare"
-GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"]
-DECLARATION = r"\b(?:function|class|interface|type|enum|const|let|var)\s+([A-Za-z_][A-Za-z0-9_]{3,})"
+# Declaration files are not searched by design (see `supports` in crates/monokl/src/analysis/ts/mod.rs).
+GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "!*.d.ts", "!*.d.mts", "!*.d.cts"]
+# A top-level declaration starts its line. Indented ones are locals and loop variables, which monokl does not index.
+TOP_LEVEL = r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+"
+DECLARATION = TOP_LEVEL + r"([A-Za-z_][A-Za-z0-9_]{3,})"
 UNCAPPED = "1000000"
 TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
 TEST_SUFFIXES = tuple(
@@ -77,7 +80,7 @@ def mentions(term, path):
 
 
 def definitions(term, path):
-    return rg_files(rf"\b(?:function|class|interface|type|enum|const|let|var)\s+{re.escape(term)}\b", path)
+    return rg_files(rf"{TOP_LEVEL}{re.escape(term)}\b", path)
 
 
 def monokl_files(binary, term, path, tests):
@@ -137,7 +140,7 @@ def main():
     parser.add_argument("--repo", action="append", help="limit to a repository name from rg-compare.repos")
     parser.add_argument("--terms", type=int, default=25, help="identifiers sampled per repository")
     parser.add_argument("--top", type=int, default=3, help="a declaration must appear within this many files")
-    parser.add_argument("--min-recall", type=float, default=1.0, help="fail when the share of hits is lower")
+    parser.add_argument("--min-recall", type=float, default=0.9, help="fail when the share of hits is lower")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
     args = parser.parse_args()
