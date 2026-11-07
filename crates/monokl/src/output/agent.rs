@@ -122,12 +122,55 @@ pub trait ToonProjection<const N: usize> {
 }
 const TRUNCATION_GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
 
-impl ToonProjection<7> for crate::types::SearchResponse {
-    const TYPE_NAME: &'static str = "search";
-    const FIELDS: [&'static str; 7] =
-        ["file", "lineStart", "lineEnd", "nodeKind", "symbolSignature", "rank", "finalScore"];
+/// The most matching lines a row's snippet shows.
+const SNIPPET_LINES: usize = 3;
+/// The most characters of one matching line a snippet shows.
+const SNIPPET_LINE_CHARS: usize = 160;
 
-    fn toon_rows(&self) -> Vec<[Value; 7]> {
+/// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
+///
+/// The block's first line is left out when the block has a signature, because the signature column already shows it;
+/// a variable or type alias has no signature, so its first line is the best thing to show. At most [`SNIPPET_LINES`]
+/// lines appear, each cut to [`SNIPPET_LINE_CHARS`] characters, and the lines beyond that are counted, not dropped
+/// silently.
+fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
+    let lines: Vec<&str> = block.code.split('\n').collect();
+    let first = if block.symbol_signature.is_some() { block.line_start + 1 } else { block.line_start };
+    let mut shown: Vec<usize> = block
+        .matched_lines
+        .iter()
+        .copied()
+        .filter(|&line| line >= first && line - block.line_start < lines.len())
+        .collect();
+    shown.sort_unstable();
+    shown.dedup();
+    let hidden = shown.len().saturating_sub(SNIPPET_LINES);
+    let mut out: Vec<String> = shown
+        .iter()
+        .take(SNIPPET_LINES)
+        .map(|&line| {
+            let text = lines[line - block.line_start].trim();
+            let mut chars = text.chars();
+            let head: String = chars.by_ref().take(SNIPPET_LINE_CHARS).collect();
+            let ellipsis = if chars.next().is_some() { "…" } else { "" };
+            format!("{line}: {head}{ellipsis}")
+        })
+        .collect();
+    if out.is_empty() {
+        return None;
+    }
+    if hidden > 0 {
+        out.push(format!("...and {hidden} more matching {}", if hidden == 1 { "line" } else { "lines" }));
+    }
+    Some(out.join("\n"))
+}
+
+impl ToonProjection<8> for crate::types::SearchResponse {
+    const TYPE_NAME: &'static str = "search";
+    const FIELDS: [&'static str; 8] =
+        ["file", "lineStart", "lineEnd", "nodeKind", "symbolSignature", "snippet", "rank", "finalScore"];
+
+    fn toon_rows(&self) -> Vec<[Value; 8]> {
         self.results
             .iter()
             .map(|block| {
@@ -137,6 +180,7 @@ impl ToonProjection<7> for crate::types::SearchResponse {
                     Value::from(block.block.line_end),
                     cell(symbol_kind_str(block.block.node_kind)),
                     opt_cell(block.block.symbol_signature.as_deref()),
+                    opt_cell(snippet(&block.block).as_deref()),
                     Value::from(block.rank),
                     Value::from(block.final_score),
                 ]
@@ -222,11 +266,106 @@ pub fn render_projection<const N: usize, T: ToonProjection<N>>(value: &T) -> Res
 }
 
 #[cfg(test)]
+mod snippet_tests {
+    use super::*;
+    use crate::types::CodeBlock;
+    use camino::Utf8PathBuf;
+
+    fn block(line_start: usize, code: &str, matched_lines: &[usize]) -> CodeBlock {
+        CodeBlock {
+            file: Utf8PathBuf::from("src/a.ts"),
+            line_start,
+            line_end: line_start + code.split('\n').count() - 1,
+            node_kind: SymbolKind::Function,
+            code: code.to_owned(),
+            symbol_signature: Some("signature".to_owned()),
+            matched_lines: matched_lines.to_vec(),
+            matched_keywords: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_snippet_shows_matching_lines_with_their_numbers_but_not_the_signature_line() {
+        let b = block(10, "function f() {\n  const price = 1;\n  return price;\n}", &[10, 11, 12]);
+        assert_eq!(snippet(&b), Some("11: const price = 1;\n12: return price;".to_owned()));
+    }
+
+    #[test]
+    fn a_block_matching_only_on_its_first_line_has_no_snippet() {
+        let b = block(10, "function price() {\n  return 1;\n}", &[10]);
+        assert_eq!(snippet(&b), None);
+    }
+
+    #[test]
+    fn a_block_without_a_signature_shows_its_first_line_when_it_matched() {
+        let mut b = block(3, "export const price = 1;", &[3]);
+        b.symbol_signature = None;
+        assert_eq!(snippet(&b), Some("3: export const price = 1;".to_owned()));
+    }
+
+    #[test]
+    fn a_block_with_a_signature_does_not_repeat_it_in_the_snippet() {
+        let mut b = block(3, "function price() {\n  return price;\n}", &[3, 4]);
+        b.symbol_signature = Some("function price()".to_owned());
+        assert_eq!(snippet(&b), Some("4: return price;".to_owned()));
+    }
+
+    #[test]
+    fn a_block_with_no_matched_lines_has_no_snippet() {
+        assert_eq!(snippet(&block(1, "a\nb", &[])), None);
+    }
+
+    #[test]
+    fn a_snippet_shows_three_lines_and_counts_the_rest() {
+        let b = block(1, "head\nx1\nx2\nx3\nx4\nx5", &[2, 3, 4, 5, 6]);
+        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n...and 2 more matching lines".to_owned()));
+    }
+
+    #[test]
+    fn a_snippet_counts_one_more_line_in_the_singular() {
+        let b = block(1, "head\nx1\nx2\nx3\nx4", &[2, 3, 4, 5]);
+        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n...and 1 more matching line".to_owned()));
+    }
+
+    #[test]
+    fn a_long_line_is_cut_on_a_character_boundary() {
+        let long = "é".repeat(200);
+        let b = block(1, &format!("head\n  {long}"), &[2]);
+        assert_eq!(snippet(&b), Some(format!("2: {}…", "é".repeat(SNIPPET_LINE_CHARS))));
+    }
+
+    #[test]
+    fn a_line_at_the_limit_is_not_cut() {
+        let exact = "x".repeat(SNIPPET_LINE_CHARS);
+        let b = block(1, &format!("head\n{exact}"), &[2]);
+        assert_eq!(snippet(&b), Some(format!("2: {exact}")));
+    }
+
+    #[test]
+    fn carriage_returns_and_indentation_are_trimmed() {
+        let b = block(1, "head\r\n    return 1;\r\n", &[2]);
+        assert_eq!(snippet(&b), Some("2: return 1;".to_owned()));
+    }
+
+    #[test]
+    fn matched_lines_outside_the_block_are_ignored() {
+        let b = block(5, "head\nbody", &[1, 6, 99]);
+        assert_eq!(snippet(&b), Some("6: body".to_owned()));
+    }
+
+    #[test]
+    fn a_line_matched_twice_is_shown_once() {
+        let b = block(1, "head\nbody", &[2, 2]);
+        assert_eq!(snippet(&b), Some("2: body".to_owned()));
+    }
+}
+
+#[cfg(test)]
 mod projection_tests {
     use super::*;
 
     #[test]
-    fn render_projection_search_response_includes_extract_hint() {
+    fn render_projection_search_response_shows_a_bounded_snippet_not_the_block() {
         use crate::types::{CodeBlock, RankedBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
 
@@ -238,9 +377,9 @@ mod projection_tests {
                     line_start: 5,
                     line_end: 9,
                     node_kind: SymbolKind::Function,
-                    code: "fn foo() {}".to_string(),
+                    code: "fn foo(x) {\n    let y = foo(x);\n    unrelated();\n    y\n}".to_string(),
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
-                    matched_lines: vec![1],
+                    matched_lines: vec![5, 6],
                     matched_keywords: vec!["foo".to_string()],
                 },
                 bm25_score: 0.75,
@@ -258,13 +397,11 @@ mod projection_tests {
         };
 
         let rendered = render_projection(&response).expect("valid projection must render");
-        assert!(
-            rendered.contains("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n"),
-            "got: {rendered}"
+        assert_eq!(
+            rendered,
+            "search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n  \
+             src/lib.rs,5,9,function,\"fn foo(x)\\nsecond line\",\"6: let y = foo(x);\",2,0.92"
         );
-        assert!(rendered.contains("src/lib.rs,5,9,function,\"fn foo(x)\\nsecond line\",2,0.92"), "got: {rendered}");
-        assert!(!rendered.contains("fn foo() {}"), "code field must never appear in TOON output, got: {rendered}");
-        assert!(!rendered.contains("help["), "a non-empty result with no diagnostics has no hints, got: {rendered}");
     }
 
     #[test]
@@ -377,9 +514,9 @@ mod projection_tests {
         let rendered = render_projection(&apply_budget(ranked, 3, &budget, Vec::new())).expect("must render");
         assert_eq!(
             rendered,
-            "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n  \
-             src/f1.rs,1,2,function,null,1,0.5\n  \
-             src/f2.rs,2,3,function,null,2,0.5\n\
+            "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n  \
+             src/f1.rs,1,2,function,null,null,1,0.5\n  \
+             src/f2.rs,2,3,function,null,null,2,0.5\n\
              totalCount: 3\n\
              help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
         );
@@ -509,7 +646,8 @@ mod projection_tests {
 
         let rendered = render_projection(&search).expect("valid projection must render");
         assert!(
-            rendered.starts_with("search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:\n"),
+            rendered
+                .starts_with("search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n"),
             "got: {rendered}"
         );
         let one_pos = rendered.find("src/one.rs,1,2,").expect("first result row must be present");

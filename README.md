@@ -47,17 +47,17 @@ Search a directory (the default is the current one):
 
 ```
 $ monokl search "format price" src/ --max-results 3
-search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
-  src/utils/format.ts,1,3,function,"function formatCurrency(amount: number, currency: string = 'USD'): string",1,3.950647
-  src/utils/validation.ts,8,12,function,"function validatePrice(price: number): ValidationResult",2,3.07557
-  src/index.ts,3,3,other,null,3,2.345138
+search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:
+  src/utils/format.ts,1,3,function,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,3.950647
+  src/utils/validation.ts,8,12,function,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };",2,3.07557
+  src/index.ts,3,3,other,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,2.345138
 totalCount: 10
 help[1]: showing 3 of 10; raise the cap or refine the query with +term or -term
 ```
 
-Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
+Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, interface, type alias and so on), its signature, the lines in it that matched (`snippet`), and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
 
-To read a row's code, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, files read lossily because they are not valid UTF-8, syntax errors and an empty query are reported as `help` lines under the table.
+The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows up to three, then counts the rest (`...and 2 more matching lines`). A block with a signature leaves out its first line, which the signature already shows, so the snippet is `null` when that line is the only match. To read the whole block, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, files read lossily because they are not valid UTF-8, syntax errors and an empty query are reported as `help` lines under the table.
 
 ## Writing a query
 
@@ -75,9 +75,9 @@ Matching ignores case. A `-term` removes whole files, not single results. If one
 
 ```
 $ monokl search "+cart -Button" .
-search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:
-  src/hooks/useCart.ts,11,25,function,function useCart(),1,1.453107
-  src/hooks/useCart.ts,5,9,interface,null,2,1.30166
+search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:
+  src/hooks/useCart.ts,11,25,function,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n14: const addItem = (item: CartItem): ValidationResult => {",1,1.453107
+  src/hooks/useCart.ts,5,9,interface,null,"5: export interface CartItem {",2,1.30166
 ```
 
 ## Options

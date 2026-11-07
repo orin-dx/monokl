@@ -6,6 +6,8 @@ what is right, and the score rewards targeting:
 
 - definitions: files that declare the identifier. The gate is whether one of them is among monokl's first `--top` files
   (hit@top), because an agent that asks for a symbol must be shown where it is declared, early.
+- declaration_in_output: whether the declaration's own line appears in monokl's output, so the agent needs no second
+  read of the file. Reported, not gated.
 - cost: files and output size monokl returns with its default caps, against one `rg -n` call. rg wins on a bare
   identifier, so this is the floor to beat; monokl's case is the question that takes rg several calls.
 - test files are left out of the lists, as monokl leaves them out by default. `--tests` also runs monokl with its test
@@ -95,7 +97,17 @@ def monokl_files(binary, term, path, tests):
             file = line.strip().split(",", 1)[0].removeprefix("./")
             if file not in files:
                 files.append(file)
-    return files, len(out.encode())
+    return files, out
+
+
+def declaration_line(term, files, path):
+    """The text of the first top-level declaration of `term` in one of `files`, as ripgrep finds it."""
+    for file in sorted(files):
+        out = run(["rg", "--no-filename", "--max-count", "1", "-e", rf"{TOP_LEVEL}{re.escape(term)}\b", file], cwd=path,
+                  check=False).stdout
+        if out.strip():
+            return out.strip()
+    return None
 
 
 def rg_output_bytes(term, path):
@@ -155,7 +167,13 @@ def main():
         for term in sample_terms(path, args.terms):
             defs, def_tests = split(definitions(term, path))
             seen, seen_tests = split(mentions(term, path))
-            (ordered, monokl_bytes), monokl_ms = timed(monokl_files, args.binary, term, path, args.tests)
+            (ordered, output), monokl_ms = timed(monokl_files, args.binary, term, path, args.tests)
+            monokl_bytes = len(output.encode())
+            declaration = declaration_line(term, defs, path)
+            # The first 40 characters of the declaration's line, because a signature or snippet may cut a long one.
+            # TOON quotes and escapes cells, so compare with quotes and backslashes removed on both sides.
+            bare = str.maketrans("", "", '"\\')
+            answered = declaration is not None and declaration[:40].translate(bare) in output.translate(bare)
             non_test = [f for f in ordered if not is_test_path(f)]
             found, found_tests = split(ordered)
             _, rg_ms = timed(mentions, term, path)
@@ -165,6 +183,7 @@ def main():
                     "term": term,
                     "defs": len(defs),
                     "def_rank": rank,
+                    "answered": answered,
                     "returned": len(non_test),
                     "rg_files": len(seen | defs),
                     "monokl_bytes": monokl_bytes,
@@ -190,6 +209,7 @@ def main():
         line = (
             f"{repo['repo']:<10} defined_terms={len(rows):<3} hit@{args.top}={repo_hits}/{len(rows)} "
             f"median_rank={statistics.median(ranks) if ranks else '-'} "
+            f"declaration_in_output={sum(1 for r in rows if r['answered'])}/{len(rows)} "
             f"files={returned} vs rg={rg_files} "
             f"output_kb monokl={sum(r['monokl_bytes'] for r in repo['rows']) / 1024:.0f} "
             f"rg_n={sum(r['rg_bytes'] for r in repo['rows']) / 1024:.0f} "
