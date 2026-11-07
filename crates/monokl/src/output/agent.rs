@@ -165,27 +165,36 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
     Some(out.join("\n"))
 }
 
+fn search_row(block: &crate::types::RankedBlock) -> [Value; 8] {
+    [
+        cell(block.block.file.as_str()),
+        Value::from(block.block.line_start),
+        Value::from(block.block.line_end),
+        cell(symbol_kind_str(block.block.node_kind)),
+        opt_cell(block.block.symbol_signature.as_deref()),
+        opt_cell(snippet(&block.block).as_deref()),
+        Value::from(block.rank),
+        Value::from(block.final_score),
+    ]
+}
+
+/// The line `monokl search` prints for `block`, indentation included and the newline left out.
+///
+/// The search budget measures this text, so a cap counts what the reader receives.
+pub fn search_row_text(block: &crate::types::RankedBlock) -> String {
+    let fields = <crate::types::SearchResponse as ToonProjection<8>>::FIELDS;
+    let row = search_row(block).to_vec();
+    let rendered = michi::AgentResponse::new("search").items(vec![row], fields.as_slice()).render_toon();
+    rendered.lines().nth(1).unwrap_or_default().to_owned()
+}
+
 impl ToonProjection<8> for crate::types::SearchResponse {
     const TYPE_NAME: &'static str = "search";
     const FIELDS: [&'static str; 8] =
         ["file", "lineStart", "lineEnd", "nodeKind", "symbolSignature", "snippet", "rank", "finalScore"];
 
     fn toon_rows(&self) -> Vec<[Value; 8]> {
-        self.results
-            .iter()
-            .map(|block| {
-                [
-                    cell(block.block.file.as_str()),
-                    Value::from(block.block.line_start),
-                    Value::from(block.block.line_end),
-                    cell(symbol_kind_str(block.block.node_kind)),
-                    opt_cell(block.block.symbol_signature.as_deref()),
-                    opt_cell(snippet(&block.block).as_deref()),
-                    Value::from(block.rank),
-                    Value::from(block.final_score),
-                ]
-            })
-            .collect()
+        self.results.iter().map(search_row).collect()
     }
 
     fn toon_total_count(&self) -> Option<usize> {
@@ -511,7 +520,8 @@ mod projection_tests {
             .collect();
         let budget = Budget { max_results: 2, ..Budget::default() };
 
-        let rendered = render_projection(&apply_budget(ranked, 3, &budget, Vec::new())).expect("must render");
+        let rendered =
+            render_projection(&apply_budget(ranked, 3, &budget, search_row_text, Vec::new())).expect("must render");
         assert_eq!(
             rendered,
             "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n  \

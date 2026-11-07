@@ -1,18 +1,22 @@
 //! The agent-layer search budget: cuts a fully ranked, uncapped result down to what one response may carry.
 //!
 //! Core returns every ranked block and holds no caps; this module is the first thing a caller does with that result.
+//! The caps count the text the caller prints for each row, which the caller supplies, so a cap means what the reader
+//! sees and not the size of the code blocks behind the rows.
 use michi::TruncationOutcome;
 
 use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
 /// Texts longer than this many bytes are measured by their byte length instead of being tokenized.
 ///
-/// BPE merging is quadratic in the length of an unbroken pretoken (200 KB of one run takes seconds), so minified
-/// bundles and base64 blobs must not reach the tokenizer. Byte length is a proven upper bound on the token count, so
-/// the fallback can only make a block look larger, never let one overspend the budget.
+/// BPE merging is quadratic in the length of an unbroken pretoken (200 KB of one run takes seconds), so a row that
+/// carries a minified or base64 line must not reach the tokenizer. Byte length is a proven upper bound on the token count, so
+/// the fallback can only make a row look larger, never let one overspend the budget.
 const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
 
 /// The three caps one search response must stay within.
+///
+/// `max_tokens` and `max_bytes` count the printed text of the kept rows, as given to [`apply_budget`].
 ///
 /// # Examples
 ///
@@ -24,11 +28,11 @@ const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
-    /// The most blocks a response may carry.
+    /// The most rows a response may carry.
     pub max_results: usize,
-    /// The most tokens (`o200k_base`) the kept blocks' code may total.
+    /// The most tokens (`o200k_base`) the kept rows' printed text may total.
     pub max_tokens: usize,
-    /// The most bytes the kept blocks' code may total.
+    /// The most bytes the kept rows' printed text may total.
     pub max_bytes: usize,
 }
 
@@ -57,12 +61,13 @@ pub fn count_tokens(text: &str) -> usize {
     tiktoken_rs::o200k_base_singleton().encode_with_special_tokens(text).len()
 }
 
-/// Keeps the longest rank-order prefix of `ranked` that fits `budget` and reports what was cut.
+/// Keeps the longest rank-order prefix of `ranked` whose printed rows fit `budget` and reports what was cut.
 ///
-/// Blocks are never split or reordered. The cut falls at the first block that would break any of the three caps, so a
-/// block larger than the whole byte budget leaves no results. `total_before` is the count the caller had before any
+/// `row_text` returns the text that is printed for one block; the byte and token caps count that text, not the block's
+/// code. Blocks are never split or reordered. The cut falls at the first block that would break any of the three caps,
+/// so a row larger than the whole byte budget leaves no results. `total_before` is the count the caller had before any
 /// cap, which may exceed `ranked.len()` when an earlier stage already dropped candidates; the response is truncated
-/// whenever fewer blocks are kept than that. `total_bytes` sums the kept blocks' code length and `total_tokens` its
+/// whenever fewer blocks are kept than that. `total_bytes` sums the kept rows' text length and `total_tokens` its
 /// [`count_tokens`] count. `diagnostics` pass through untouched.
 ///
 /// # Examples
@@ -70,7 +75,7 @@ pub fn count_tokens(text: &str) -> usize {
 /// ```
 /// use monokl::budget::{apply_budget, Budget};
 ///
-/// let response = apply_budget(Vec::new(), 0, &Budget::default(), Vec::new());
+/// let response = apply_budget(Vec::new(), 0, &Budget::default(), |_| String::new(), Vec::new());
 /// assert!(!response.truncated);
 /// assert_eq!(response.total_blocks_before_truncation, 0);
 /// ```
@@ -78,6 +83,7 @@ pub fn apply_budget(
     ranked: Vec<RankedBlock>,
     total_before: usize,
     budget: &Budget,
+    row_text: impl Fn(&RankedBlock) -> String,
     diagnostics: Vec<Diagnostic>,
 ) -> SearchResponse {
     let mut kept = Vec::new();
@@ -87,10 +93,12 @@ pub fn apply_budget(
         if kept.len() >= budget.max_results {
             break;
         }
-        let bytes = block.block.code.len();
-        let Some(next_bytes) = total_bytes.checked_add(bytes).filter(|b| *b <= budget.max_bytes) else { break };
-        let tokens = count_tokens(&block.block.code);
-        let Some(next_tokens) = total_tokens.checked_add(tokens).filter(|t| *t <= budget.max_tokens) else { break };
+        let text = row_text(&block);
+        let Some(next_bytes) = total_bytes.checked_add(text.len()).filter(|b| *b <= budget.max_bytes) else { break };
+        let Some(next_tokens) = total_tokens.checked_add(count_tokens(&text)).filter(|t| *t <= budget.max_tokens)
+        else {
+            break;
+        };
         total_bytes = next_bytes;
         total_tokens = next_tokens;
         kept.push(block);
@@ -135,6 +143,11 @@ mod tests {
         }
     }
 
+    /// Budgets with the block's code as its printed row, which is all these tests need from the row seam.
+    fn apply(ranked: Vec<RankedBlock>, total_before: usize, budget: &Budget) -> SearchResponse {
+        apply_budget(ranked, total_before, budget, |b| b.block.code.clone(), Vec::new())
+    }
+
     fn ranks(response: &SearchResponse) -> Vec<usize> {
         response.results.iter().map(|r| r.rank).collect()
     }
@@ -159,7 +172,7 @@ mod tests {
             path: Some(Utf8PathBuf::from("a.ts")),
             message: "too large".to_owned(),
         }];
-        let response = apply_budget(Vec::new(), 0, &Budget::default(), diagnostics);
+        let response = apply_budget(Vec::new(), 0, &Budget::default(), |_| String::new(), diagnostics);
         assert_eq!(response.results.len(), 0);
         assert_eq!(response.total_blocks_before_truncation, 0);
         assert!(!response.truncated);
@@ -172,11 +185,11 @@ mod tests {
 
     #[test]
     fn exactly_max_results_is_kept_and_one_over_is_cut() {
-        let at = apply_budget(blocks("a", 3), 3, &caps(3, 1000, 1000), Vec::new());
+        let at = apply(blocks("a", 3), 3, &caps(3, 1000, 1000));
         assert_eq!(ranks(&at), [1, 2, 3]);
         assert!(!at.truncated);
 
-        let over = apply_budget(blocks("a", 4), 4, &caps(3, 1000, 1000), Vec::new());
+        let over = apply(blocks("a", 4), 4, &caps(3, 1000, 1000));
         assert_eq!(ranks(&over), [1, 2, 3]);
         assert!(over.truncated);
         assert_eq!(over.total_blocks_before_truncation, 4);
@@ -184,12 +197,12 @@ mod tests {
 
     #[test]
     fn exactly_max_bytes_is_kept_and_one_over_is_cut() {
-        let at = apply_budget(blocks("abcd", 3), 3, &caps(10, 1000, 12), Vec::new());
+        let at = apply(blocks("abcd", 3), 3, &caps(10, 1000, 12));
         assert_eq!(ranks(&at), [1, 2, 3]);
         assert_eq!(at.total_bytes, 12);
         assert!(!at.truncated);
 
-        let over = apply_budget(blocks("abcd", 3), 3, &caps(10, 1000, 11), Vec::new());
+        let over = apply(blocks("abcd", 3), 3, &caps(10, 1000, 11));
         assert_eq!(ranks(&over), [1, 2]);
         assert_eq!(over.total_bytes, 8);
         assert!(over.truncated);
@@ -199,12 +212,12 @@ mod tests {
     fn exactly_max_tokens_is_kept_and_one_over_is_cut() {
         let per_block = count_tokens("fn a() {}");
         assert_eq!(per_block, 4);
-        let at = apply_budget(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3, 1000), Vec::new());
+        let at = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3, 1000));
         assert_eq!(ranks(&at), [1, 2, 3]);
         assert_eq!(at.total_tokens, 12);
         assert!(!at.truncated);
 
-        let over = apply_budget(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3 - 1, 1000), Vec::new());
+        let over = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3 - 1, 1000));
         assert_eq!(ranks(&over), [1, 2]);
         assert_eq!(over.total_tokens, 8);
         assert!(over.truncated);
@@ -214,24 +227,24 @@ mod tests {
     fn earliest_block_to_break_any_limit_sets_the_cut() {
         // Block 2 breaks the token cap, block 3 would have broken the byte cap.
         let input = vec![block("a", 1), block("fn a() {}", 2), block(&"x".repeat(500), 3)];
-        let response = apply_budget(input, 3, &caps(10, 3, 100), Vec::new());
+        let response = apply(input, 3, &caps(10, 3, 100));
         assert_eq!(ranks(&response), [1]);
         assert!(response.truncated);
 
         // The byte cap trips on block 2 while the token and result caps still have room.
         let input = vec![block("a", 1), block(&"x ".repeat(60), 2), block("a", 3)];
-        let response = apply_budget(input, 3, &caps(10, 1000, 100), Vec::new());
+        let response = apply(input, 3, &caps(10, 1000, 100));
         assert_eq!(ranks(&response), [1]);
 
         // A later small block is not pulled in past the cut.
         let input = vec![block("a", 1), block("fn a() {}", 2), block("a", 3)];
-        let response = apply_budget(input, 3, &caps(10, 3, 100), Vec::new());
+        let response = apply(input, 3, &caps(10, 3, 100));
         assert_eq!(ranks(&response), [1]);
     }
 
     #[test]
-    fn block_larger_than_the_byte_budget_keeps_nothing() {
-        let response = apply_budget(blocks(&"y".repeat(50), 2), 2, &caps(10, 1000, 49), Vec::new());
+    fn row_larger_than_the_byte_budget_keeps_nothing() {
+        let response = apply(blocks(&"y".repeat(50), 2), 2, &caps(10, 1000, 49));
         assert_eq!(response.results.len(), 0);
         assert!(response.truncated);
         assert_eq!(response.total_blocks_before_truncation, 2);
@@ -239,8 +252,21 @@ mod tests {
     }
 
     #[test]
+    fn the_caps_count_the_row_text_and_not_the_code() {
+        // The code is 100 bytes, the printed row 4: only the row counts.
+        let input = || vec![block(&"x".repeat(100), 1), block(&"x".repeat(100), 2)];
+        let response = apply_budget(input(), 2, &caps(10, 1000, 8), |_| "row1".to_owned(), Vec::new());
+        assert_eq!((ranks(&response), response.total_bytes, response.total_tokens), (vec![1, 2], 8, 4));
+        assert!(!response.truncated);
+
+        let response = apply_budget(input(), 2, &caps(10, 1000, 7), |_| "row1".to_owned(), Vec::new());
+        assert_eq!((ranks(&response), response.total_bytes), (vec![1], 4));
+        assert!(response.truncated);
+    }
+
+    #[test]
     fn total_before_beyond_input_marks_the_response_truncated() {
-        let response = apply_budget(blocks("a", 2), 9, &Budget::default(), Vec::new());
+        let response = apply(blocks("a", 2), 9, &Budget::default());
         assert_eq!(ranks(&response), [1, 2]);
         assert_eq!(response.total_blocks_before_truncation, 9);
         assert!(response.truncated);
@@ -294,8 +320,8 @@ mod tests {
     fn totals_do_not_depend_on_how_tight_the_token_cap_is() {
         // With a loose cap every block fits on its byte length alone; the reported total must still be the exact count.
         let input = || vec![block("fn a() {}", 1), block("let x = 1;\n", 2)];
-        let loose = apply_budget(input(), 2, &caps(10, 1_000_000, 1_000_000), Vec::new());
-        let tight = apply_budget(input(), 2, &caps(10, 10, 1_000_000), Vec::new());
+        let loose = apply(input(), 2, &caps(10, 1_000_000, 1_000_000));
+        let tight = apply(input(), 2, &caps(10, 10, 1_000_000));
         assert_eq!((loose.total_tokens, tight.total_tokens), (10, 10));
         assert_eq!((loose.total_bytes, tight.total_bytes), (20, 20));
         assert!(!tight.truncated);
@@ -304,7 +330,7 @@ mod tests {
     #[test]
     fn apply_budget_is_deterministic() {
         let run = || {
-            let r = apply_budget(blocks("fn a() {}", 6), 6, &caps(4, 1000, 1000), Vec::new());
+            let r = apply(blocks("fn a() {}", 6), 6, &caps(4, 1000, 1000));
             (ranks(&r), r.total_bytes, r.total_tokens, r.truncated)
         };
         assert_eq!(run(), run());
