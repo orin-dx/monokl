@@ -13,6 +13,12 @@ what is right, and the score rewards targeting:
 - test files are left out of the lists, as monokl leaves them out by default. `--tests` also runs monokl with its test
   flag and reports how many test files with the word it returned, ungated.
 
+Questions (scripts/rg-compare.questions) score the case monokl exists for: two to four words that take several rg calls,
+with a known answer file and symbol. Each reports the answer file's rank, whether the declaration line is in the output,
+the rg route's narrowing cost (files with any word, files with all words, bytes of one `rg -n` call for any word) and
+monokl's output bytes. The gate is the answer file in monokl's first `--top` files for at least `--min-question-recall`
+of the questions.
+
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
 """
 
@@ -27,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "rg-compare.repos"
+QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 # Declaration files are not searched by design (see `supports` in crates/monokl/src/analysis/ts/mod.rs).
 GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "!*.d.ts", "!*.d.mts", "!*.d.cts"]
@@ -146,6 +153,53 @@ def first_rank(ordered, wanted):
     return next((i for i, f in enumerate(ordered, 1) if f in wanted), None)
 
 
+def question_rows(only):
+    for line in QUESTIONS.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            repo, words, file, symbol = (cell.strip() for cell in line.split("|"))
+            if not only or repo in only:
+                yield repo, words, file, symbol
+
+
+def score_questions(binary, only):
+    """Runs every question and returns one row each. Fails if the answer's declaration is not in the pinned checkout."""
+    checkouts = {name: checkout(name, url, sha) for name, url, sha in repositories(only)}
+    rows = []
+    for repo, words, file, symbol in question_rows(only):
+        path = checkouts[repo]
+        if file not in definitions(symbol, path):
+            sys.exit(f"{repo}: `{symbol}` is not declared in {file} at the pinned sha; fix rg-compare.questions")
+        terms = words.split()
+        per_word = [split(rg_files(re.escape(t), path, ["--ignore-case", "--word-regexp"]))[0] for t in terms]
+        rg_args = ["rg", "-n", "--ignore-case", "--word-regexp"]
+        for glob in GLOBS:
+            rg_args += ["--glob", glob]
+        for term in terms:
+            rg_args += ["-e", re.escape(term)]
+        rg_out = run([*rg_args, "."], cwd=path, check=False).stdout
+        rg_lines = [l for l in rg_out.splitlines() if not is_test_path(l.removeprefix("./").split(":", 1)[0])]
+        ordered, output = monokl_files(binary, words, path, False)
+        non_test = [f for f in ordered if not is_test_path(f)]
+        declaration = declaration_line(symbol, {file}, path)
+        bare = str.maketrans("", "", '"\\')
+        bare_declaration = re.sub(r"^(?:export\s+|default\s+|declare\s+)+", "", declaration).rstrip(" {;")
+        rows.append(
+            {
+                "repo": repo,
+                "words": words,
+                "file": file,
+                "symbol": symbol,
+                "rank": non_test.index(file) + 1 if file in non_test else None,
+                "declaration_in_output": bare_declaration[:40].translate(bare) in output.translate(bare),
+                "rg_any_files": len(set.union(*per_word)),
+                "rg_all_files": len(set.intersection(*per_word)),
+                "rg_n_bytes": len("\n".join(rg_lines).encode()),
+                "monokl_bytes": len(output.encode()),
+            }
+        )
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", default=str(ROOT / "target" / "release" / "monokl"))
@@ -153,6 +207,9 @@ def main():
     parser.add_argument("--terms", type=int, default=25, help="identifiers sampled per repository")
     parser.add_argument("--top", type=int, default=3, help="a declaration must appear within this many files")
     parser.add_argument("--min-recall", type=float, default=0.9, help="fail when the share of hits is lower")
+    parser.add_argument("--min-question-recall", type=float, default=0.75,
+                        help="fail when the share of questions with the answer file in the top files is lower")
+    parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
     args = parser.parse_args()
@@ -232,9 +289,25 @@ def main():
 
     rate = hits / max(scored, 1)
     print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+
+    questions = [] if args.no_questions else score_questions(args.binary, args.repo)
+    question_hits = 0
+    for q in questions:
+        in_top = q["rank"] is not None and q["rank"] <= args.top
+        question_hits += in_top
+        print(
+            f"  {'ok  ' if in_top else 'MISS'} {q['repo']}: {q['words']!r} -> {q['symbol']} "
+            f"file_rank={q['rank'] or 'absent'} declaration_in_output={'yes' if q['declaration_in_output'] else 'no'} "
+            f"rg_files any={q['rg_any_files']} all={q['rg_all_files']} rg_n_bytes={q['rg_n_bytes']} "
+            f"monokl_bytes={q['monokl_bytes']}"
+        )
+    question_rate = question_hits / max(len(questions), 1)
+    if questions:
+        print(f"question answer file in top {args.top}: {question_hits}/{len(questions)} = {question_rate:.2%} "
+              f"(gate {args.min_question_recall:.2%})")
     if args.json:
-        Path(args.json).write_text(json.dumps(report, indent=2))
-    sys.exit(0 if rate >= args.min_recall else 1)
+        Path(args.json).write_text(json.dumps({"identifiers": report, "questions": questions}, indent=2))
+    sys.exit(0 if rate >= args.min_recall and question_rate >= args.min_question_recall else 1)
 
 
 if __name__ == "__main__":
