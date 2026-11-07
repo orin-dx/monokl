@@ -1,0 +1,156 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M6VVMR6BEWW8J90GZ4WZHV7S",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-07T20:36:59.72094Z",
+  "branch": "feat/search-snippets",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "5dd0df942cbc",
+  "checkpoint_transcript_start": 18487,
+  "transcript_lines_at_start": 18487,
+  "compact_transcript_start": 1288,
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 279108,
+    "cache_read_tokens": 12200714,
+    "output_tokens": 33233,
+    "api_call_count": 52,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 54,
+    "layers": {
+      "betterleaks": 6,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 120,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 80
+  },
+  "summary": {
+    "intent": "Continue improving the monokl code-search tool: land the lint/typos and harness-fix PR, then implement 'hit-first' retrieval so search rows include matching-line snippets, done properly (test-first, recorded decisions checked, on a fresh stacked branch).",
+    "outcome": "PR #60 (harness fix, typos in lint) was opened after a retry. The snippet feature was implemented test-first on a stacked branch, with an 8-column output, README, changeset and decision-record updates, a new harness metric, and all checks passing (633 tests, 98.2% coverage). It was committed, but the trail/PR via Entire had not yet been created.",
+    "learnings": {
+      "repo": [
+        "Search output rows previously carried only location and signature; block `code` and `matched_lines` exist in core but the output layer dropped them, forcing a second file read by agents.",
+        "The original spec's output included `code` and `matchedLines`, so adding snippets restores spec intent.",
+        "The rg-compare harness had counted local variables and `.d.ts`-only declarations as misses; it now scores only top-level declarations and ignores `.d.ts`, with a 90% gate (currently 94.9%, 56/59).",
+        "Remaining real ranking misses are generic one-word queries: `refined` and `source` in zod, `config` in axios.",
+        "Output header strings are pinned in many tests and in cli.rs; changing the column shape requires updating them all, plus README examples generated from real output.",
+        "Snippet rule: the first line is omitted only when the signature column already shows it; variable rows (null signature) now show their matching first line.",
+        "The repo's PR flow is: just lint (now includes typos), doc-check, changesets, drift, machete, tests and a coverage gate, plus a decision-record log and a changeset per change."
+      ],
+      "code": [
+        {
+          "path": "crates/monokl/src/output/agent.rs",
+          "finding": "Holds the output projection and the new `snippet` function with `SNIPPET_LINE_CHARS`; the projection moved to 8 columns, and the budget test header was updated."
+        },
+        {
+          "path": "scripts/rg-compare.py",
+          "finding": "Harness extended with a metric checking whether the declaration line is already present in the output, so no second read is needed."
+        }
+      ],
+      "workflow": [
+        "The `gh` wrapper opens PRs via a bot app whose token depends on an unlocked keychain (Secure Enclave OSStatus -25308 when locked); the user wants PRs opened with `entire trail create` and linked with `entire trail link`, saved as a memory rule.",
+        "Test-first discipline: confirm the new tests are red for the right reason before implementing, then inspect real output before updating pinned expectations.",
+        "Compare before/after by building a baseline binary from a temporary checkout and running the harness on both, then removing the checkout.",
+        "On macOS, `sed -i` needs the BSD form for bulk-updating pinned strings."
+      ]
+    },
+    "friction": [
+      "The keychain was locked, so `gh pr create` failed with OSStatus -25308 and the PR could not be opened until a retry in the next session.",
+      "The PR was opened through the wrong route (`gh` bot app instead of Entire trails), and the user corrected it.",
+      "A background shell command from the previous session was stopped without a completion record.",
+      "The first snippet rule was wrong (it dropped the first line unconditionally), requiring a red test and a fix.",
+      "Changing the header broke many pinned test strings and three-plus CLI test expectations, which had to be updated by hand."
+    ],
+    "open_items": [
+      "Create the trail/PR for the snippet branch via `entire trail create` (the commit is made but the trail is not yet created).",
+      "Three real ranking misses remain (`refined`, `source`, `config`), with declarations ranking 4th to 7th; ranking was intentionally left unchanged.",
+      "The full `just ci` was not run for the earlier lint/typos change."
+    ]
+  }
+}
