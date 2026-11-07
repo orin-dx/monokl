@@ -1,5 +1,22 @@
 # monokl
 
+## 0.5.0
+
+- The library no longer exposes types for commands that do not exist yet, and its core result types no longer derive `Serialize`; the `monokl search` output is unchanged.
+
+  - **Result types.** `CodeBlock`, `RankedBlock`, `SearchResponse`, `Diagnostic`, `SymbolEntry` and the other `monokl::types` structs and enums lose their `Serialize` and `Deserialize` derives. `SearchResponse` loses `truncation_marker`; read `truncated` and `total_blocks_before_truncation`.
+  - **Removed types.** `SearchOptions`, `SearchLimits` (and `Budget::from(&SearchLimits)`), `SymbolsResult`, `DependentsResult`, `ExtractRequest`, `WorkspaceOptions`, `TsconfigMode`, `RustPathAnchor`, `DependencyTarget::RustPath` and `Namespace`, `BindingKind::NamespaceWide`, and the `Rust`, `Python`, `Go` and `Java` variants of `LangData`. `LangData::ts` now returns `&TsData`. `output::agent::visibility_str` is gone too.
+  - **Removed errors.** `MonoklError` keeps `Io`, `Walk`, `RegexBuild`, `NonUtf8Path` and `TooManyTerms`; `FileIoError` keeps `Read`. `ToDomainError::to_domain_error` no longer takes an `ErrorContext`.
+- `monokl search` now finds code in files that are not valid UTF-8 instead of dropping them.
+
+  - **Invalid bytes are replaced.** Each invalid byte sequence is read as U+FFFD, so the file is searched and its blocks are returned as usual.
+  - **The output says so.** A `help` line counts the files read this way, for example `1 file read lossily: invalid UTF-8 replaced with U+FFFD: src/legacy.ts`, and names up to three of them.
+- `monokl search` now honors the `.gitignore` and `.ignore` files of parent directories when the search path is inside a git repository.
+
+  - **Scope.** Directories from the repository root (the nearest ancestor with a `.git` entry) down to the search path's parent are read, and nothing above the repository root. Rules inside the search path win over parent rules, as in ripgrep.
+  - **No repository.** Without a `.git` ancestor no parent ignore file is read, as before.
+  - **Opt out.** `--no-ignore` skips parent ignore files too.
+
 ## 0.4.0
 
 - `monokl search` now tells you what it skipped instead of printing a bare empty result.
