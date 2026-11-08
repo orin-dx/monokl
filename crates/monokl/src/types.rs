@@ -150,10 +150,12 @@ pub struct CodeBlock {
     pub symbol_signature: Option<String>,
     pub matched_lines: Vec<usize>,
     pub matched_keywords: Vec<String>,
+    /// The block this one is a member of, such as the class of a method; `None` for a top-level block.
+    pub parent: Option<ParentContext>,
 }
 
-/// The symbol enclosing a [`CodeBlock`] match.
-#[derive(Debug, Clone)]
+/// The symbol enclosing a [`CodeBlock`], such as the class a method block belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParentContext {
     pub kind: SymbolKind,
     pub name: String,

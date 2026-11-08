@@ -66,8 +66,9 @@ impl SearchResult {
 ///
 /// Text search finds the lines matching the query's positive terms; files with a line matching an excluded term, or
 /// lacking a match for a required term, drop out. Each remaining file goes to the analyzer that owns it, and only
-/// blocks containing a matching line are kept, ranked with BM25 and deduplicated. Files no analyzer supports are
-/// ignored without a diagnostic.
+/// blocks containing a matching line are kept, ranked with BM25 and deduplicated. A matching line belongs to the
+/// smallest block containing it, so a class keeps only the matches outside its members and is dropped when it has
+/// none. Files no analyzer supports are ignored without a diagnostic.
 ///
 /// BM25 query terms are the lowercase [`tokenize`] output of each non-excluded literal term. Regex terms select
 /// lines and appear in `matched_keywords` but add no BM25 terms. A query with only excluded terms has nothing to
@@ -305,10 +306,16 @@ fn retrieve_blocks(
             .map_or_else(|| "parse errors; blocks may be incomplete".to_owned(), |reason| reason.to_string());
         diagnostics.push(Diagnostic { kind: DiagnosticKind::Degraded, path: Some(path.to_owned()), message });
     }
-    for block in &analysis.blocks {
-        // Hits arrive in line order, so each block's slice of them is too.
-        let inside: Vec<&LineHit> =
-            hits.iter().filter(|hit| (block.line_start..=block.line_end).contains(&hit.line_number)).collect();
+    let positive: Vec<&RegexMatcher> = ctx
+        .plan
+        .terms
+        .iter()
+        .zip(ctx.matchers)
+        .filter(|(term, _)| term.modifier != Modifier::Excluded)
+        .map(|(_, matcher)| matcher)
+        .collect();
+    let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
+    for (block, inside) in analysis.blocks.iter().zip(owned_hits(&analysis.blocks, hits, &line_matches)) {
         if inside.is_empty() {
             continue;
         }
@@ -329,6 +336,50 @@ fn retrieve_blocks(
         let tokens = tokenize_block(&annotated);
         out.push((annotated, tokens));
     }
+}
+
+/// Splits `hits` among `blocks`: a hit goes to every block whose own text on that line matches, except one that holds
+/// a smaller such block. A class therefore keeps only the matches outside its members, and a block left with none is
+/// dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only the part
+/// of the line inside the block counts, which sends the match to the member or holder that actually contains the text.
+/// Where no block's own text matches (a match across the edge of every block on the line) every block on the line
+/// keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it. `hits`
+/// must be in line order; each block's hits are too.
+fn owned_hits<'h>(
+    blocks: &[CodeBlock],
+    hits: &'h [LineHit],
+    line_matches: &dyn Fn(&str) -> bool,
+) -> Vec<Vec<&'h LineHit>> {
+    let mut containing: Vec<Vec<usize>> = vec![Vec::new(); hits.len()];
+    for (index, block) in blocks.iter().enumerate() {
+        let first = hits.partition_point(|hit| hit.line_number < block.line_start);
+        let inside = hits[first..].iter().take_while(|hit| hit.line_number <= block.line_end).count();
+        for slot in &mut containing[first..first + inside] {
+            slot.push(index);
+        }
+    }
+    let range = |index: usize| (blocks[index].line_start, blocks[index].line_end);
+    let own_text_matches = |index: usize, line: usize| {
+        let block = &blocks[index];
+        block.code.split('\n').nth(line - block.line_start).is_some_and(line_matches)
+    };
+    let mut per_block = vec![Vec::new(); blocks.len()];
+    for (hit, containing_all) in hits.iter().zip(&containing) {
+        let matching: Vec<usize> =
+            containing_all.iter().copied().filter(|&index| own_text_matches(index, hit.line_number)).collect();
+        let candidates = if matching.is_empty() { containing_all } else { &matching };
+        for &outer in candidates {
+            let (start, end) = range(outer);
+            let holds_a_smaller_block = candidates.iter().any(|&inner| {
+                let (inner_start, inner_end) = range(inner);
+                inner_start >= start && inner_end <= end && (inner_start, inner_end) != (start, end)
+            });
+            if !holds_a_smaller_block {
+                per_block[outer].push(hit);
+            }
+        }
+    }
+    per_block
 }
 
 /// Returns the text the user typed for `term`: a regex as written, a literal with its escaping undone.
@@ -383,7 +434,7 @@ mod tests {
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
     use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer};
     use crate::digest::Digest;
-    use crate::types::{LangData, SymbolKind, TsData};
+    use crate::types::{LangData, ParentContext, SymbolKind, TsData};
 
     type MakeBlocks = dyn Fn(&Utf8Path, &str) -> Result<(Vec<CodeBlock>, bool)> + Send + Sync;
 
@@ -454,6 +505,7 @@ mod tests {
             symbol_signature: None,
             matched_lines: Vec::new(),
             matched_keywords: Vec::new(),
+            parent: None,
         }
     }
 
@@ -767,6 +819,7 @@ mod tests {
                 symbol_signature: None,
                 matched_lines: Vec::new(),
                 matched_keywords: Vec::new(),
+                parent: None,
             };
             let tokens = tokenize_block(&block);
             (block, tokens)
@@ -788,6 +841,98 @@ mod tests {
             (result.ranked[0].block.line_start, result.ranked[0].block.line_end, result.ranked[0].rank),
             (1, 2, 1)
         );
+    }
+
+    const CLASS_SOURCE: &str = "\
+class Foo {
+  label = 'return';
+  alpha() {
+    return 1;
+  }
+  beta() {
+    return 2;
+  }
+}
+";
+
+    /// The class `Foo` (lines 1-9) with the methods `alpha` (3-5) and `beta` (6-8), as the TypeScript analyzer emits them.
+    fn class_registry() -> AnalyzerRegistry {
+        registry(|path, source| {
+            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+            let member = |start, end| CodeBlock {
+                node_kind: SymbolKind::Method,
+                parent: Some(parent.clone()),
+                ..block(path, source, start, end)
+            };
+            let class = CodeBlock { node_kind: SymbolKind::Class, ..block(path, source, 1, 9) };
+            Ok((vec![class, member(3, 5), member(6, 8)], false))
+        })
+    }
+
+    type NestedRow<'a> = (usize, usize, SymbolKind, Vec<usize>, Option<&'a str>);
+
+    /// Each ranked block as `(line_start, line_end, kind, matched_lines, parent name)`.
+    fn nested_rows(result: &SearchResult) -> Vec<NestedRow<'_>> {
+        result
+            .ranked
+            .iter()
+            .map(|r| {
+                let b = &r.block;
+                let parent = b.parent.as_ref().map(|p| p.name.as_str());
+                (b.line_start, b.line_end, b.node_kind, b.matched_lines.clone(), parent)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_hit_inside_a_member_goes_to_the_member_and_not_to_its_class() {
+        let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
+        let result = search(&class_registry(), &request(&root, "beta")).unwrap();
+        assert_eq!(nested_rows(&result), [(6, 8, SymbolKind::Method, vec![6], Some("Foo"))]);
+    }
+
+    #[test]
+    fn a_hit_on_the_class_header_keeps_the_class_and_drops_members_without_hits() {
+        let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
+        let result = search(&class_registry(), &request(&root, "foo")).unwrap();
+        assert_eq!(nested_rows(&result), [(1, 9, SymbolKind::Class, vec![1], None)]);
+    }
+
+    #[test]
+    fn hits_split_between_a_class_and_its_members_without_sharing_a_line() {
+        let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
+        let result = search(&class_registry(), &request(&root, "return")).unwrap();
+        let mut rows = nested_rows(&result);
+        rows.sort_by_key(|row| row.0);
+        assert_eq!(
+            rows,
+            [
+                (1, 9, SymbolKind::Class, vec![2], None),
+                (3, 5, SymbolKind::Method, vec![4], Some("Foo")),
+                (6, 8, SymbolKind::Method, vec![7], Some("Foo")),
+            ]
+        );
+        let ranks: Vec<usize> = result.ranked.iter().map(|r| r.rank).collect();
+        assert_eq!(ranks, [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_member_ranked_above_its_class_and_one_ranked_below_both_survive_dedup() {
+        let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
+        for query in ["return", "beta return", "alpha return"] {
+            let result = search(&class_registry(), &request(&root, query)).unwrap();
+            let mut starts: Vec<usize> = result.ranked.iter().map(|r| r.block.line_start).collect();
+            starts.sort_unstable();
+            assert_eq!(starts, [1, 3, 6], "{query}");
+        }
+    }
+
+    #[test]
+    fn member_rows_carry_their_parent_into_the_ranked_block() {
+        let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
+        let result = search(&class_registry(), &request(&root, "alpha")).unwrap();
+        let parent = result.ranked[0].parent_context.as_ref().map(|p| (p.kind, p.name.as_str(), p.line));
+        assert_eq!(parent, Some((SymbolKind::Class, "Foo", 1)));
     }
 
     #[test]
@@ -1045,3 +1190,6 @@ mod tests {
         assert_eq!(found, ["ignored.ts", "src/auth.ts", "src/session.ts", "tests/auth.test.ts"]);
     }
 }
+
+#[cfg(test)]
+mod proptests;

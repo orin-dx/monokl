@@ -9,6 +9,10 @@ use crate::types::{CodeBlock, RankedBlock};
 /// an overlapping pair survives. Blocks in different files never dedupe. A block whose `line_end` is before its
 /// `line_start` overlaps nothing and is always kept.
 ///
+/// A member (a block with a `parent`) never duplicates the top-level block that strictly encloses it, in either rank
+/// order: the enclosing block holds the member by design. Two members, or two blocks without a parent, dedupe by
+/// overlap as above even when one lies inside the other.
+///
 /// # Examples
 ///
 /// ```
@@ -26,6 +30,7 @@ use crate::types::{CodeBlock, RankedBlock};
 ///         symbol_signature: None,
 ///         matched_lines: Vec::new(),
 ///         matched_keywords: Vec::new(),
+///         parent: None,
 ///     },
 ///     bm25_score: 0.0,
 ///     coverage_boost: 0.0,
@@ -42,7 +47,10 @@ pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock> {
     let mut kept: Vec<RankedBlock> = Vec::with_capacity(blocks.len());
     for block in blocks {
         let is_duplicate = kept.iter().any(|earlier| {
-            earlier.block.file == block.block.file && overlaps_significantly(&earlier.block, &block.block)
+            earlier.block.file == block.block.file
+                && !encloses_member(&earlier.block, &block.block)
+                && !encloses_member(&block.block, &earlier.block)
+                && overlaps_significantly(&earlier.block, &block.block)
         });
         if !is_duplicate {
             kept.push(block);
@@ -52,6 +60,15 @@ pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock> {
         block.rank = rank;
     }
     kept
+}
+
+/// Returns whether `member` has a parent and lies strictly inside `outer`, a block that has none.
+fn encloses_member(outer: &CodeBlock, member: &CodeBlock) -> bool {
+    member.parent.is_some()
+        && outer.parent.is_none()
+        && outer.line_start <= member.line_start
+        && member.line_end <= outer.line_end
+        && (outer.line_start, outer.line_end) != (member.line_start, member.line_end)
 }
 
 /// Returns whether the two line ranges share more than half of the smaller range's lines.
@@ -73,7 +90,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::types::SymbolKind;
+    use crate::types::{ParentContext, SymbolKind};
 
     fn ranked(file: &str, line_start: usize, line_end: usize, rank: usize) -> RankedBlock {
         RankedBlock {
@@ -86,6 +103,7 @@ mod tests {
                 symbol_signature: None,
                 matched_lines: Vec::new(),
                 matched_keywords: Vec::new(),
+                parent: None,
             },
             bm25_score: 0.0,
             coverage_boost: 0.0,
@@ -229,6 +247,62 @@ mod tests {
         // the kept one.
         let out = dedup_blocks(vec![ranked("a.ts", 1, 12, 1), ranked("a.ts", 5, 14, 2), ranked("a.ts", 13, 14, 3)]);
         assert_eq!(survivors(&out), [kept("a.ts", 1, 12, 1), kept("a.ts", 13, 14, 2)]);
+    }
+
+    fn member_of_class(file: &str, line_start: usize, line_end: usize, rank: usize) -> RankedBlock {
+        let mut member = ranked(file, line_start, line_end, rank);
+        member.block.parent = Some(ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 });
+        member
+    }
+
+    #[rstest]
+    #[case::class_ranked_first(true)]
+    #[case::member_ranked_first(false)]
+    fn a_member_survives_the_block_that_encloses_it_in_either_rank_order(#[case] class_first: bool) {
+        let class = ranked("a.ts", 1, 20, 0);
+        let member = member_of_class("a.ts", 5, 10, 0);
+        let (class, member) = (RankedBlock { rank: 1, ..class }, RankedBlock { rank: 2, ..member });
+        let blocks = if class_first { vec![class, member] } else { vec![member.clone(), class] };
+        let out = dedup_blocks(blocks);
+        let mut starts: Vec<_> = survivors(&out).into_iter().map(|(_, start, end, _)| (start, end)).collect();
+        starts.sort_unstable();
+        assert_eq!(starts, [(1, 20), (5, 10)]);
+        assert_eq!(out.iter().map(|r| r.rank).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    #[test]
+    fn a_member_sharing_its_first_line_with_the_class_header_is_still_a_member() {
+        let out = dedup_blocks(vec![ranked("a.ts", 1, 20, 1), member_of_class("a.ts", 1, 10, 2)]);
+        assert_eq!(survivors(&out), [kept("a.ts", 1, 20, 1), kept("a.ts", 1, 10, 2)]);
+    }
+
+    #[rstest]
+    #[case::identical_range((1, 20), (1, 20))]
+    #[case::partly_below((1, 20), (15, 25))]
+    #[case::partly_above((3, 20), (1, 5))]
+    fn a_member_that_is_not_strictly_inside_the_block_is_judged_by_overlap(
+        #[case] outer: (usize, usize),
+        #[case] member: (usize, usize),
+    ) {
+        let out =
+            dedup_blocks(vec![ranked("a.ts", outer.0, outer.1, 1), member_of_class("a.ts", member.0, member.1, 2)]);
+        assert_eq!(survivors(&out), [kept("a.ts", outer.0, outer.1, 1)]);
+    }
+
+    #[test]
+    fn two_members_of_one_class_that_overlap_each_other_dedupe_as_before() {
+        let out = dedup_blocks(vec![
+            ranked("a.ts", 1, 30, 1),
+            member_of_class("a.ts", 5, 15, 2),
+            member_of_class("a.ts", 6, 14, 3),
+        ]);
+        assert_eq!(survivors(&out), [kept("a.ts", 1, 30, 1), kept("a.ts", 5, 15, 2)]);
+    }
+
+    #[test]
+    fn a_plain_block_inside_another_plain_block_is_still_a_duplicate() {
+        let out = dedup_blocks(vec![ranked("a.ts", 1, 20, 1), ranked("a.ts", 5, 10, 2)]);
+        assert_eq!(survivors(&out), [kept("a.ts", 1, 20, 1)]);
     }
 
     #[rstest]

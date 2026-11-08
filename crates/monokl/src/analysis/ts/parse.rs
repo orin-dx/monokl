@@ -7,10 +7,11 @@ use std::thread;
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPattern, Class, Declaration, ExportAllDeclaration, ExportDeclaration, ExportDefaultDeclaration,
-    ExportDefaultDeclarationKind, ExportFromDeclaration, ExportNamedDeclaration, Function, ImportDeclaration,
-    ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXElement, JSXElementName,
-    JSXMemberExpression, JSXMemberExpressionObject, ModuleExportName, Program, Statement, VariableDeclaration,
+    BindingPattern, Class, ClassElement, Declaration, ExportAllDeclaration, ExportDeclaration,
+    ExportDefaultDeclaration, ExportDefaultDeclarationKind, ExportFromDeclaration, ExportNamedDeclaration, Expression,
+    Function, ImportDeclaration, ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXElement, JSXElementName, JSXMemberExpression, JSXMemberExpressionObject, MethodDefinition, MethodDefinitionKind,
+    ModuleExportName, Program, PropertyDefinition, Statement, VariableDeclaration,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
@@ -19,8 +20,12 @@ use oxc_span::{GetSpan, SourceType, Span};
 use crate::analysis::{AnalysisProfile, Degradation};
 use crate::types::{
     BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord, JsxAttribute,
-    JsxElementEntry, SymbolEntry, SymbolKind,
+    JsxElementEntry, ParentContext, SymbolEntry, SymbolKind,
 };
+
+/// The fewest lines a class member needs to get a block of its own. A shorter one is a stub or accessor that the class
+/// block already shows whole.
+const MIN_MEMBER_LINES: usize = 3;
 
 /// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
 /// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
@@ -173,6 +178,7 @@ impl Extractor<'_> {
         }
         if self.profile == AnalysisProfile::Full {
             self.block(statement);
+            self.member_blocks(statement);
         }
     }
 
@@ -210,8 +216,12 @@ impl Extractor<'_> {
     /// The function's text up to its body, on one line: `function f(a: A): B`.
     fn function_signature(&self, function: &Function<'_>) -> String {
         let end = function.body.as_ref().map_or(function.span.end, |body| body.span.start);
-        let head = self.text(Span::new(function.span.start, end));
-        head.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';').trim_end().to_owned()
+        self.signature_text(Span::new(function.span.start, end))
+    }
+
+    /// The text of `span` on one line, without a trailing `;`.
+    fn signature_text(&self, span: Span) -> String {
+        self.text(span).split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';').trim_end().to_owned()
     }
 
     fn class(&mut self, class: &Class<'_>) -> Option<String> {
@@ -366,15 +376,25 @@ impl Extractor<'_> {
         if matches!(statement, Statement::ImportDeclaration(_)) {
             return;
         }
-        let span = statement.span();
-        let code = self.text(span);
-        if code.trim().is_empty() {
-            return;
-        }
         let symbol_signature = match (node_kind, statement_function(statement)) {
             (SymbolKind::Function, Some(function)) => Some(self.function_signature(function)),
             _ => None,
         };
+        self.push_block(statement.span(), node_kind, symbol_signature, None);
+    }
+
+    /// Pushes a block over `span`, unless it holds nothing but whitespace.
+    fn push_block(
+        &mut self,
+        span: Span,
+        node_kind: SymbolKind,
+        symbol_signature: Option<String>,
+        parent: Option<ParentContext>,
+    ) {
+        let code = self.text(span);
+        if code.trim().is_empty() {
+            return;
+        }
         let block = CodeBlock {
             file: self.path.to_owned(),
             line_start: self.lines.line(span.start),
@@ -384,8 +404,67 @@ impl Extractor<'_> {
             symbol_signature,
             matched_lines: Vec::new(),
             matched_keywords: Vec::new(),
+            parent,
         };
         self.out.blocks.push(block);
+    }
+
+    /// Pushes a block for each long method, constructor and function-valued property of a named class that is a
+    /// top-level statement or exported, after the class's own block. An anonymous class has no name to give its
+    /// members as a parent, so it gets none.
+    fn member_blocks(&mut self, statement: &Statement<'_>) {
+        let Some(class) = statement_class(statement) else { return };
+        let Some(id) = &class.id else { return };
+        let parent = ParentContext {
+            kind: SymbolKind::Class,
+            name: id.name.as_str().to_owned(),
+            line: self.lines.line(class.span.start),
+        };
+        for element in &class.body.body {
+            match element {
+                ClassElement::MethodDefinition(method) => self.method_block(method, &parent),
+                ClassElement::PropertyDefinition(property) => self.property_block(property, &parent),
+                ClassElement::StaticBlock(_)
+                | ClassElement::AccessorProperty(_)
+                | ClassElement::TSIndexSignature(_) => {}
+            }
+        }
+    }
+
+    /// A method with a body: `async f(a: A): B { ... }`. Getters and setters are methods; a signature without a body
+    /// (an overload or an abstract method) is not.
+    fn method_block(&mut self, method: &MethodDefinition<'_>, parent: &ParentContext) {
+        let Some(body) = &method.value.body else { return };
+        let node_kind = match method.kind {
+            MethodDefinitionKind::Constructor => SymbolKind::Constructor,
+            MethodDefinitionKind::Method | MethodDefinitionKind::Get | MethodDefinitionKind::Set => SymbolKind::Method,
+        };
+        let head = Span::new(method.decorators.last().map_or(method.span.start, |d| d.span.end), body.span.start);
+        let signature = self.signature_text(head);
+        self.member_block(method.span, node_kind, signature, parent);
+    }
+
+    /// A property holding an arrow or function expression: `handle = async (req) => { ... }`. Any other value is data,
+    /// which the class block shows well enough.
+    fn property_block(&mut self, property: &PropertyDefinition<'_>, parent: &ParentContext) {
+        let body_start = match &property.value {
+            Some(Expression::ArrowFunctionExpression(arrow)) => arrow.body.span().start,
+            Some(Expression::FunctionExpression(function)) => match &function.body {
+                Some(body) => body.span.start,
+                None => return,
+            },
+            _ => return,
+        };
+        let head = Span::new(property.decorators.last().map_or(property.span.start, |d| d.span.end), body_start);
+        let signature = self.signature_text(head);
+        self.member_block(property.span, SymbolKind::Property, signature, parent);
+    }
+
+    fn member_block(&mut self, span: Span, node_kind: SymbolKind, signature: String, parent: &ParentContext) {
+        let lines = self.lines.line(span.end) - self.lines.line(span.start) + 1;
+        if lines >= MIN_MEMBER_LINES {
+            self.push_block(span, node_kind, Some(signature), Some(parent.clone()));
+        }
     }
 
     fn jsx(&mut self, program: &Program<'_>) {
@@ -428,6 +507,22 @@ fn declaration_kind(decl: &Declaration<'_>) -> Option<SymbolKind> {
         | Declaration::TSNamespaceDeclaration(_)
         | Declaration::TSGlobalDeclaration(_)
         | Declaration::TSImportEqualsDeclaration(_) => None,
+    }
+}
+
+/// The class a statement declares, directly or through `export` or `export default`.
+fn statement_class<'a, 'b>(statement: &'b Statement<'a>) -> Option<&'b Class<'a>> {
+    match statement {
+        Statement::ClassDeclaration(class) => Some(class),
+        Statement::ExportDeclaration(export) => match &export.declaration {
+            Declaration::ClassDeclaration(class) => Some(class),
+            _ => None,
+        },
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => Some(class),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

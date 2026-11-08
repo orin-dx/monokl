@@ -18,7 +18,8 @@ use crate::types::{CodeBlock, RankedBlock, SymbolKind};
 ///
 /// Each block comes with its document tokens, usually from [`tokenize_block`]. The corpus for BM25 is `blocks`
 /// itself: its size and average token count feed [`score`], and `df` gives each term's document frequency. A block's
-/// `final_score` is `round6(bm25 * node_type_boost + coverage_boost)`.
+/// `final_score` is `round6(bm25 * node_type_boost + coverage_boost)`, and its `parent` becomes the ranked block's
+/// `parent_context`.
 ///
 /// The order is `final_score` descending (with `-0.0` equal to `0.0`), then ascending `file` by path components,
 /// `line_start`, `line_end`, `node_kind` in `SymbolKind` declaration order, and `code` by bytes. Reordering the input
@@ -42,6 +43,7 @@ use crate::types::{CodeBlock, RankedBlock, SymbolKind};
 ///     symbol_signature: None,
 ///     matched_lines: Vec::new(),
 ///     matched_keywords: Vec::new(),
+///     parent: None,
 /// };
 /// let blocks: Vec<_> = [block("b.ts", "parseConfig()"), block("a.ts", "readFile()")]
 ///     .into_iter()
@@ -74,6 +76,7 @@ pub fn rank_blocks<S: BuildHasher>(
             let bm25_score = score(&doc_tokens, query_terms, avg_doc_len, corpus_size, df);
             let coverage_boost = coverage_boost(&block);
             let node_type_boost = node_type_boost(block.node_kind);
+            let parent_context = block.parent.clone();
             RankedBlock {
                 block,
                 bm25_score,
@@ -81,7 +84,7 @@ pub fn rank_blocks<S: BuildHasher>(
                 node_type_boost,
                 final_score: round6(bm25_score * node_type_boost + coverage_boost),
                 rank: 0,
-                parent_context: None,
+                parent_context,
             }
         })
         .collect();
@@ -139,6 +142,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::types::ParentContext;
 
     fn block(
         file: &str,
@@ -156,6 +160,7 @@ mod tests {
             symbol_signature: None,
             matched_lines,
             matched_keywords: Vec::new(),
+            parent: None,
         }
     }
 
@@ -256,6 +261,18 @@ mod tests {
             ]
         );
         assert_eq!(ranked.iter().filter(|r| r.parent_context.is_some()).count(), 0);
+    }
+
+    #[test]
+    fn a_ranked_block_carries_the_parent_of_its_block() {
+        let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+        let mut member = block("a.ts", 3, 5, SymbolKind::Method, vec![4]);
+        member.parent = Some(parent.clone());
+        let blocks =
+            vec![(member, tokens(&["foo"])), (block("a.ts", 1, 9, SymbolKind::Class, vec![1]), tokens(&["foo"]))];
+        let ranked = rank_blocks(blocks, &["foo"], &HashMap::from([("foo".to_owned(), 2)]));
+        let parents: Vec<_> = ranked.iter().map(|r| (r.block.line_start, r.parent_context.clone())).collect();
+        assert_eq!(parents, [(1, None), (3, Some(parent))]);
     }
 
     #[test]
