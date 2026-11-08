@@ -360,3 +360,28 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Rejected.** Keeping the tokenizer and building it on a thread while text search runs: it hides the cost on large repositories only, keeps the dependency and the binary size, and keeps counting with the wrong vocabulary. Rejected: `bytes / 4`, which reads about 17% low on these outputs and so lets a response overspend its cap.
 - **Supersedes.** Part 8 §9.1 (byte length as a proven upper bound on tokens) still holds as a bound; the count now uses a tighter ratio and gives up the guarantee that it never understates.
 - **Measured.** After the change a match costs about 9 to 11 ms on zustand (was 49), level with `rg -l` in the same run, and 15 queries over the pinned repositories print byte-identical output.
+
+## 28. Budget caps count the printed rows (2026-11-08)
+
+- **Decision.** `--max-tokens` and `--max-bytes` count the text of each printed row (indent included, newline excluded), not the block's code. `apply_budget` takes a `row_text` function; the output layer supplies `search_row_text`. `SearchResponse.total_bytes` and `total_tokens` sum the kept rows.
+- **Why.** The agent receives the row, so the cap bounds what it sees. Since §26 a row holds a bounded snippet, so summing whole blocks overstated large blocks and ignored the snippet.
+- **Core stays cap-free.** Row rendering stays in the output layer; core only receives the function. Rejected: moving row rendering into the budget module.
+- **Rejected.** A tokens-per-byte estimate of the block code: it still measures text nobody prints.
+- **Defaults unchanged.** 50 results, 20,000 tokens, 2 MiB.
+- **Supersedes.** The open item in §26: the caps now count the snippets printed.
+- **Open.** The document header and hints are not counted. The field docs on `SearchResponse` in `types.rs` do not yet say the totals count printed rows.
+
+## 29. Multi-word questions are scored beside identifier lookups (2026-11-08)
+
+- **Decision.** `scripts/rg-compare.questions` lists questions of two to four words, each with an answer file and a top-level symbol, pinned to the shas in `rg-compare.repos`. A question is a hit when the answer file is in monokl's first `--top` (3) files. The gate is `--min-question-recall`, default 0.75. Each row also reports whether the declaration line is in the output and what the `rg` route costs.
+- **Why.** Identifier lookups are where `rg` already wins on cost. The case monokl exists for is the question that takes `rg` several calls, and the script scored none of those.
+- **Stale rows fail loudly.** The script re-checks with `rg` that each answer file declares its symbol, so a moved or renamed answer stops the run instead of scoring wrong.
+- **Rejected.** Model-judged relevance: it needs model calls and is not deterministic.
+- **Open.** Raise the threshold when ranking improves.
+
+## 30. Class-member questions are scored on their own (2026-11-08)
+
+- **Decision.** A question row whose symbol cell is `member:name` names a method, constructor, accessor or arrow-function property declared on an indented line inside a class. The script re-checks that line with `rg` and scores these rows apart from the top-level questions. A hit needs the answer file in the first `--top` files and the member's declaration line in the output. The gate is `--min-member-recall`, default 0.125 (2 of the 16 current rows).
+- **Why.** Top-level questions cannot show whether member blocks help. A separate score keeps the top-level gate unmoved by a change to members, and lets that change be measured against its own rows.
+- **Rows.** Eight in zod and eight in axios. zustand has no classes at the pinned sha, so it has none.
+- **Open.** The member gate is a floor, not a target; raise it when members become blocks of their own.
