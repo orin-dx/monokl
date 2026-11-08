@@ -1,0 +1,21 @@
+# repo | question words | answer file | answer symbol
+# Each answer is the file and top-level declaration a maintainer would point to for the question, found with rg at the
+# sha pinned in rg-compare.repos. The script re-checks the declaration exists with rg, so a stale row fails loudly.
+zustand | persist storage | src/middleware/persist.ts | createJSONStorage
+zustand | selector subscribe listener | src/middleware/subscribeWithSelector.ts | subscribeWithSelector
+zustand | shallow equality compare | src/vanilla/shallow.ts | shallow
+zustand | redux reducer dispatch | src/middleware/redux.ts | reduxImpl
+zustand | devtools action name | src/middleware/devtools.ts | devtoolsImpl
+zustand | create store state | src/vanilla.ts | createStore
+zod | flatten error issues | packages/zod/src/v4/core/errors.ts | flattenError
+zod | tree error issues | packages/zod/src/v4/core/errors.ts | treeifyError
+zod | json schema convert | packages/zod/src/v4/core/json-schema-processors.ts | toJSONSchema
+zod | safe parse result | packages/zod/src/v4/core/parse.ts | safeParse
+zod | extend object shape | packages/zod/src/v4/core/util.ts | extend
+zod | global registry metadata | packages/zod/src/v4/core/registries.ts | globalRegistry
+axios | merge config | lib/core/mergeConfig.js | mergeConfig
+axios | build full path base url | lib/core/buildFullPath.js | buildFullPath
+axios | dispatch request adapter | lib/core/dispatchRequest.js | dispatchRequest
+axios | compose abort signals timeout | lib/helpers/composeSignals.js | composeSignals
+axios | form data json | lib/helpers/formDataToJSON.js | formDataToJSON
+axios | settle response validate status | lib/core/settle.js | settle
