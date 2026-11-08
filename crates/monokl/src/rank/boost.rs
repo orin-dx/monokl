@@ -22,6 +22,7 @@ use crate::types::{CodeBlock, SymbolKind};
 ///     symbol_signature: None,
 ///     matched_lines: vec![12, 30, 40],
 ///     matched_keywords: Vec::new(),
+///     parent: None,
 /// };
 /// assert_eq!(coverage_boost(&block), 0.333333);
 /// ```
@@ -78,6 +79,7 @@ mod tests {
             symbol_signature: None,
             matched_lines,
             matched_keywords: Vec::new(),
+            parent: None,
         }
     }
 

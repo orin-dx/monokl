@@ -57,6 +57,7 @@ fn input_block() -> impl Strategy<Value = (CodeBlock, Vec<String>)> {
                 symbol_signature: None,
                 matched_lines,
                 matched_keywords: Vec::new(),
+                parent: None,
             };
             (block, tokens.into_iter().map(String::from).collect())
         })

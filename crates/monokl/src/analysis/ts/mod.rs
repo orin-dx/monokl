@@ -501,6 +501,174 @@ export const y = 1;
         assert_eq!(blocks(&analysis), [(1, 1, SymbolKind::Other, None)]);
     }
 
+    type MemberBlock<'a> = (usize, usize, SymbolKind, Option<&'a str>, Option<(SymbolKind, &'a str, usize)>);
+
+    /// Every block as `(line_start, line_end, kind, signature, parent)`.
+    fn blocks_with_parents(analysis: &FileAnalysis) -> Vec<MemberBlock<'_>> {
+        analysis
+            .blocks
+            .iter()
+            .map(|b| {
+                let parent = b.parent.as_ref().map(|p| (p.kind, p.name.as_str(), p.line));
+                (b.line_start, b.line_end, b.node_kind, b.symbol_signature.as_deref(), parent)
+            })
+            .collect()
+    }
+
+    const CLASS_WITH_MEMBERS: &str = "\
+export class Foo {
+  readonly id = 1;
+  constructor(private readonly deps: Deps) {
+    this.deps = deps;
+  }
+  async fetch(id: string): Promise<User> {
+    return this.deps.get(id);
+  }
+  short() { return 1; }
+  static create(): Foo {
+    return new Foo(deps);
+  }
+  handle = async (req: Req) => {
+    return req;
+  };
+  plain = function () {
+    return 1;
+  };
+  get name(): string {
+    return 'x';
+  }
+  two() {
+  }
+  counter = 0;
+  alias = (a: number) => a + 1;
+}
+";
+
+    #[test]
+    fn a_class_yields_a_block_for_each_long_method_constructor_and_function_valued_property() {
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        let foo = Some((SymbolKind::Class, "Foo", 1));
+        assert_eq!(
+            blocks_with_parents(&analysis),
+            [
+                (1, 26, SymbolKind::Class, None, None),
+                (3, 5, SymbolKind::Constructor, Some("constructor(private readonly deps: Deps)"), foo),
+                (6, 8, SymbolKind::Method, Some("async fetch(id: string): Promise<User>"), foo),
+                (10, 12, SymbolKind::Method, Some("static create(): Foo"), foo),
+                (13, 15, SymbolKind::Property, Some("handle = async (req: Req) =>"), foo),
+                (16, 18, SymbolKind::Property, Some("plain = function ()"), foo),
+                (19, 21, SymbolKind::Method, Some("get name(): string"), foo),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_member_block_holds_exactly_the_member_text() {
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        let codes: Vec<&str> = analysis.blocks.iter().skip(1).take(2).map(|b| b.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            [
+                "constructor(private readonly deps: Deps) {\n    this.deps = deps;\n  }",
+                "async fetch(id: string): Promise<User> {\n    return this.deps.get(id);\n  }"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case("export class Foo {\n  m() {\n  }\n}\n", 0)]
+    #[case("export class Foo {\n  m() {\n    return 1;\n  }\n}\n", 1)]
+    #[case("export class Foo {\n  m = () => {\n  };\n}\n", 0)]
+    #[case("export class Foo {\n  m = () => {\n    return 1;\n  };\n}\n", 1)]
+    fn a_member_shorter_than_three_lines_has_no_block(#[case] source: &str, #[case] members: usize) {
+        let analysis = analyze_source("short.ts", source, AnalysisProfile::Full);
+        assert_eq!(analysis.blocks.len(), 1 + members);
+    }
+
+    #[rstest]
+    #[case::declared("class Foo {\n  m() {\n    return 1;\n  }\n}\n")]
+    #[case::exported("export class Foo {\n  m() {\n    return 1;\n  }\n}\n")]
+    #[case::default_exported("export default class Foo {\n  m() {\n    return 1;\n  }\n}\n")]
+    fn members_of_a_declared_or_exported_class_name_their_class(#[case] source: &str) {
+        let analysis = analyze_source("named.ts", source, AnalysisProfile::Full);
+        let parents: Vec<_> =
+            analysis.blocks.iter().map(|b| b.parent.as_ref().map(|p| (p.kind, p.name.as_str()))).collect();
+        assert_eq!(parents, [None, Some((SymbolKind::Class, "Foo"))]);
+    }
+
+    #[rstest]
+    #[case::anonymous_default("export default class {\n  m() {\n    return 1;\n  }\n}\n")]
+    #[case::nested_in_a_function("function f() {\n  class Foo {\n    m() {\n      return 1;\n    }\n  }\n}\n")]
+    #[case::class_expression("const Foo = class {\n  m() {\n    return 1;\n  }\n};\n")]
+    fn a_class_without_a_name_or_outside_the_top_level_gets_no_member_blocks(#[case] source: &str) {
+        let analysis = analyze_source("other.ts", source, AnalysisProfile::Full);
+        assert_eq!(analysis.blocks.len(), 1);
+    }
+
+    #[test]
+    fn methods_without_a_body_and_other_class_elements_get_no_block() {
+        let source = "\
+export abstract class Base {
+  abstract run(
+    input: string,
+  ): void;
+  overload(a: string): void;
+  overload(a: number): void;
+  overload(a: unknown): void {
+    return;
+  }
+  static {
+    init();
+    init();
+  }
+  [key: string]: unknown;
+}
+";
+        let analysis = analyze_source("abstract.ts", source, AnalysisProfile::Full);
+        assert_eq!(
+            blocks_with_parents(&analysis),
+            [
+                (1, 15, SymbolKind::Class, None, None),
+                (7, 9, SymbolKind::Method, Some("overload(a: unknown): void"), Some((SymbolKind::Class, "Base", 1))),
+            ]
+        );
+    }
+
+    #[test]
+    fn decorators_are_left_out_of_a_member_signature_but_stay_in_its_block() {
+        let source = "\
+export class Ctl {
+  @Get(':id')
+  find(@Param('id') id: string) {
+    return id;
+  }
+}
+";
+        let analysis = analyze_source("decorated.ts", source, AnalysisProfile::Full);
+        let member = &analysis.blocks[1];
+        assert_eq!(
+            (member.line_start, member.line_end, member.symbol_signature.as_deref()),
+            (2, 5, Some("find(@Param('id') id: string)"))
+        );
+        assert_eq!(member.code, "@Get(':id')\n  find(@Param('id') id: string) {\n    return id;\n  }");
+    }
+
+    #[test]
+    fn only_the_full_profile_extracts_member_blocks() {
+        for profile in [AnalysisProfile::Dependencies, AnalysisProfile::Structural] {
+            let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, profile);
+            assert_eq!(analysis.blocks.len(), 0, "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn member_blocks_are_deterministic() {
+        let first = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        let second = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+
     #[test]
     fn imports_record_namespace_side_effect_and_inline_type_bindings() {
         let text = "\

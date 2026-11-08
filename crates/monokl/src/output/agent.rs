@@ -165,12 +165,19 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
     Some(out.join("\n"))
 }
 
-fn search_row(block: &crate::types::RankedBlock) -> [Value; 8] {
+/// The `parent` cell: the kind and name of the block's parent, such as `class Foo` for a method; `null` for a
+/// top-level block.
+fn parent_cell(parent: Option<&crate::types::ParentContext>) -> Value {
+    opt_cell(parent.map(|p| format!("{} {}", symbol_kind_str(p.kind), p.name)).as_deref())
+}
+
+fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
     [
         cell(block.block.file.as_str()),
         Value::from(block.block.line_start),
         Value::from(block.block.line_end),
         cell(symbol_kind_str(block.block.node_kind)),
+        parent_cell(block.parent_context.as_ref()),
         opt_cell(block.block.symbol_signature.as_deref()),
         opt_cell(snippet(&block.block).as_deref()),
         Value::from(block.rank),
@@ -182,18 +189,18 @@ fn search_row(block: &crate::types::RankedBlock) -> [Value; 8] {
 ///
 /// The search budget measures this text, so a cap counts what the reader receives.
 pub fn search_row_text(block: &crate::types::RankedBlock) -> String {
-    let fields = <crate::types::SearchResponse as ToonProjection<8>>::FIELDS;
+    let fields = <crate::types::SearchResponse as ToonProjection<9>>::FIELDS;
     let row = search_row(block).to_vec();
     let rendered = michi::AgentResponse::new("search").items(vec![row], fields.as_slice()).render_toon();
     rendered.lines().nth(1).unwrap_or_default().to_owned()
 }
 
-impl ToonProjection<8> for crate::types::SearchResponse {
+impl ToonProjection<9> for crate::types::SearchResponse {
     const TYPE_NAME: &'static str = "search";
-    const FIELDS: [&'static str; 8] =
-        ["file", "lineStart", "lineEnd", "nodeKind", "symbolSignature", "snippet", "rank", "finalScore"];
+    const FIELDS: [&'static str; 9] =
+        ["file", "lineStart", "lineEnd", "nodeKind", "parent", "symbolSignature", "snippet", "rank", "finalScore"];
 
-    fn toon_rows(&self) -> Vec<[Value; 8]> {
+    fn toon_rows(&self) -> Vec<[Value; 9]> {
         self.results.iter().map(search_row).collect()
     }
 
@@ -207,7 +214,7 @@ impl ToonProjection<8> for crate::types::SearchResponse {
         hints.extend(diagnostic_lines(&self.diagnostics).into_iter().map(michi::Hint::new));
         if self.results.is_empty() {
             hints.push(michi::Hint::new(
-                "only top-level declarations are searched; for text in tests, calls or config try rg",
+                "only top-level declarations and class members are searched; for text in tests, calls or config try rg",
             ));
         }
         hints
@@ -290,6 +297,7 @@ mod snippet_tests {
             symbol_signature: Some("signature".to_owned()),
             matched_lines: matched_lines.to_vec(),
             matched_keywords: Vec::new(),
+            parent: None,
         }
     }
 
@@ -390,6 +398,7 @@ mod projection_tests {
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
                     matched_lines: vec![5, 6],
                     matched_keywords: vec!["foo".to_string()],
+                    parent: None,
                 },
                 bm25_score: 0.75,
                 coverage_boost: 0.1,
@@ -408,8 +417,54 @@ mod projection_tests {
         let rendered = render_projection(&response).expect("valid projection must render");
         assert_eq!(
             rendered,
-            "search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n  \
-             src/lib.rs,5,9,function,\"fn foo(x)\\nsecond line\",\"6: let y = foo(x);\",2,0.92"
+            "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
+             src/lib.rs,5,9,function,null,\"fn foo(x)\\nsecond line\",\"6: let y = foo(x);\",2,0.92"
+        );
+    }
+
+    #[test]
+    fn a_member_row_names_its_parent_and_a_top_level_row_has_none() {
+        use crate::types::{CodeBlock, ParentContext, RankedBlock, SearchResponse, SymbolKind};
+        use camino::Utf8PathBuf;
+
+        let ranked = |line_start, node_kind, parent_context, rank| RankedBlock {
+            block: CodeBlock {
+                file: Utf8PathBuf::from("src/a.ts"),
+                line_start,
+                line_end: line_start + 2,
+                node_kind,
+                code: String::new(),
+                symbol_signature: None,
+                matched_lines: Vec::new(),
+                matched_keywords: Vec::new(),
+                parent: None,
+            },
+            bm25_score: 0.0,
+            coverage_boost: 0.0,
+            node_type_boost: 1.0,
+            final_score: 0.5,
+            rank,
+            parent_context,
+        };
+        let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned(), line: 1 };
+        let response = SearchResponse {
+            results: vec![
+                ranked(3, SymbolKind::Method, Some(class("Foo")), 1),
+                ranked(7, SymbolKind::Constructor, Some(class("Bar Baz")), 2),
+                ranked(1, SymbolKind::Class, None, 3),
+            ],
+            total_blocks_before_truncation: 3,
+            truncated: false,
+            total_bytes: 0,
+            total_tokens: 0,
+            diagnostics: Vec::new(),
+        };
+        assert_eq!(
+            render_projection(&response).expect("valid projection must render"),
+            "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
+             src/a.ts,3,5,method,class Foo,null,null,1,0.5\n  \
+             src/a.ts,7,9,constructor,class Bar Baz,null,null,2,0.5\n  \
+             src/a.ts,1,3,class,null,null,null,3,0.5"
         );
     }
 
@@ -442,7 +497,7 @@ mod projection_tests {
             "search: []\n\
              help[4]: \"1 file degraded: parse errors: c.ts\",query has no positive terms,\
              \"2 files skipped: unreadable: a.ts, b.ts\",\
-             \"only top-level declarations are searched; for text in tests, calls or config try rg\""
+             \"only top-level declarations and class members are searched; for text in tests, calls or config try rg\""
         );
     }
 
@@ -509,6 +564,7 @@ mod projection_tests {
                     symbol_signature: None,
                     matched_lines: Vec::new(),
                     matched_keywords: Vec::new(),
+                    parent: None,
                 },
                 bm25_score: 1.0,
                 coverage_boost: 0.0,
@@ -524,9 +580,9 @@ mod projection_tests {
             render_projection(&apply_budget(ranked, 3, &budget, search_row_text, Vec::new())).expect("must render");
         assert_eq!(
             rendered,
-            "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n  \
-             src/f1.rs,1,2,function,null,null,1,0.5\n  \
-             src/f2.rs,2,3,function,null,null,2,0.5\n\
+            "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
+             src/f1.rs,1,2,function,null,null,null,1,0.5\n  \
+             src/f2.rs,2,3,function,null,null,null,2,0.5\n\
              totalCount: 3\n\
              help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
         );
@@ -629,6 +685,7 @@ mod projection_tests {
                     symbol_signature: None,
                     matched_lines: Vec::new(),
                     matched_keywords: Vec::new(),
+                    parent: None,
                 },
                 bm25_score: 0.0,
                 coverage_boost: 0.0,
@@ -656,8 +713,9 @@ mod projection_tests {
 
         let rendered = render_projection(&search).expect("valid projection must render");
         assert!(
-            rendered
-                .starts_with("search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n"),
+            rendered.starts_with(
+                "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n"
+            ),
             "got: {rendered}"
         );
         let one_pos = rendered.find("src/one.rs,1,2,").expect("first result row must be present");

@@ -133,6 +133,7 @@ mod tests {
                 symbol_signature: None,
                 matched_lines: Vec::new(),
                 matched_keywords: Vec::new(),
+                parent: None,
             },
             bm25_score: 1.0,
             coverage_boost: 0.0,
