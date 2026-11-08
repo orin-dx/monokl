@@ -6,10 +6,18 @@ what is right, and the score rewards targeting:
 
 - definitions: files that declare the identifier. The gate is whether one of them is among monokl's first `--top` files
   (hit@top), because an agent that asks for a symbol must be shown where it is declared, early.
+- declaration_in_output: whether the declaration's own line appears in monokl's output, so the agent needs no second
+  read of the file. Reported, not gated.
 - cost: files and output size monokl returns with its default caps, against one `rg -n` call. rg wins on a bare
   identifier, so this is the floor to beat; monokl's case is the question that takes rg several calls.
 - test files are left out of the lists, as monokl leaves them out by default. `--tests` also runs monokl with its test
   flag and reports how many test files with the word it returned, ungated.
+
+Questions (scripts/rg-compare.questions) score the case monokl exists for: two to four words that take several rg calls,
+with a known answer file and symbol. Each reports the answer file's rank, whether the declaration line is in the output,
+the rg route's narrowing cost (files with any word, files with all words, bytes of one `rg -n` call for any word) and
+monokl's output bytes. The gate is the answer file in monokl's first `--top` files for at least `--min-question-recall`
+of the questions.
 
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
 """
@@ -25,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "rg-compare.repos"
+QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 # Declaration files are not searched by design (see `supports` in crates/monokl/src/analysis/ts/mod.rs).
 GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "!*.d.ts", "!*.d.mts", "!*.d.cts"]
@@ -95,7 +104,17 @@ def monokl_files(binary, term, path, tests):
             file = line.strip().split(",", 1)[0].removeprefix("./")
             if file not in files:
                 files.append(file)
-    return files, len(out.encode())
+    return files, out
+
+
+def declaration_line(term, files, path):
+    """The text of the first top-level declaration of `term` in one of `files`, as ripgrep finds it."""
+    for file in sorted(files):
+        out = run(["rg", "--no-filename", "--max-count", "1", "-e", rf"{TOP_LEVEL}{re.escape(term)}\b", file], cwd=path,
+                  check=False).stdout
+        if out.strip():
+            return out.strip()
+    return None
 
 
 def rg_output_bytes(term, path):
@@ -134,6 +153,53 @@ def first_rank(ordered, wanted):
     return next((i for i, f in enumerate(ordered, 1) if f in wanted), None)
 
 
+def question_rows(only):
+    for line in QUESTIONS.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            repo, words, file, symbol = (cell.strip() for cell in line.split("|"))
+            if not only or repo in only:
+                yield repo, words, file, symbol
+
+
+def score_questions(binary, only):
+    """Runs every question and returns one row each. Fails if the answer's declaration is not in the pinned checkout."""
+    checkouts = {name: checkout(name, url, sha) for name, url, sha in repositories(only)}
+    rows = []
+    for repo, words, file, symbol in question_rows(only):
+        path = checkouts[repo]
+        if file not in definitions(symbol, path):
+            sys.exit(f"{repo}: `{symbol}` is not declared in {file} at the pinned sha; fix rg-compare.questions")
+        terms = words.split()
+        per_word = [split(rg_files(re.escape(t), path, ["--ignore-case", "--word-regexp"]))[0] for t in terms]
+        rg_args = ["rg", "-n", "--ignore-case", "--word-regexp"]
+        for glob in GLOBS:
+            rg_args += ["--glob", glob]
+        for term in terms:
+            rg_args += ["-e", re.escape(term)]
+        rg_out = run([*rg_args, "."], cwd=path, check=False).stdout
+        rg_lines = [l for l in rg_out.splitlines() if not is_test_path(l.removeprefix("./").split(":", 1)[0])]
+        ordered, output = monokl_files(binary, words, path, False)
+        non_test = [f for f in ordered if not is_test_path(f)]
+        declaration = declaration_line(symbol, {file}, path)
+        bare = str.maketrans("", "", '"\\')
+        bare_declaration = re.sub(r"^(?:export\s+|default\s+|declare\s+)+", "", declaration).rstrip(" {;")
+        rows.append(
+            {
+                "repo": repo,
+                "words": words,
+                "file": file,
+                "symbol": symbol,
+                "rank": non_test.index(file) + 1 if file in non_test else None,
+                "declaration_in_output": bare_declaration[:40].translate(bare) in output.translate(bare),
+                "rg_any_files": len(set.union(*per_word)),
+                "rg_all_files": len(set.intersection(*per_word)),
+                "rg_n_bytes": len("\n".join(rg_lines).encode()),
+                "monokl_bytes": len(output.encode()),
+            }
+        )
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", default=str(ROOT / "target" / "release" / "monokl"))
@@ -141,6 +207,9 @@ def main():
     parser.add_argument("--terms", type=int, default=25, help="identifiers sampled per repository")
     parser.add_argument("--top", type=int, default=3, help="a declaration must appear within this many files")
     parser.add_argument("--min-recall", type=float, default=0.9, help="fail when the share of hits is lower")
+    parser.add_argument("--min-question-recall", type=float, default=0.75,
+                        help="fail when the share of questions with the answer file in the top files is lower")
+    parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
     args = parser.parse_args()
@@ -155,7 +224,19 @@ def main():
         for term in sample_terms(path, args.terms):
             defs, def_tests = split(definitions(term, path))
             seen, seen_tests = split(mentions(term, path))
-            (ordered, monokl_bytes), monokl_ms = timed(monokl_files, args.binary, term, path, args.tests)
+            (ordered, output), monokl_ms = timed(monokl_files, args.binary, term, path, args.tests)
+            monokl_bytes = len(output.encode())
+            declaration = declaration_line(term, defs, path)
+            # The first 40 characters of the declaration's line, because a signature or snippet may cut a long one.
+            # TOON quotes and escapes cells, so compare with quotes and backslashes removed on both sides.
+            bare = str.maketrans("", "", '"\\')
+            # A signature drops the opening brace, so compare without trailing braces and semicolons.
+            # and its export, default and declare keywords.
+            wanted = None
+            if declaration:
+                bare_declaration = re.sub(r"^(?:export\s+|default\s+|declare\s+)+", "", declaration).rstrip(" {;")
+                wanted = bare_declaration[:40].translate(bare)
+            answered = wanted is not None and wanted in output.translate(bare)
             non_test = [f for f in ordered if not is_test_path(f)]
             found, found_tests = split(ordered)
             _, rg_ms = timed(mentions, term, path)
@@ -165,6 +246,7 @@ def main():
                     "term": term,
                     "defs": len(defs),
                     "def_rank": rank,
+                    "answered": answered,
                     "returned": len(non_test),
                     "rg_files": len(seen | defs),
                     "monokl_bytes": monokl_bytes,
@@ -190,6 +272,7 @@ def main():
         line = (
             f"{repo['repo']:<10} defined_terms={len(rows):<3} hit@{args.top}={repo_hits}/{len(rows)} "
             f"median_rank={statistics.median(ranks) if ranks else '-'} "
+            f"declaration_in_output={sum(1 for r in rows if r['answered'])}/{len(rows)} "
             f"files={returned} vs rg={rg_files} "
             f"output_kb monokl={sum(r['monokl_bytes'] for r in repo['rows']) / 1024:.0f} "
             f"rg_n={sum(r['rg_bytes'] for r in repo['rows']) / 1024:.0f} "
@@ -204,11 +287,37 @@ def main():
                 rank = row["def_rank"] or "absent"
                 print(f"    declaration at rank {rank}: {row['term']} (top: {', '.join(row['top']) or 'nothing'})")
 
-    rate = hits / max(scored, 1)
-    print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+    # A gate with nothing to score is skipped and says so, instead of failing on a rate of 0/0.
+    identifiers_pass = True
+    if scored:
+        rate = hits / scored
+        identifiers_pass = rate >= args.min_recall
+        print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+    else:
+        print("declaration in top: no declarations to score, gate skipped")
+
+    questions = [] if args.no_questions else score_questions(args.binary, args.repo)
+    question_hits = 0
+    for q in questions:
+        in_top = q["rank"] is not None and q["rank"] <= args.top
+        question_hits += in_top
+        print(
+            f"  {'ok  ' if in_top else 'MISS'} {q['repo']}: {q['words']!r} -> {q['symbol']} "
+            f"file_rank={q['rank'] or 'absent'} declaration_in_output={'yes' if q['declaration_in_output'] else 'no'} "
+            f"rg_files any={q['rg_any_files']} all={q['rg_all_files']} rg_n_bytes={q['rg_n_bytes']} "
+            f"monokl_bytes={q['monokl_bytes']}"
+        )
+    questions_pass = True
+    if questions:
+        question_rate = question_hits / len(questions)
+        questions_pass = question_rate >= args.min_question_recall
+        print(f"question answer file in top {args.top}: {question_hits}/{len(questions)} = {question_rate:.2%} "
+              f"(gate {args.min_question_recall:.2%})")
+    else:
+        print("question answer file in top: no questions to score, gate skipped")
     if args.json:
-        Path(args.json).write_text(json.dumps(report, indent=2))
-    sys.exit(0 if rate >= args.min_recall else 1)
+        Path(args.json).write_text(json.dumps({"identifiers": report, "questions": questions}, indent=2))
+    sys.exit(0 if identifiers_pass and questions_pass else 1)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::budget::{Budget, apply_budget};
 use crate::error::MonoklError;
-use crate::output::agent::{ToDomainError, render_projection};
+use crate::output::agent::{ToDomainError, render_projection, search_row_text};
 use crate::pipeline::{SearchRequest, search};
 use crate::text_search::DEFAULT_MAX_FILES;
 use crate::types::{Diagnostic, DiagnosticKind, Language};
@@ -54,10 +54,10 @@ struct SearchArgs {
     /// The most results to print.
     #[arg(long, default_value_t = Budget::default().max_results)]
     max_results: usize,
-    /// The most tokens across the blocks the printed rows cover.
+    /// The most tokens across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
-    /// The most bytes across the blocks the printed rows cover.
+    /// The most bytes across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_bytes)]
     max_bytes: usize,
 }
@@ -141,7 +141,7 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
     }
     let budget = Budget { max_results: args.max_results, max_tokens: args.max_tokens, max_bytes: args.max_bytes };
     let total_before = ranked.len();
-    let response = apply_budget(ranked, total_before, &budget, diagnostics);
+    let response = apply_budget(ranked, total_before, &budget, search_row_text, diagnostics);
     render_projection(&response).map_err(|e| e.render())
 }
 

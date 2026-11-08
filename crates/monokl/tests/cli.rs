@@ -1,4 +1,5 @@
 //! Black-box tests: run the built `monokl` binary against the `small-ts` fixture project.
+#![cfg(feature = "cli")]
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "a failing assertion should panic in a test")]
 
 use std::path::{Path, PathBuf};
@@ -27,15 +28,36 @@ fn search_prints_ranked_blocks_with_relative_paths() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let mut lines = text.lines();
-    assert_eq!(lines.next(), Some("search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:"));
+    assert_eq!(
+        lines.next(),
+        Some("search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:")
+    );
     let first = lines.next().unwrap();
     assert!(
         first.starts_with(
-            "  src/utils/format.ts,1,3,function,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",1,"
+            "  src/utils/format.ts,1,3,function,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,"
         ),
         "got: {first}"
     );
     assert!(text.lines().skip(1).all(|line| !line.trim_start().starts_with('/')), "paths should be relative: {text}");
+}
+
+#[test]
+fn a_row_shows_the_matching_lines_inside_its_block_and_nothing_else() {
+    let output = monokl(&["search", "format price", "src/", "--max-results", "3"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let rows: Vec<&str> = text.lines().skip(1).take(3).collect();
+    assert_eq!(
+        rows[1],
+        "  src/utils/validation.ts,8,12,function,\"function validatePrice(price: number): ValidationResult\",\
+         \"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n\
+         10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,3.07557"
+    );
+    assert_eq!(
+        rows[2],
+        "  src/index.ts,3,3,other,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,2.345138"
+    );
 }
 
 #[test]
@@ -89,9 +111,9 @@ fn a_deeply_nested_file_is_searched_like_any_other() {
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let lines: Vec<&str> = text.lines().take(3).collect();
-    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
-    assert!(lines[1].starts_with("  normal.ts,1,1,function,function needle(),1,"), "got: {text}");
-    assert!(lines[2].starts_with("  nested.ts,1,1,variable,null,2,"), "got: {text}");
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:");
+    assert!(lines[1].starts_with("  normal.ts,1,1,function,function needle(),null,1,"), "got: {text}");
+    assert!(lines[2].starts_with("  nested.ts,1,1,variable,null,\"1: export const needle = /'/;\",2,"), "got: {text}");
 }
 
 #[test]
@@ -106,9 +128,9 @@ fn files_that_are_not_valid_utf8_are_searched_and_reported_as_read_lossily() {
     let text = stdout(&output);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 4, "got: {text}");
-    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:");
-    assert!(lines[1].starts_with("  legacy.ts,2,2,function,function needle(),1,"), "got: {text}");
-    assert!(lines[2].starts_with("  modern.ts,1,1,function,function needle(),2,"), "got: {text}");
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:");
+    assert!(lines[1].starts_with("  legacy.ts,2,2,function,function needle(),null,1,"), "got: {text}");
+    assert!(lines[2].starts_with("  modern.ts,1,1,function,function needle(),null,2,"), "got: {text}");
     assert_eq!(lines[3], "help[1]: \"1 file read lossily: invalid UTF-8 replaced with U+FFFD: legacy.ts\"");
 }
 
@@ -149,7 +171,10 @@ fn no_ignore_searches_ignored_directories() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let mut lines = text.lines();
-    assert_eq!(lines.next(), Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:"));
+    assert_eq!(
+        lines.next(),
+        Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:")
+    );
     assert!(lines.next().unwrap().starts_with("  build/out.ts,1,1,function,"), "got: {text}");
 }
 
@@ -179,7 +204,7 @@ fn no_ignore_also_skips_parent_ignore_files() {
     let text = stdout(&output);
     assert_eq!(
         text.lines().next(),
-        Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,rank,finalScore}:")
+        Some("search[1]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:")
     );
     assert!(text.lines().nth(1).unwrap().starts_with("  build/out.ts,1,1,function,"), "got: {text}");
 }
@@ -221,4 +246,64 @@ fn a_file_as_the_search_root_is_invalid_input_naming_the_path() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).starts_with("error: invalid_input"), "got: {}", stderr(&output));
     assert!(stderr(&output).contains("src/index.ts"), "got: {}", stderr(&output));
+}
+
+const PRICE_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:";
+const PRICE_ROW_1: &str = "  src/components/Button.tsx,11,18,function,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n14: <button onClick={onClick} disabled={disabled || !priceValid}>\",1,1.164513";
+const PRICE_ROW_2: &str = "  src/utils/validation.ts,8,12,function,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,1.163847";
+
+/// The expected output for the first `rows` of the `price` query, cut from 8.
+fn price_cut(rows: &[&str]) -> String {
+    let n = rows.len();
+    let header = PRICE_HEADER.replace('N', &n.to_string());
+    let body: String = rows.iter().flat_map(|row| [*row, "\n"]).collect();
+    format!(
+        "{header}\n{body}totalCount: 8\nhelp[1]: showing {n} of 8; raise the cap or refine the query with +term or -term\n"
+    )
+}
+
+#[test]
+fn a_cut_by_rows_keeps_the_first_rows_and_says_so() {
+    let output = monokl(&["search", "price", ".", "--max-results", "2"]);
+    assert_eq!(stdout(&output), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
+}
+
+#[test]
+fn a_cut_by_bytes_counts_the_printed_rows_and_not_the_blocks() {
+    let printed = PRICE_ROW_1.len() + PRICE_ROW_2.len();
+    let at = monokl(&["search", "price", ".", "--max-bytes", &printed.to_string()]);
+    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
+    let under = monokl(&["search", "price", ".", "--max-bytes", &(printed - 1).to_string()]);
+    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1]));
+}
+
+#[test]
+fn a_cut_by_tokens_counts_the_printed_rows_and_not_the_blocks() {
+    let printed = monokl::budget::count_tokens(PRICE_ROW_1) + monokl::budget::count_tokens(PRICE_ROW_2);
+    let at = monokl(&["search", "price", ".", "--max-tokens", &printed.to_string()]);
+    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
+    let under = monokl(&["search", "price", ".", "--max-tokens", &(printed - 1).to_string()]);
+    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1]));
+}
+
+#[test]
+fn a_first_row_larger_than_the_budget_prints_no_rows_and_says_so() {
+    let output = monokl(&["search", "price", ".", "--max-bytes", &(PRICE_ROW_1.len() - 1).to_string()]);
+    assert_eq!(
+        stdout(&output),
+        "search: []\ntotalCount: 8\nhelp[2]: showing 0 of 8; raise the cap or refine the query with +term or -term,\
+         \"only top-level declarations are searched; for text in tests, calls or config try rg\"\n"
+    );
+}
+
+#[test]
+fn a_result_within_every_cap_is_printed_whole_without_a_cut_marker() {
+    let output = monokl(&["search", "format", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[3]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/utils/format.ts,1,3,function,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,1.356084\n\
+         \x20 src/utils/validation.ts,8,12,function,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,1.170466\n\
+         \x20 src/index.ts,3,3,other,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,1.159101\n"
+    );
 }

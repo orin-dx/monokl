@@ -344,3 +344,11 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Why.** AGENTS.md forbids pre-rendered truncation strings and serializable core types, and the "wire or don't define" rule asks for a call site in the same change. Nothing called these; a public type without a caller promises behavior nothing tests, and `#[non_exhaustive]` makes adding a variant later a non-breaking change.
 - **The spec text stays the design.** Parts 1 to 3 still describe these items; each returns, with its spec text as the starting point, in the change that adds the command or module that constructs it. The architecture docs say which are absent.
 - **Rejected.** Keeping them as future API: they would stay public, untested and unconsumed, and the first real caller would likely need a different shape (the spec's own `SearchLimits` is already superseded by Part 8).
+
+## 26. Search rows show the matching lines (2026-11-07)
+
+- **Decision.** Each `search` row gains a `snippet` cell: the lines of the block that matched, numbered, at most three, each cut at 160 characters, with the rest counted. The block's first line is left out when the block has a signature, because that column shows it.
+- **Why.** Rows held only a location and a signature, so an agent had to read the file to see why a block matched, a second turn the tool exists to save. Against pinned zustand, zod and axios, the declaration's own line was in the output for 15 of 59 identifiers before and 59 of 59 after (`just rg-compare`); output grew about 1.7x and stays below one `rg -n` call.
+- **A rule this replaces.** A test asserted that block code must never appear in rows. That assumed a separate `extract` command that does not exist (its hint was removed with the diagnostics rework), so the rule left agents with nothing to read. The whole block is still not printed; only matching lines are.
+- **Rejected.** Printing each block's `code`, as Part 1's snapshot lists: a large block costs more than the question needs, and the budget would have to count printed bytes. A separate `extract` command: a second call for every hit.
+- **Open.** `--max-tokens` and `--max-bytes` still count the blocks the printed rows cover, not the snippets printed. Snippets are at most about 500 bytes a row, so the gap is small; counting printed bytes is the follow-up.
