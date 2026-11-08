@@ -130,12 +130,15 @@ const SNIPPET_LINE_CHARS: usize = 160;
 /// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
 ///
 /// The block's first line is left out when the block has a signature, because the signature column already shows it;
-/// a variable or type alias has no signature, so its first line is the best thing to show. At most [`SNIPPET_LINES`]
+/// a variable or type alias has no signature, so its first line is the best thing to show. A first line that starts
+/// with a decorator stays, because the signature leaves decorators out. At most [`SNIPPET_LINES`]
 /// lines appear, each cut to [`SNIPPET_LINE_CHARS`] characters, and the lines beyond that are counted, not dropped
 /// silently.
 fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
     let lines: Vec<&str> = block.code.split('\n').collect();
-    let first = if block.symbol_signature.is_some() { block.line_start + 1 } else { block.line_start };
+    let first_line_in_signature =
+        block.symbol_signature.is_some() && !lines.first().is_some_and(|line| line.trim_start().starts_with('@'));
+    let first = if first_line_in_signature { block.line_start + 1 } else { block.line_start };
     let mut shown: Vec<usize> = block
         .matched_lines
         .iter()
@@ -325,6 +328,20 @@ mod snippet_tests {
         let mut b = block(3, "function price() {\n  return price;\n}", &[3, 4]);
         b.symbol_signature = Some("function price()".to_owned());
         assert_eq!(snippet(&b), Some("4: return price;".to_owned()));
+    }
+
+    #[test]
+    fn a_decorator_line_the_signature_leaves_out_is_shown_when_it_matched() {
+        let mut b = block(2, "@Dec('needle')\nmulti(a: number): void {\n}", &[2]);
+        b.symbol_signature = Some("multi(a: number): void".to_owned());
+        assert_eq!(snippet(&b), Some("2: @Dec('needle')".to_owned()));
+    }
+
+    #[test]
+    fn a_decorator_sharing_its_line_with_the_member_is_shown_when_it_matched() {
+        let mut b = block(9, "@Dec2() prop2 = () => {\n  return 1;\n}", &[9]);
+        b.symbol_signature = Some("prop2 = () =>".to_owned());
+        assert_eq!(snippet(&b), Some("9: @Dec2() prop2 = () => {".to_owned()));
     }
 
     #[test]
