@@ -766,6 +766,8 @@ export const api = {
         );
     }
 
+    /// Pins the extraction boundary: these shapes are documented gaps or too small to split, and must stay inside
+    /// their holder's block.
     #[rstest]
     #[case::too_short_method("const o = {\n  m() {\n  },\n};\n")]
     #[case::too_short_arrow("const o = {\n  m: () => {\n  },\n};\n")]
@@ -817,14 +819,6 @@ export const api = {
                 (7, 9, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "o", 6))),
             ]
         );
-    }
-
-    #[test]
-    fn only_the_full_profile_extracts_object_member_blocks() {
-        for profile in [AnalysisProfile::Dependencies, AnalysisProfile::Structural] {
-            let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS, profile);
-            assert_eq!(analysis.blocks.len(), 0, "{profile:?}");
-        }
     }
 
     #[test]

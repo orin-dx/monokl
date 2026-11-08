@@ -374,10 +374,14 @@ fn an_object_whose_matches_are_all_inside_members_is_dropped() {
     assert_eq!(rows, [(2, 4)]);
 }
 
+/// Two object members that share a line: `a` ends where `b` starts.
+const SHARED_LINE: &str = "const o = { a() {\n  return needleX;\n}, b() {\n  return needleY;\n} };\n";
+
 #[test]
 fn no_line_of_an_object_is_credited_to_two_blocks_whatever_the_query() {
-    let dir = project(&[("src/api.ts", API)]);
-    for query in ["http", "api", "user", "return", "label", "tiny", "get", "regex:\\w+", "loadUser saveUser"] {
+    let dir = project(&[("src/shared.ts", SHARED_LINE)]);
+    let queries = ["needle", "return", "const", "b", "a", "regex:\\w+", "regex:\\}", "regex:\\{", "o a b"];
+    for query in queries {
         let result = library_search(&dir, query);
         let mut owners: BTreeMap<usize, usize> = BTreeMap::new();
         for ranked in &result.ranked {
@@ -388,6 +392,27 @@ fn no_line_of_an_object_is_credited_to_two_blocks_whatever_the_query() {
         let shared: Vec<_> = owners.iter().filter(|&(_, &count)| count > 1).collect();
         assert_eq!(shared, [], "{query}: lines in more than one block");
     }
+}
+
+#[test]
+fn a_match_on_a_line_two_object_members_share_goes_to_the_member_that_holds_it() {
+    let dir = project(&[("f.ts", SHARED_LINE)]);
+    // `b()` is written only in the second member, though the line it is on also ends the first.
+    assert_eq!(found(&library_search(&dir, "regex:b\\(\\)")), [(3, 5, vec![3])]);
+}
+
+#[test]
+fn a_match_on_the_header_line_of_an_object_stays_with_the_object() {
+    let dir = project(&[("f.ts", SHARED_LINE)]);
+    assert_eq!(found(&library_search(&dir, "const")), [(1, 5, vec![1])]);
+}
+
+#[test]
+fn a_comment_after_an_object_members_closing_brace_stays_with_the_object() {
+    let source =
+        "export const svc = {\n  load() {\n    return 1;\n  }, // zebra note\n  save() {\n    return 2;\n  },\n};\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "zebra")), [(1, 8, vec![4])]);
 }
 
 #[test]

@@ -237,7 +237,7 @@ impl ToonProjection<9> for crate::types::SearchResponse {
         hints.extend(diagnostic_lines(&self.diagnostics).into_iter().map(michi::Hint::new));
         if self.results.is_empty() {
             hints.push(michi::Hint::new(
-                "only top-level declarations and class members are searched; for text in tests, calls or config try rg",
+                "only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg",
             ));
         }
         hints
@@ -556,7 +556,7 @@ mod projection_tests {
             "search: []\n\
              help[4]: \"1 file degraded: parse errors: c.ts\",query has no positive terms,\
              \"2 files skipped: unreadable: a.ts, b.ts\",\
-             \"only top-level declarations and class members are searched; for text in tests, calls or config try rg\""
+             \"only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg\""
         );
     }
 

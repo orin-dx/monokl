@@ -154,7 +154,7 @@ pub struct CodeBlock {
     pub parent: Option<ParentContext>,
 }
 
-/// The symbol enclosing a [`CodeBlock`], such as the class a method block belongs to.
+/// The symbol enclosing a [`CodeBlock`], such as the class or object literal a method block belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParentContext {
     pub kind: SymbolKind,
