@@ -80,7 +80,6 @@ regex = "1"
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
-tiktoken-rs = "0.12"
 rayon = "1.12"
 
 # CLI and output

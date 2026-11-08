@@ -7,13 +7,6 @@ use michi::TruncationOutcome;
 
 use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
-/// Texts longer than this many bytes are measured by their byte length instead of being tokenized.
-///
-/// BPE merging is quadratic in the length of an unbroken pretoken (200 KB of one run takes seconds), so a row that
-/// carries a minified or base64 line must not reach the tokenizer. Byte length is a proven upper bound on the token count, so
-/// the fallback can only make a row look larger, never let one overspend the budget.
-const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
-
 /// The three caps one search response must stay within.
 ///
 /// `max_tokens` and `max_bytes` count the printed text of the kept rows, as given to [`apply_budget`].
@@ -30,7 +23,7 @@ const TOKENIZE_BYTE_CAP: usize = 32 * 1024;
 pub struct Budget {
     /// The most rows a response may carry.
     pub max_results: usize,
-    /// The most tokens (`o200k_base`) the kept rows' printed text may total.
+    /// The most estimated tokens (see [`count_tokens`]) the kept rows' printed text may total.
     pub max_tokens: usize,
     /// The most bytes the kept rows' printed text may total.
     pub max_bytes: usize,
@@ -42,9 +35,11 @@ impl Default for Budget {
     }
 }
 
-/// Returns the `o200k_base` token count of `text`, or its byte length when it is over the tokenizer's byte cap.
+/// Returns the estimated token count of `text`: its byte length divided by three, rounded up.
 ///
-/// The byte length is an upper bound on the token count, so the count never understates.
+/// Code and TOON rows run 3.0 to 3.6 bytes per `o200k_base` token, so this reads about a tenth high and rarely low. A
+/// tokenizer would be exact for one vocabulary only, and no vocabulary is the one every reader uses. Building a real one
+/// costs about 55 ms on the first row, more than the rest of a search.
 ///
 /// # Examples
 ///
@@ -52,13 +47,10 @@ impl Default for Budget {
 /// use monokl::budget::count_tokens;
 ///
 /// assert_eq!(count_tokens(""), 0);
-/// assert_eq!(count_tokens("hello world"), 2);
+/// assert_eq!(count_tokens("hello world"), 4);
 /// ```
 pub fn count_tokens(text: &str) -> usize {
-    if text.len() > TOKENIZE_BYTE_CAP {
-        return text.len();
-    }
-    tiktoken_rs::o200k_base_singleton().encode_with_special_tokens(text).len()
+    text.len().div_ceil(3)
 }
 
 /// Keeps the longest rank-order prefix of `ranked` whose printed rows fit `budget` and reports what was cut.
@@ -211,15 +203,15 @@ mod tests {
     #[test]
     fn exactly_max_tokens_is_kept_and_one_over_is_cut() {
         let per_block = count_tokens("fn a() {}");
-        assert_eq!(per_block, 4);
+        assert_eq!(per_block, 3);
         let at = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3, 1000));
         assert_eq!(ranks(&at), [1, 2, 3]);
-        assert_eq!(at.total_tokens, 12);
+        assert_eq!(at.total_tokens, 9);
         assert!(!at.truncated);
 
         let over = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3 - 1, 1000));
         assert_eq!(ranks(&over), [1, 2]);
-        assert_eq!(over.total_tokens, 8);
+        assert_eq!(over.total_tokens, 6);
         assert!(over.truncated);
     }
 
@@ -273,56 +265,31 @@ mod tests {
     }
 
     #[test]
-    fn token_counts_match_the_o200k_encoder_for_known_strings() {
-        let bpe = tiktoken_rs::o200k_base().unwrap();
-        for (text, expected) in [("", 0), ("hello world", 2), ("fn a() {}", 4), ("let x = 1;\n", 6)] {
+    fn a_token_is_estimated_as_three_bytes_rounded_up() {
+        for (text, expected) in [("", 0), ("a", 1), ("abc", 1), ("abcd", 2), ("hello world", 4), ("fn a() {}", 3)] {
             assert_eq!(count_tokens(text), expected, "{text:?}");
-            assert_eq!(bpe.encode_with_special_tokens(text).len(), expected, "{text:?}");
         }
     }
 
     #[test]
-    fn multibyte_text_counts_tokens_not_bytes() {
-        let text = "日本語のコメント";
-        let bpe = tiktoken_rs::o200k_base().unwrap();
-        assert_eq!(count_tokens(text), bpe.encode_with_special_tokens(text).len());
-        assert!(count_tokens(text) < text.len());
+    fn the_estimate_counts_bytes_not_characters() {
+        // Eight characters, twenty-four bytes.
+        assert_eq!(count_tokens("日本語のコメント"), 8);
     }
 
     #[test]
-    fn text_over_the_byte_cap_is_measured_by_its_length() {
-        let at_cap = "a ".repeat(TOKENIZE_BYTE_CAP / 2);
-        assert_eq!(at_cap.len(), TOKENIZE_BYTE_CAP);
-        // Sixteen thousand "a" words plus the trailing space as its own token.
-        assert_eq!(count_tokens(&at_cap), TOKENIZE_BYTE_CAP / 2 + 1);
-
-        let over_cap = format!("{at_cap}a");
-        assert_eq!(count_tokens(&over_cap), TOKENIZE_BYTE_CAP + 1);
-    }
-
-    #[test]
-    fn text_well_under_the_byte_cap_is_tokenized_not_measured_by_its_length() {
-        let text = "a ".repeat(1024);
-        assert_eq!(text.len(), 2048);
-        let tokens = tiktoken_rs::o200k_base().unwrap().encode_with_special_tokens(&text).len();
-        assert_eq!(count_tokens(&text), tokens);
-        assert_eq!(tokens, 1025);
-    }
-
-    #[test]
-    fn text_far_over_the_byte_cap_is_measured_by_its_length() {
-        let text = "a ".repeat(20 * 1024);
-        assert_eq!(text.len(), 40 * 1024);
-        assert_eq!(count_tokens(&text), 40 * 1024);
+    fn a_long_unbroken_run_is_counted_at_once() {
+        let text = "a".repeat(200 * 1024);
+        assert_eq!(count_tokens(&text), 200 * 1024 / 3 + 1);
     }
 
     #[test]
     fn totals_do_not_depend_on_how_tight_the_token_cap_is() {
-        // With a loose cap every block fits on its byte length alone; the reported total must still be the exact count.
+        // The reported total is the same whether or not the cap is near.
         let input = || vec![block("fn a() {}", 1), block("let x = 1;\n", 2)];
         let loose = apply(input(), 2, &caps(10, 1_000_000, 1_000_000));
-        let tight = apply(input(), 2, &caps(10, 10, 1_000_000));
-        assert_eq!((loose.total_tokens, tight.total_tokens), (10, 10));
+        let tight = apply(input(), 2, &caps(10, 7, 1_000_000));
+        assert_eq!((loose.total_tokens, tight.total_tokens), (7, 7));
         assert_eq!((loose.total_bytes, tight.total_bytes), (20, 20));
         assert!(!tight.truncated);
     }
