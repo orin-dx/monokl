@@ -4,13 +4,18 @@ use proptest::prelude::*;
 use super::*;
 use crate::types::SymbolKind;
 
-fn block(line_start: usize, line_end: usize) -> CodeBlock {
+const MATCHING: &str = "hit";
+const OTHER: &str = "miss";
+
+/// A block over `line_start..=line_start + marks.len() - 1` whose line `i` reads `hit` when `marks[i]` is set.
+fn block(line_start: usize, marks: &[bool]) -> CodeBlock {
+    let code: Vec<&str> = marks.iter().map(|&m| if m { MATCHING } else { OTHER }).collect();
     CodeBlock {
         file: Utf8PathBuf::from("a.ts"),
         line_start,
-        line_end,
+        line_end: line_start + marks.len() - 1,
         node_kind: SymbolKind::Function,
-        code: String::new(),
+        code: code.join("\n"),
         symbol_signature: None,
         matched_lines: Vec::new(),
         matched_keywords: Vec::new(),
@@ -22,15 +27,22 @@ fn hit(line_number: usize) -> LineHit {
     LineHit { line_number, text: String::new() }
 }
 
-/// The blocks containing `line` that hold no smaller block also containing it, by looking at every pair.
+fn own_text(block: &CodeBlock, line: usize) -> &str {
+    block.code.split('\n').nth(line - block.line_start).unwrap_or("")
+}
+
+/// The blocks that should own `line`, by looking at every pair: those containing it whose own text matches (all of
+/// them when none does), minus any that holds a smaller one of those.
 fn reference_owners(blocks: &[CodeBlock], line: usize) -> Vec<usize> {
     let containing: Vec<usize> =
         (0..blocks.len()).filter(|&i| (blocks[i].line_start..=blocks[i].line_end).contains(&line)).collect();
-    containing
+    let matching: Vec<usize> = containing.iter().copied().filter(|&i| own_text(&blocks[i], line) == MATCHING).collect();
+    let candidates = if matching.is_empty() { containing } else { matching };
+    candidates
         .iter()
         .copied()
         .filter(|&outer| {
-            !containing.iter().any(|&inner| {
+            !candidates.iter().any(|&inner| {
                 let (a, b) = (&blocks[outer], &blocks[inner]);
                 b.line_start >= a.line_start
                     && b.line_end <= a.line_end
@@ -42,13 +54,13 @@ fn reference_owners(blocks: &[CodeBlock], line: usize) -> Vec<usize> {
 
 proptest! {
     #[test]
-    fn every_hit_goes_to_each_innermost_block_containing_it_and_to_no_other(
-        ranges in prop::collection::vec((1usize..20, 0usize..10), 0..8),
+    fn every_hit_goes_to_each_innermost_block_whose_own_text_matches_and_to_no_other(
+        specs in prop::collection::vec((1usize..20, prop::collection::vec(any::<bool>(), 1..11)), 0..8),
         lines in prop::collection::btree_set(1usize..30, 0..20),
     ) {
-        let blocks: Vec<CodeBlock> = ranges.iter().map(|&(start, len)| block(start, start + len)).collect();
+        let blocks: Vec<CodeBlock> = specs.iter().map(|(start, marks)| block(*start, marks)).collect();
         let hits: Vec<LineHit> = lines.iter().map(|&line| hit(line)).collect();
-        let owned = owned_hits(&blocks, &hits);
+        let owned = owned_hits(&blocks, &hits, &|text| text == MATCHING);
 
         prop_assert_eq!(owned.len(), blocks.len());
         for (index, block_hits) in owned.iter().enumerate() {

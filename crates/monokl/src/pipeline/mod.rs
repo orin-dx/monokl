@@ -306,7 +306,16 @@ fn retrieve_blocks(
             .map_or_else(|| "parse errors; blocks may be incomplete".to_owned(), |reason| reason.to_string());
         diagnostics.push(Diagnostic { kind: DiagnosticKind::Degraded, path: Some(path.to_owned()), message });
     }
-    for (block, inside) in analysis.blocks.iter().zip(owned_hits(&analysis.blocks, hits)) {
+    let positive: Vec<&RegexMatcher> = ctx
+        .plan
+        .terms
+        .iter()
+        .zip(ctx.matchers)
+        .filter(|(term, _)| term.modifier != Modifier::Excluded)
+        .map(|(_, matcher)| matcher)
+        .collect();
+    let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
+    for (block, inside) in analysis.blocks.iter().zip(owned_hits(&analysis.blocks, hits, &line_matches)) {
         if inside.is_empty() {
             continue;
         }
@@ -329,11 +338,18 @@ fn retrieve_blocks(
     }
 }
 
-/// Splits `hits` among `blocks`: a hit goes to every block containing its line except one that holds a smaller block
-/// containing the line too. A class therefore keeps only the matches outside its members, and a block left with none
-/// is dropped by the caller. Blocks that only share a line, such as two statements written on one line, are not
-/// nested, so each keeps the hit. `hits` must be in line order; each block's hits are too.
-fn owned_hits<'h>(blocks: &[CodeBlock], hits: &'h [LineHit]) -> Vec<Vec<&'h LineHit>> {
+/// Splits `hits` among `blocks`: a hit goes to every block whose own text on that line matches, except one that holds
+/// a smaller such block. A class therefore keeps only the matches outside its members, and a block left with none is
+/// dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only the part
+/// of the line inside the block counts, which sends the match to the member or holder that actually contains the text.
+/// Where no block's own text matches (a match across the edge of every block on the line) every block on the line
+/// keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it. `hits`
+/// must be in line order; each block's hits are too.
+fn owned_hits<'h>(
+    blocks: &[CodeBlock],
+    hits: &'h [LineHit],
+    line_matches: &dyn Fn(&str) -> bool,
+) -> Vec<Vec<&'h LineHit>> {
     let mut containing: Vec<Vec<usize>> = vec![Vec::new(); hits.len()];
     for (index, block) in blocks.iter().enumerate() {
         let first = hits.partition_point(|hit| hit.line_number < block.line_start);
@@ -343,8 +359,15 @@ fn owned_hits<'h>(blocks: &[CodeBlock], hits: &'h [LineHit]) -> Vec<Vec<&'h Line
         }
     }
     let range = |index: usize| (blocks[index].line_start, blocks[index].line_end);
+    let own_text_matches = |index: usize, line: usize| {
+        let block = &blocks[index];
+        block.code.split('\n').nth(line - block.line_start).is_some_and(line_matches)
+    };
     let mut per_block = vec![Vec::new(); blocks.len()];
-    for (hit, candidates) in hits.iter().zip(&containing) {
+    for (hit, containing_all) in hits.iter().zip(&containing) {
+        let matching: Vec<usize> =
+            containing_all.iter().copied().filter(|&index| own_text_matches(index, hit.line_number)).collect();
+        let candidates = if matching.is_empty() { containing_all } else { &matching };
         for &outer in candidates {
             let (start, end) = range(outer);
             let holds_a_smaller_block = candidates.iter().any(|&inner| {

@@ -169,15 +169,52 @@ fn of_statements_sharing_a_line_the_one_holding_the_match_is_returned() {
     assert_eq!(found, [("const needle = 2;", vec![1])]);
 }
 
-#[test]
-fn blocks_that_overlap_without_nesting_each_keep_the_match_on_the_shared_line() {
-    let source = "const first = {\n  a: 1 }; const needle = {\n  b: 2 };\n";
-    let dir = project(&[("a.ts", source)]);
-    let result = library_search(&dir, "needle");
-    let mut found: Vec<(usize, usize, Vec<usize>)> =
+fn found(result: &SearchResult) -> Vec<(usize, usize, Vec<usize>)> {
+    let mut found: Vec<_> =
         result.ranked.iter().map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone())).collect();
     found.sort();
-    assert_eq!(found, [(1, 2, vec![2]), (2, 3, vec![2])]);
+    found
+}
+
+#[test]
+fn a_match_on_a_line_two_members_share_goes_to_the_member_that_holds_it() {
+    let source = "export class C { a() {\n  return needleX;\n} b() {\n  return needleY;\n} }\n";
+    let dir = project(&[("f.ts", source)]);
+    // `b()` is written only in the second member, though the line it is on also ends the first.
+    assert_eq!(found(&library_search(&dir, "regex:b\\(\\)")), [(3, 5, vec![3])]);
+}
+
+#[test]
+fn a_match_before_a_member_on_the_class_header_line_stays_with_the_class() {
+    let source = "export class C { a() {\n  return 1;\n}\n  b() {\n  return 2;\n}\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "class")), [(1, 7, vec![1])]);
+}
+
+#[test]
+fn a_comment_after_a_members_closing_brace_stays_with_the_class() {
+    let source =
+        "export class Svc {\n  load() {\n    return 1;\n  } // zebra note\n  save() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    let result = library_search(&dir, "zebra");
+    assert_eq!(found(&result), [(1, 8, vec![4])]);
+}
+
+#[test]
+fn a_match_that_spans_the_edge_of_every_block_on_its_line_is_still_found() {
+    let dir = project(&[("a.ts", "const a = 1; const b = 2;\n")]);
+    let result = library_search(&dir, "regex:1; const");
+    assert_eq!(result.ranked.len(), 1);
+    assert_eq!(result.ranked[0].block.matched_lines, [1]);
+}
+
+#[test]
+fn of_two_blocks_overlapping_on_a_line_the_one_whose_text_holds_the_match_gets_it() {
+    let source = "const first = {\n  a: 1 }; const needle = {\n  b: 2 };\n";
+    let dir = project(&[("a.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "needle")), [(2, 3, vec![2])]);
+    // Both halves of the shared line match, so both blocks keep it.
+    assert_eq!(found(&library_search(&dir, "regex:a|needle")), [(1, 2, vec![2]), (2, 3, vec![2])]);
 }
 
 #[test]
