@@ -329,26 +329,31 @@ fn retrieve_blocks(
     }
 }
 
-/// Splits `hits` among `blocks`: each hit goes to the smallest block containing its line, and to the earliest of
-/// equally small ones, so no line is credited to two blocks. A class therefore keeps only the matches outside its
-/// members, and a block left with none is dropped by the caller. `hits` must be in line order; each block's hits are
-/// too.
+/// Splits `hits` among `blocks`: a hit goes to every block containing its line except one that holds a smaller block
+/// containing the line too. A class therefore keeps only the matches outside its members, and a block left with none
+/// is dropped by the caller. Blocks that only share a line, such as two statements written on one line, are not
+/// nested, so each keeps the hit. `hits` must be in line order; each block's hits are too.
 fn owned_hits<'h>(blocks: &[CodeBlock], hits: &'h [LineHit]) -> Vec<Vec<&'h LineHit>> {
-    let size = |index: usize| blocks[index].line_end.saturating_sub(blocks[index].line_start);
-    let mut smallest: Vec<Option<usize>> = vec![None; hits.len()];
+    let mut containing: Vec<Vec<usize>> = vec![Vec::new(); hits.len()];
     for (index, block) in blocks.iter().enumerate() {
         let first = hits.partition_point(|hit| hit.line_number < block.line_start);
         let inside = hits[first..].iter().take_while(|hit| hit.line_number <= block.line_end).count();
-        for slot in &mut smallest[first..first + inside] {
-            if slot.is_none_or(|current| size(index) < size(current)) {
-                *slot = Some(index);
-            }
+        for slot in &mut containing[first..first + inside] {
+            slot.push(index);
         }
     }
+    let range = |index: usize| (blocks[index].line_start, blocks[index].line_end);
     let mut per_block = vec![Vec::new(); blocks.len()];
-    for (hit, owner) in hits.iter().zip(smallest) {
-        if let Some(index) = owner {
-            per_block[index].push(hit);
+    for (hit, candidates) in hits.iter().zip(&containing) {
+        for &outer in candidates {
+            let (start, end) = range(outer);
+            let holds_a_smaller_block = candidates.iter().any(|&inner| {
+                let (inner_start, inner_end) = range(inner);
+                inner_start >= start && inner_end <= end && (inner_start, inner_end) != (start, end)
+            });
+            if !holds_a_smaller_block {
+                per_block[outer].push(hit);
+            }
         }
     }
     per_block

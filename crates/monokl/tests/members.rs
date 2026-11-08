@@ -161,6 +161,26 @@ fn no_line_is_credited_to_two_blocks_whatever_the_query() {
 }
 
 #[test]
+fn of_statements_sharing_a_line_the_one_holding_the_match_is_returned() {
+    let dir = project(&[("a.ts", "const a = 1; const needle = 2;\n")]);
+    let result = library_search(&dir, "needle");
+    let found: Vec<(&str, Vec<usize>)> =
+        result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(found, [("const needle = 2;", vec![1])]);
+}
+
+#[test]
+fn blocks_that_overlap_without_nesting_each_keep_the_match_on_the_shared_line() {
+    let source = "const first = {\n  a: 1 }; const needle = {\n  b: 2 };\n";
+    let dir = project(&[("a.ts", source)]);
+    let result = library_search(&dir, "needle");
+    let mut found: Vec<(usize, usize, Vec<usize>)> =
+        result.ranked.iter().map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone())).collect();
+    found.sort();
+    assert_eq!(found, [(1, 2, vec![2]), (2, 3, vec![2])]);
+}
+
+#[test]
 fn a_class_keeps_only_the_matches_outside_its_members() {
     let source = "\
 export class Foo {

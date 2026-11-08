@@ -2,4 +2,4 @@
 monokl: patch
 ---
 
-A `monokl search` row for a decorated class member now shows a matching decorator line in `snippet`. Before, a hit on `@HostListener('click')` or on `@Dec() prop = () => {` left `snippet` null and the matching line appeared nowhere.
+A `monokl search` row now shows a matching first line in `snippet` whenever the signature leaves part of it out. Before, a hit on `@HostListener('click')`, on `@Dec() prop = () => {` or on `load = () => needle(` left `snippet` null and the matching line appeared nowhere.

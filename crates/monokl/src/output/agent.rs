@@ -129,15 +129,16 @@ const SNIPPET_LINE_CHARS: usize = 160;
 
 /// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
 ///
-/// The block's first line is left out when the block has a signature, because the signature column already shows it;
-/// a variable or type alias has no signature, so its first line is the best thing to show. A first line that starts
-/// with a decorator stays, because the signature leaves decorators out. At most [`SNIPPET_LINES`]
-/// lines appear, each cut to [`SNIPPET_LINE_CHARS`] characters, and the lines beyond that are counted, not dropped
-/// silently.
+/// The block's first line is left out when the signature column already shows all of it. A variable or type alias has
+/// no signature, so its first line is the best thing to show; so is a first line that says more than the signature,
+/// such as a decorator or the start of an arrow function's body. At most [`SNIPPET_LINES`] lines appear, each cut to
+/// [`SNIPPET_LINE_CHARS`] characters, and the lines beyond that are counted, not dropped silently.
 fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
     let lines: Vec<&str> = block.code.split('\n').collect();
-    let first_line_in_signature =
-        block.symbol_signature.is_some() && !lines.first().is_some_and(|line| line.trim_start().starts_with('@'));
+    let first_line_in_signature = match (block.symbol_signature.as_deref(), lines.first()) {
+        (Some(signature), Some(line)) => signature_shows(signature, line),
+        _ => false,
+    };
     let first = if first_line_in_signature { block.line_start + 1 } else { block.line_start };
     let mut shown: Vec<usize> = block
         .matched_lines
@@ -166,6 +167,25 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
         out.push(format!("...and {hidden} more matching {}", if hidden == 1 { "line" } else { "lines" }));
     }
     Some(out.join("\n"))
+}
+
+/// Whether `signature` already shows everything on the block's first `line`: the line is the signature plus an opening
+/// brace, or the signature runs on past the line. Whitespace and leading modifiers (`export`, `async` and the like),
+/// which signatures drop, do not count.
+fn signature_shows(signature: &str, line: &str) -> bool {
+    const MODIFIERS: [&str; 10] =
+        ["export", "default", "declare", "async", "abstract", "static", "public", "private", "protected", "override"];
+    let normalized = |text: &str| -> String {
+        let mut words = text.split_whitespace().peekable();
+        while words.next_if(|word| MODIFIERS.contains(word)).is_some() {}
+        words.collect::<Vec<_>>().join(" ")
+    };
+    let (signature, line) = (normalized(signature), normalized(line));
+    let line_core = line.trim_end_matches(['{', '}', ' ', ';', ',']);
+    signature.contains(line_core)
+        || line
+            .strip_prefix(signature.as_str())
+            .is_some_and(|rest| rest.trim_matches(['{', '}', ' ', ';', ',']).is_empty())
 }
 
 /// The `parent` cell: the kind and name of the block's parent, such as `class Foo` for a method; `null` for a
@@ -297,7 +317,8 @@ mod snippet_tests {
             line_end: line_start + code.split('\n').count() - 1,
             node_kind: SymbolKind::Function,
             code: code.to_owned(),
-            symbol_signature: Some("signature".to_owned()),
+            // What the analyzer would give: the first line without its opening brace.
+            symbol_signature: Some(code.lines().next().unwrap_or("").trim_end_matches(['{', ' ']).to_owned()),
             matched_lines: matched_lines.to_vec(),
             matched_keywords: Vec::new(),
             parent: None,
@@ -342,6 +363,27 @@ mod snippet_tests {
         let mut b = block(9, "@Dec2() prop2 = () => {\n  return 1;\n}", &[9]);
         b.symbol_signature = Some("prop2 = () =>".to_owned());
         assert_eq!(snippet(&b), Some("9: @Dec2() prop2 = () => {".to_owned()));
+    }
+
+    #[test]
+    fn a_first_line_that_says_more_than_the_signature_is_shown() {
+        let mut b = block(2, "load = () => needle(\n  1,\n);", &[2]);
+        b.symbol_signature = Some("load = () =>".to_owned());
+        assert_eq!(snippet(&b), Some("2: load = () => needle(".to_owned()));
+    }
+
+    #[test]
+    fn an_export_keyword_does_not_make_a_covered_first_line_look_new() {
+        let mut b = block(1, "export async function f(x) {\n  return x;\n}", &[1]);
+        b.symbol_signature = Some("function f(x)".to_owned());
+        assert_eq!(snippet(&b), None);
+    }
+
+    #[test]
+    fn a_signature_that_spans_the_first_line_covers_it() {
+        let mut b = block(1, "multi(\n  a: number,\n): void {\n}", &[1]);
+        b.symbol_signature = Some("multi( a: number, ): void".to_owned());
+        assert_eq!(snippet(&b), None);
     }
 
     #[test]
