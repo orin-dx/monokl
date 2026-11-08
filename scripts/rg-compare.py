@@ -287,8 +287,14 @@ def main():
                 rank = row["def_rank"] or "absent"
                 print(f"    declaration at rank {rank}: {row['term']} (top: {', '.join(row['top']) or 'nothing'})")
 
-    rate = hits / max(scored, 1)
-    print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+    # A gate with nothing to score is skipped and says so, instead of failing on a rate of 0/0.
+    identifiers_pass = True
+    if scored:
+        rate = hits / scored
+        identifiers_pass = rate >= args.min_recall
+        print(f"declaration in top {args.top}: {hits}/{scored} = {rate:.2%} (gate {args.min_recall:.2%})")
+    else:
+        print("declaration in top: no declarations to score, gate skipped")
 
     questions = [] if args.no_questions else score_questions(args.binary, args.repo)
     question_hits = 0
@@ -301,13 +307,17 @@ def main():
             f"rg_files any={q['rg_any_files']} all={q['rg_all_files']} rg_n_bytes={q['rg_n_bytes']} "
             f"monokl_bytes={q['monokl_bytes']}"
         )
-    question_rate = question_hits / max(len(questions), 1)
+    questions_pass = True
     if questions:
+        question_rate = question_hits / len(questions)
+        questions_pass = question_rate >= args.min_question_recall
         print(f"question answer file in top {args.top}: {question_hits}/{len(questions)} = {question_rate:.2%} "
               f"(gate {args.min_question_recall:.2%})")
+    else:
+        print("question answer file in top: no questions to score, gate skipped")
     if args.json:
         Path(args.json).write_text(json.dumps({"identifiers": report, "questions": questions}, indent=2))
-    sys.exit(0 if rate >= args.min_recall and question_rate >= args.min_question_recall else 1)
+    sys.exit(0 if identifiers_pass and questions_pass else 1)
 
 
 if __name__ == "__main__":
