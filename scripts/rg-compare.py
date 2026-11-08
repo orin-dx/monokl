@@ -19,6 +19,12 @@ the rg route's narrowing cost (files with any word, files with all words, bytes 
 monokl's output bytes. The gate is the answer file in monokl's first `--top` files for at least `--min-question-recall`
 of the questions.
 
+Member questions use the same file format with the symbol cell written `member:name`: the answer is a method,
+constructor, accessor or arrow-function property declared on an indented line inside a class. The script re-checks that
+line with rg and scores them on their own line, apart from the top-level questions. A member question is a hit when the
+answer file is in monokl's first `--top` files and the member's declaration line is in the output; the gate is
+`--min-member-recall`.
+
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
 """
 
@@ -40,7 +46,9 @@ GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "
 # A top-level declaration starts its line. Indented ones are locals and loop variables, which monokl does not index.
 TOP_LEVEL = r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+"
 DECLARATION = TOP_LEVEL + r"([A-Za-z_][A-Za-z0-9_]{3,})"
-UNCAPPED = "1000000"
+# An indented class member: optional modifiers, then the name followed by a call signature or an arrow-function value.
+MEMBER_MODIFIERS = r"^\s+(?:(?:static|async|public|private|protected|readonly|override|get|set)\s+)*\*?"
+UNCAPPED ="1000000"
 TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
 TEST_SUFFIXES = tuple(
     f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
@@ -88,8 +96,17 @@ def mentions(term, path):
     return rg_files(re.escape(term), path, ["--ignore-case", "--word-regexp"])
 
 
-def definitions(term, path):
-    return rg_files(rf"{TOP_LEVEL}{re.escape(term)}\b", path)
+def declaration_pattern(term, member=False):
+    name = re.escape(term)
+    if member:
+        call = rf"{MEMBER_MODIFIERS}{name}\s*(?:<[^>]*>)?\("
+        arrow = rf"{MEMBER_MODIFIERS}{name}\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\(|\w+\s*=>)"
+        return f"{call}|{arrow}"
+    return rf"{TOP_LEVEL}{name}\b"
+
+
+def definitions(term, path, member=False):
+    return rg_files(declaration_pattern(term, member), path)
 
 
 def monokl_files(binary, term, path, tests):
@@ -107,10 +124,10 @@ def monokl_files(binary, term, path, tests):
     return files, out
 
 
-def declaration_line(term, files, path):
-    """The text of the first top-level declaration of `term` in one of `files`, as ripgrep finds it."""
+def declaration_line(term, files, path, member=False):
+    """The text of the first top-level (or, for a member, indented) declaration of `term` in `files`, as ripgrep finds it."""
     for file in sorted(files):
-        out = run(["rg", "--no-filename", "--max-count", "1", "-e", rf"{TOP_LEVEL}{re.escape(term)}\b", file], cwd=path,
+        out = run(["rg", "--no-filename", "--max-count", "1", "-e", declaration_pattern(term, member), file], cwd=path,
                   check=False).stdout
         if out.strip():
             return out.strip()
@@ -157,18 +174,20 @@ def question_rows(only):
     for line in QUESTIONS.read_text().splitlines():
         if line.strip() and not line.startswith("#"):
             repo, words, file, symbol = (cell.strip() for cell in line.split("|"))
+            member = symbol.startswith("member:")
             if not only or repo in only:
-                yield repo, words, file, symbol
+                yield repo, words, file, symbol.removeprefix("member:"), member
 
 
 def score_questions(binary, only):
     """Runs every question and returns one row each. Fails if the answer's declaration is not in the pinned checkout."""
     checkouts = {name: checkout(name, url, sha) for name, url, sha in repositories(only)}
     rows = []
-    for repo, words, file, symbol in question_rows(only):
+    for repo, words, file, symbol, member in question_rows(only):
         path = checkouts[repo]
-        if file not in definitions(symbol, path):
-            sys.exit(f"{repo}: `{symbol}` is not declared in {file} at the pinned sha; fix rg-compare.questions")
+        if file not in definitions(symbol, path, member):
+            kind = "a class member" if member else "declared"
+            sys.exit(f"{repo}: `{symbol}` is not {kind} in {file} at the pinned sha; fix rg-compare.questions")
         terms = words.split()
         per_word = [split(rg_files(re.escape(t), path, ["--ignore-case", "--word-regexp"]))[0] for t in terms]
         rg_args = ["rg", "-n", "--ignore-case", "--word-regexp"]
@@ -180,7 +199,7 @@ def score_questions(binary, only):
         rg_lines = [l for l in rg_out.splitlines() if not is_test_path(l.removeprefix("./").split(":", 1)[0])]
         ordered, output = monokl_files(binary, words, path, False)
         non_test = [f for f in ordered if not is_test_path(f)]
-        declaration = declaration_line(symbol, {file}, path)
+        declaration = declaration_line(symbol, {file}, path, member)
         bare = str.maketrans("", "", '"\\')
         bare_declaration = re.sub(r"^(?:export\s+|default\s+|declare\s+)+", "", declaration).rstrip(" {;")
         rows.append(
@@ -189,6 +208,7 @@ def score_questions(binary, only):
                 "words": words,
                 "file": file,
                 "symbol": symbol,
+                "member": member,
                 "rank": non_test.index(file) + 1 if file in non_test else None,
                 "declaration_in_output": bare_declaration[:40].translate(bare) in output.translate(bare),
                 "rg_any_files": len(set.union(*per_word)),
@@ -209,6 +229,9 @@ def main():
     parser.add_argument("--min-recall", type=float, default=0.9, help="fail when the share of hits is lower")
     parser.add_argument("--min-question-recall", type=float, default=0.75,
                         help="fail when the share of questions with the answer file in the top files is lower")
+    parser.add_argument("--min-member-recall", type=float, default=0.125,
+                        help="fail when the share of member questions with the answer file in the top files and the "
+                             "member's declaration in the output is lower")
     parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
@@ -296,7 +319,9 @@ def main():
     else:
         print("declaration in top: no declarations to score, gate skipped")
 
-    questions = [] if args.no_questions else score_questions(args.binary, args.repo)
+    scored_questions = [] if args.no_questions else score_questions(args.binary, args.repo)
+    questions = [q for q in scored_questions if not q["member"]]
+    members = [q for q in scored_questions if q["member"]]
     question_hits = 0
     for q in questions:
         in_top = q["rank"] is not None and q["rank"] <= args.top
@@ -315,9 +340,25 @@ def main():
               f"(gate {args.min_question_recall:.2%})")
     else:
         print("question answer file in top: no questions to score, gate skipped")
+    member_hits = 0
+    for q in members:
+        hit = q["rank"] is not None and q["rank"] <= args.top and q["declaration_in_output"]
+        member_hits += hit
+        print(
+            f"  {'ok  ' if hit else 'MISS'} {q['repo']}: {q['words']!r} -> member {q['symbol']} "
+            f"file_rank={q['rank'] or 'absent'} declaration_in_output={'yes' if q['declaration_in_output'] else 'no'} "
+            f"monokl_bytes={q['monokl_bytes']}"
+        )
+    members_pass = True
+    if members:
+        member_rate = member_hits / len(members)
+        members_pass = member_rate >= args.min_member_recall
+        print(f"member questions: {member_hits}/{len(members)} = {member_rate:.2%} (gate {args.min_member_recall:.2%})")
+    else:
+        print("member questions: no member questions to score, gate skipped")
     if args.json:
-        Path(args.json).write_text(json.dumps({"identifiers": report, "questions": questions}, indent=2))
-    sys.exit(0 if identifiers_pass and questions_pass else 1)
+        Path(args.json).write_text(json.dumps({"identifiers": report, "questions": questions, "members": members}, indent=2))
+    sys.exit(0 if identifiers_pass and questions_pass and members_pass else 1)
 
 
 if __name__ == "__main__":

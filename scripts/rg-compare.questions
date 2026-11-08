@@ -19,3 +19,22 @@ axios | dispatch request adapter | lib/core/dispatchRequest.js | dispatchRequest
 axios | compose abort signals timeout | lib/helpers/composeSignals.js | composeSignals
 axios | form data json | lib/helpers/formDataToJSON.js | formDataToJSON
 axios | settle response validate status | lib/core/settle.js | settle
+# Member questions: the symbol cell is `member:name`, a method, constructor, accessor or arrow-function property on an
+# indented line inside a class. The script re-checks it with rg and scores these apart from the rows above.
+# zustand has no classes at the pinned sha, so it has no member rows.
+zod | registry add schema | packages/zod/src/v4/core/registries.ts | member:add
+zod | registry remove schema | packages/zod/src/v4/core/registries.ts | member:remove
+zod | registry has schema | packages/zod/src/v4/core/registries.ts | member:has
+zod | json schema process | packages/zod/src/v4/core/json-schema-generator.ts | member:process
+zod | json schema emit | packages/zod/src/v4/core/json-schema-generator.ts | member:emit
+zod | doc indented | packages/zod/src/v4/core/doc.ts | member:indented
+zod | memoizer guard | packages/zod/src/v4/core/memoizer.ts | member:guard
+zod | add issues | packages/zod/src/v3/ZodError.ts | member:addIssues
+axios | eject interceptor | lib/core/InterceptorManager.js | member:eject
+axios | throw if requested | lib/cancel/CancelToken.js | member:throwIfRequested
+axios | unsubscribe listener | lib/cancel/CancelToken.js | member:unsubscribe
+axios | to abort signal | lib/cancel/CancelToken.js | member:toAbortSignal
+axios | get set cookie | lib/core/AxiosHeaders.js | member:getSetCookie
+axios | parse parameters | lib/core/AxiosHeaders.js | member:parseParameters
+axios | get uri | lib/core/Axios.js | member:getUri
+axios | escape name | lib/helpers/formDataToStream.js | member:escapeName
