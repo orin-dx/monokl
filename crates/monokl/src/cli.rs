@@ -54,7 +54,7 @@ struct SearchArgs {
     /// The most results to print.
     #[arg(long, default_value_t = Budget::default().max_results)]
     max_results: usize,
-    /// The most tokens across the printed rows.
+    /// The most estimated tokens (one per three bytes) across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
     /// The most bytes across the printed rows.

@@ -85,7 +85,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,symbolSignature,snippet,rank,finalScor
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--max-results N` | 50 | Most results to print |
-| `--max-tokens N` | 20,000 | Most tokens (`o200k_base`) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
+| `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
 | `--max-bytes N` | 2 MiB | Most bytes across the printed rows. Counts the rows as printed, not the code blocks behind them |
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`) |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
