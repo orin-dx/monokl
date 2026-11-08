@@ -69,7 +69,9 @@ pub fn rank_blocks(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], 
 ```
 
 Per block: `bm25 = bm25::score(...)`, `cov = boost::coverage_boost(&block)`,
-`ntype = boost::node_type_boost(block.node_kind)`, **`final_score = round6(bm25 * ntype + cov)`**.
+`ntype = boost::node_type_boost(block.node_kind)`, `name = boost::name_match_boost(&block, query_terms)`
+(1 + 2 * share of query terms in the block's declared name, so 1.0 to 3.0),
+**`final_score = round6(bm25 * name * ntype + cov)`**.
 Sorted descending by `final_score` only; 1-based `rank` assigned post-sort.
 
 BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` to 6dp for
