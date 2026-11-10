@@ -16,7 +16,7 @@ Monokl Phase 2+ spans versions 0.4.0 → 0.7.0 of the `monokl` crate. It is appr
 
 Major themes:
 
-1. **Multi-language architecture** (0.5.0). A new `AnalyzerRegistry` dispatches per-file to language-specific `LanguageAnalyzer` implementations. First-class Rust support via `ra-ap-syntax` (rust-analyzer's syntax library). The CLI/library can now ship `--no-default-features --features lang-rs,cli` (Rust-only) as well as the full TS+Rust default.
+1. **Multi-language architecture** (0.5.0). A new `AnalyzerRegistry` dispatches per-file to language-specific `LanguageAnalyzer` implementations. First-class Rust support via `ra-ap-syntax` (rust-analyzer's syntax library). The CLI/library can now ship `--no-default-features --features lang-rust,cli` (Rust-only) as well as the full TS+Rust default.
 2. **Library contract & focused agent commands** (0.4.0). New `deps`, `deps-from`, `classify`, `migration-surface` commands. Field projection (`--only`/`--fields`) across `inspect`, `search`, `patterns`, `refs`, with `--format json|minimal|schema`. Inspect kind-filtering moved into the `InspectOptions` library contract.
 3. **Pipeline modularization**. `pipeline.rs` split into `pipeline/{search, symbols, deps, graph, inspecting, session}.rs`. Workspace `WorkspaceSession` cached across calls for analyzer registry + standard index reuse.
 4. **PR-aware review scopes** (0.6.0). New `git_scope` module backed by `gix`. `QueryScope::{FullRepo, ChangedFiles, ChangedLines, ImpactedNeighbors}` for `search`/`symbols`/`refs`/`definition`/`dependents`. PR semantics use `merge-base(base, head)..head`; `diff` keeps explicit snapshot semantics. Changed-line filtering and one-hop import-graph neighbor expansion.
@@ -54,7 +54,7 @@ path              = "src/main.rs"
 required-features = ["cli"]
 
 [features]
-default = ["lang-ts", "lang-rs", "cli"]
+default = ["lang-ts", "lang-rust", "cli"]
 
 # TypeScript/JavaScript analysis via OXC parser + AST + resolver.
 lang-ts = [
@@ -66,7 +66,7 @@ lang-ts = [
 ]
 
 # Rust analysis via rust-analyzer's syntax library (ra-ap-syntax).
-lang-rs = ["dep:ra_ap_syntax"]
+lang-rust = ["dep:ra_ap_syntax"]
 
 # CLI binary — clap + miette diagnostics + terminal rendering helpers.
 cli = ["dep:clap", "miette", "dep:owo-colors"]
@@ -82,7 +82,7 @@ New runtime dependencies introduced relative to Phase 1:
 - `gix` — git plumbing for PR-aware scopes (replaces `git2`/subprocess plans).
 - `rustc-hash` — `FxHashMap` for analyzer-internal maps (Rust workspace package roots, impl-method buckets, etc.).
 - `tempfile` — used by tests and by the persist write-queue staging file.
-- `ra_ap_syntax` (feature `lang-rs`) — rust-analyzer's syntax library.
+- `ra_ap_syntax` (feature `lang-rust`) — rust-analyzer's syntax library.
 - `owo-colors` (feature `cli`) — ANSI colorizing for human renderers.
 
 OXC stays at the 0.128 suite but `oxc_resolver` is versioned independently on its own 11.x line.
@@ -301,7 +301,7 @@ Key properties:
 
 ## 4. Rust Analyzer (`analysis/rust_analyzer.rs`)
 
-The `RustAnalyzer` is monokl's first non-TypeScript implementation of the shared `LanguageAnalyzer` trait. It uses `ra-ap-syntax` (when `lang-rs` is enabled) for AST-level extraction and falls back to regex scanning otherwise.
+The `RustAnalyzer` is monokl's first non-TypeScript implementation of the shared `LanguageAnalyzer` trait. It uses `ra-ap-syntax` (when `lang-rust` is enabled) for AST-level extraction and falls back to regex scanning otherwise.
 
 ### Struct + lifecycle
 
@@ -410,16 +410,16 @@ fn parse_with_profile(
         analyzer.workspace_root.as_deref(),
         &analyzer.package_roots,
     );
-    #[cfg(feature = "lang-rs")]
+    #[cfg(feature = "lang-rust")]
     let syntax_analysis = matches!(profile, AnalysisProfile::Structural | AnalysisProfile::Full)
         .then(|| crate::rust_syntax::analyze_rust_source_syntax(path, source_text));
 
     let inspect_entry = if matches!(profile, AnalysisProfile::Full) {
-        #[cfg(feature = "lang-rs")]
+        #[cfg(feature = "lang-rust")]
         {
             syntax_analysis.as_ref().map(|analysis| analysis.inspect_entry.clone())
         }
-        #[cfg(not(feature = "lang-rs"))]
+        #[cfg(not(feature = "lang-rust"))]
         {
             Some(build_inspect_entry(path))
         }
@@ -428,13 +428,13 @@ fn parse_with_profile(
     };
 
     let blocks = if matches!(profile, AnalysisProfile::Full) {
-        #[cfg(feature = "lang-rs")]
+        #[cfg(feature = "lang-rust")]
         {
             syntax_analysis.as_ref().map_or_else(Vec::new, |syntax| {
                 extract_blocks_from_tree(path, source_text, &syntax.tree)
             })
         }
-        #[cfg(not(feature = "lang-rs"))]
+        #[cfg(not(feature = "lang-rust"))]
         {
             extract_blocks_fallback(path, source_text)
         }
@@ -445,7 +445,7 @@ fn parse_with_profile(
     let (symbols, exports, had_parse_errors) = match profile {
         AnalysisProfile::Dependencies => (Vec::new(), Vec::new(), false),
         AnalysisProfile::Structural | AnalysisProfile::Full => {
-            #[cfg(feature = "lang-rs")]
+            #[cfg(feature = "lang-rust")]
             {
                 match syntax_analysis.as_ref() {
                     Some(syntax) => (
@@ -456,7 +456,7 @@ fn parse_with_profile(
                     None => (extract_symbols(source_text), Vec::new(), false),
                 }
             }
-            #[cfg(not(feature = "lang-rs"))]
+            #[cfg(not(feature = "lang-rust"))]
             {
                 (extract_symbols(source_text), extract_exports(source_text), false)
             }
@@ -505,7 +505,7 @@ fn parse_with_profile(
 
 ### Symbol extraction (line-based, profile-independent)
 
-> **Superseded in Part 4 when `lang-rs` is enabled.** The function below is compiled only `#[cfg(not(feature = "lang-rs"))]`. When the parser feature is active, a parallel AST-based `extract_symbols(source, tree)` runs instead — see Part 4 §1 for the full replacement.
+> **Superseded in Part 4 when `lang-rust` is enabled.** The function below is compiled only `#[cfg(not(feature = "lang-rust"))]`. When the parser feature is active, a parallel AST-based `extract_symbols(source, tree)` runs instead — see Part 4 §1 for the full replacement.
 
 ```rust
 fn extract_symbols(source: &str) -> Vec<SymbolEntry> {
@@ -540,10 +540,10 @@ fn extract_symbols(source: &str) -> Vec<SymbolEntry> {
 
 The `kind_detail` strings are stable values feeding §17 node-kinds: `"rust-struct"`, `"rust-enum"`, `"rust-trait"`, `"rust-function"`, `"rust-type"`, `"rust-const"`, `"rust-module"`. Symbols are only collected at brace depth 0 (top-level items).
 
-### Block extraction (AST when `lang-rs`)
+### Block extraction (AST when `lang-rust`)
 
 ```rust
-#[cfg(feature = "lang-rs")]
+#[cfg(feature = "lang-rust")]
 fn extract_blocks_from_tree(path: &Utf8Path, source: &str, tree: &SourceFile) -> Vec<CodeBlock> {
     let mut blocks = Vec::new();
     for item in tree.items() {
@@ -552,7 +552,7 @@ fn extract_blocks_from_tree(path: &Utf8Path, source: &str, tree: &SourceFile) ->
     blocks
 }
 
-#[cfg(feature = "lang-rs")]
+#[cfg(feature = "lang-rust")]
 fn extract_item_block(path: &Utf8Path, source: &str, item: &ast::Item, blocks: &mut Vec<CodeBlock>) {
     let (range, node_kind, signature) = match item {
         ast::Item::Fn(func) => (func.syntax().text_range(), SymbolKind::Function,
@@ -654,10 +654,10 @@ fn extract_dependencies(
 8. Falls back to `crate_entry_path(&src_root)` (`src/lib.rs` then `src/main.rs`) when only one segment remains.
 9. Final resolved path is returned only if `resolved.starts_with(&workspace_root_canon)` — workspace-boundary containment.
 
-### Fallback exports (when `lang-rs` not enabled)
+### Fallback exports (when `lang-rust` not enabled)
 
 ```rust
-#[cfg(not(feature = "lang-rs"))]
+#[cfg(not(feature = "lang-rust"))]
 fn extract_exports(source: &str) -> Vec<ExportRecord> {
     let mut exports = Vec::new();
     for (index, line) in source.lines().enumerate() {
@@ -741,14 +741,14 @@ pub(crate) fn rust_binding(path: &str) -> (Vec<String>, DependencyBinding) {
 Phase 1's `rust_inspection.rs` was a freestanding regex parser that built `InspectEntry` directly. It is now subordinate:
 
 - Block extraction, symbol extraction, dependency extraction, and export extraction all live in `analysis/rust_analyzer.rs`, plumbed through the `LanguageAnalyzer` trait.
-- The AST path (`rust_syntax.rs`) is the default; the old regex code path is `#[cfg(not(feature = "lang-rs"))]` only and survives so the `lang-rs`-disabled build still produces inspect entries.
+- The AST path (`rust_syntax.rs`) is the default; the old regex code path is `#[cfg(not(feature = "lang-rust"))]` only and survives so the `lang-rust`-disabled build still produces inspect entries.
 - The new analyzer participates in the shared `FileAnalysis`/`LangData::Rust(RustData)` shape, so search/extract/symbols/refs/definition all see Rust blocks and dependencies through the same code path as TypeScript.
 
 ---
 
 ## 5. `rust_syntax.rs` — Rust AST utilities
 
-This is the `ra-ap-syntax`-driven inspection module. It is gated `#![cfg(feature = "lang-rs")]`.
+This is the `ra-ap-syntax`-driven inspection module. It is gated `#![cfg(feature = "lang-rust")]`.
 
 ### Module entry types
 
@@ -932,7 +932,7 @@ Unit-testing flag: `imports.testing.unit = source.contains("#[cfg(test)]") || so
 
 ## 6. `rust_inspection.rs` — updated
 
-The regex-based stub is now an inline fallback module — its public surface is `inspect_rust_file(file)` returning `InspectEntry`, used when the `lang-rs` feature is disabled. It also serves as a test reference for what the AST path should produce.
+The regex-based stub is now an inline fallback module — its public surface is `inspect_rust_file(file)` returning `InspectEntry`, used when the `lang-rust` feature is disabled. It also serves as a test reference for what the AST path should produce.
 
 The file gained a long documentation header explaining that regex patterns are validated at workspace build time by the bundled unit tests, and an `expect_used` allow for the `LazyLock::new(|| Regex::new(...).expect(...))` initializers. **Post-research correction**: scope that allow to each regex static individually, not `#![allow(clippy::expect_used)]` at the module level — a module-wide allow silently permits any other `.expect()` added later in the file, not just the ones whose panic-freedom is actually guaranteed by the build-time tests:
 
@@ -957,7 +957,7 @@ Mechanics retained from before:
 
 What is new vs. Phase 1's standalone module:
 
-- Module no longer owns `InspectEntry::Rust*` construction unconditionally — it is reached only via `RustAnalyzer::build_inspect_entry` when `lang-rs` is off.
+- Module no longer owns `InspectEntry::Rust*` construction unconditionally — it is reached only via `RustAnalyzer::build_inspect_entry` when `lang-rust` is off.
 - Re-exports of the helper functions used by `rust_syntax.rs` (`expand_use_clause`, `rust_binding`) live in the `analysis::rust_analyzer` module instead, so this file stops being the canonical source for use-clause parsing semantics.
 
 ---

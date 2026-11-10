@@ -60,7 +60,8 @@ proptest! {
     ) {
         let blocks: Vec<CodeBlock> = specs.iter().map(|(start, marks)| block(*start, marks)).collect();
         let hits: Vec<LineHit> = lines.iter().map(|&line| hit(line)).collect();
-        let owned = owned_hits(&blocks, &hits, &|text| text == MATCHING);
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        let owned = owned_hits(&refs, &hits, &|text| text == MATCHING);
 
         prop_assert_eq!(owned.len(), blocks.len());
         for (index, block_hits) in owned.iter().enumerate() {

@@ -123,13 +123,18 @@ pub struct TsData {
 #[non_exhaustive]
 pub enum LangData {
     Ts(TsData),
+    /// Rust files carry nothing beyond what every file has.
+    Rust,
 }
 
 impl LangData {
-    /// Returns the TypeScript data.
+    /// Returns the TypeScript data; empty for a file of another language.
     pub fn ts(&self) -> &TsData {
+        static NONE: TsData =
+            TsData { jsx_elements: Vec::new(), type_only_imports: Vec::new(), unresolved_aliases: Vec::new() };
         match self {
             LangData::Ts(ts) => ts,
+            LangData::Rust => &NONE,
         }
     }
 

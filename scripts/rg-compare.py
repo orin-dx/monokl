@@ -32,13 +32,13 @@ line (optional `pub`, `pub(crate)`), and its members are `fn` and `const` on an 
 script works on whole files and cannot split them, so a `mod tests` is skipped when sampling and test code inside
 source files still counts as source here. monokl runs without `--language`, which searches every registered language,
 so no flag is passed. Rust rows (identifiers, questions and members together) are scored apart from the TypeScript
-gates and gated by `--min-rust-recall`, which stays 0 until the Rust analyzer ships. A Rust repository that monokl
+gates and gated by `--min-rust-recall`, which defaults to 0.9 now that the analyzer ships. A Rust repository that monokl
 cannot search yet scores 0 hits, which the report states.
 
 Held-out rows guard against tuning to the pinned set. A repository whose options include `held-out` in rg-compare.repos is
 never sampled for identifiers, and its questions carry a fifth cell `held_out` in rg-compare.questions. They are scored
 like the tuned questions and members but on their own `held-out questions` and `held-out members` lines, gated by
-`--min-heldout-recall` and `--min-heldout-member-recall`, both 0 until a baseline is agreed. Ranking changes may be tuned
+`--min-heldout-recall` and `--min-heldout-member-recall`, both 0.9, set from the first measured scores (23/24 and 12/12). Ranking changes may be tuned
 on the other rows and must be reported on these.
 
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
@@ -59,6 +59,12 @@ QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 UNCAPPED ="1000000"
 HELD_OUT = "held-out"
+# One copy of each rule from `is_test_path` in crates/monokl/src/text_search.rs, which applies every rule to every file.
+TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
+TS_TEST_SUFFIXES = tuple(
+    f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
+)
+RUST_TEST_SUFFIXES = ("/tests.rs", "/test.rs", "_tests.rs", "_test.rs")
 
 
 class Lang:
@@ -81,10 +87,8 @@ LANGS = {
         top_level=r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+",
         # An indented class member: optional modifiers, then the name followed by a call signature or an arrow value.
         member_modifiers=r"^\s+(?:(?:static|async|public|private|protected|readonly|override|get|set)\s+)*\*?",
-        test_dirs=("/__tests__/", "/test/", "/tests/", "/spec/"),
-        test_suffixes=tuple(
-            f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
-        ),
+        test_dirs=TEST_DIRS,
+        test_suffixes=TS_TEST_SUFFIXES,
     ),
     "rust": Lang(
         globs=["*.rs"],
@@ -92,8 +96,8 @@ LANGS = {
         top_level=r"^(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe|extern(?:\s+\"[A-Za-z]+\")?)\s+)*(?:fn|struct|enum|trait|type|const|static|mod|macro_rules!)\s+",
         # An indented `fn` or `const` inside an impl or trait block.
         member_modifiers=r"^\s+(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe)\s+)*(?:fn|const)\s+",
-        test_dirs=("/tests/",),
-        test_suffixes=(),
+        test_dirs=TEST_DIRS,
+        test_suffixes=RUST_TEST_SUFFIXES,
         skip_terms=("tests",),
     ),
 }
@@ -283,14 +287,14 @@ def main():
     parser.add_argument("--min-member-recall", type=float, default=0.9,
                         help="fail when the share of member questions with the answer file in the top files and the "
                              "member's declaration in the output is lower")
-    parser.add_argument("--min-rust-recall", type=float, default=0.0,
+    parser.add_argument("--min-rust-recall", type=float, default=0.9,
                         help="fail when the share of Rust hits (identifiers, questions and members pooled) is lower; "
-                             "0 until the Rust analyzer ships")
-    parser.add_argument("--min-heldout-recall", type=float, default=0.0,
+                             "0.9 by default")
+    parser.add_argument("--min-heldout-recall", type=float, default=0.9,
                         help="fail when the share of held-out questions with the answer file in the top files is lower; "
-                             "0 until a baseline is agreed")
-    parser.add_argument("--min-heldout-member-recall", type=float, default=0.0,
-                        help="fail when the share of held-out member questions is lower; 0 until a baseline is agreed")
+                             "0.9 by default")
+    parser.add_argument("--min-heldout-member-recall", type=float, default=0.9,
+                        help="fail when the share of held-out member questions is lower; 0.9 by default")
     parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")

@@ -3,6 +3,8 @@
 pub mod file_analysis;
 pub mod lang;
 pub mod registry;
+#[cfg(feature = "lang-rust")]
+pub mod rust;
 #[cfg(feature = "lang-ts")]
 pub mod ts;
 
