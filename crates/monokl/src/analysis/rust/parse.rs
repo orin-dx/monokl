@@ -227,28 +227,43 @@ impl Walker<'_> {
     }
 
     /// A block for each method with a body in an `impl` or trait, at least [`MIN_MEMBER_LINES`] long unless it is test
-    /// code.
+    /// code. Any other member (a bodiless method, a constant, a type, a macro call) gets one only when it is itself
+    /// marked as test code, so its matches do not go to the holder.
     fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &Holder, in_test: bool) {
         let Some(list) = list else { return };
         for member in list.assoc_items() {
-            let ast::AssocItem::Fn(function) = member else { continue };
-            if function.body().is_none() {
-                continue;
-            }
-            let Some(name) = function.name() else { continue };
-            let in_test = in_test || function.attrs().any(|attr| is_test_attr(&attr));
-            let range = function.syntax().text_range();
-            // A short test method still gets a block, so a search can tell its matches from the holder's.
-            if !in_test && self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
-                continue;
-            }
-            let declared = Declared {
-                node: function.syntax(),
-                kind: SymbolKind::Method,
-                name: Some(name.text()),
-                visibility: function.visibility(),
+            let marked = member.attrs().any(|attr| is_test_attr(&attr));
+            let (kind, name, visibility, node) = match &member {
+                ast::AssocItem::Fn(function) if function.body().is_some() => {
+                    let Some(name) = function.name() else { continue };
+                    let in_test = in_test || marked;
+                    let range = function.syntax().text_range();
+                    // A short test method still gets a block, so a search can tell its matches from the holder's.
+                    if !in_test && self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
+                        continue;
+                    }
+                    let declared = Declared {
+                        node: function.syntax(),
+                        kind: SymbolKind::Method,
+                        name: Some(name.text()),
+                        visibility: function.visibility(),
+                    };
+                    self.record(&declared, Some(holder), in_test);
+                    continue;
+                }
+                ast::AssocItem::Fn(function) => {
+                    (SymbolKind::Method, function.name(), function.visibility(), function.syntax())
+                }
+                ast::AssocItem::Const(item) => (SymbolKind::Variable, item.name(), item.visibility(), item.syntax()),
+                ast::AssocItem::TypeAlias(item) => {
+                    (SymbolKind::TypeAlias, item.name(), item.visibility(), item.syntax())
+                }
+                ast::AssocItem::MacroCall(call) => (SymbolKind::Macro, None, None, call.syntax()),
             };
-            self.record(&declared, Some(holder), in_test);
+            if marked {
+                let declared = Declared { node, kind, name: name.as_ref().map(ast::Name::text), visibility };
+                self.record(&declared, Some(holder), true);
+            }
         }
     }
 
@@ -342,8 +357,9 @@ impl Walker<'_> {
     }
 }
 
-/// parse recovered the item without one or the item has none (a macro call, an `extern` block).
-/// parse recovered the item without one.
+/// The kind and the name of an item that gets a block, `None` for one that does not (a `use`, an `extern crate`, an
+/// out-of-line module). The name is `None` for an item that has none (a macro call, an `extern` block) or that the parse
+/// recovered without one.
 fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
     let named = |name: Option<ast::Name>| name.map(|name| name.text().to_owned());
     Some(match item {

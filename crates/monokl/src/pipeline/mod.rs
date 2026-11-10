@@ -3,7 +3,6 @@
 //! Nothing here caps, budgets, serializes or prints. Callers get every surviving block with the counts needed to
 //! describe what was left out, and apply their own budget.
 
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io;
 
@@ -328,13 +327,9 @@ fn retrieve_blocks(
         .collect();
     let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
     // Test blocks always take part in deciding which block owns a hit, so a test method inside a regular `impl` or trait
-    // does not leak its matches to the holder; they are returned only when asked for. The common case borrows and
-    // copies nothing.
-    let blocks: Cow<'_, [CodeBlock]> = if analysis.test_blocks.is_empty() {
-        Cow::Borrowed(&analysis.blocks)
-    } else {
-        Cow::Owned(analysis.blocks.iter().chain(&analysis.test_blocks).cloned().collect())
-    };
+    // does not leak its matches to the holder; they are returned only when asked for. Only references are collected, so
+    // no block is copied.
+    let blocks: Vec<&CodeBlock> = analysis.blocks.iter().chain(&analysis.test_blocks).collect();
     let returned = if ctx.allow_tests { blocks.len() } else { analysis.blocks.len() };
     for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_matches)).take(returned) {
         if inside.is_empty() {
@@ -352,7 +347,7 @@ fn retrieve_blocks(
         let annotated = CodeBlock {
             matched_lines: inside.iter().map(|hit| hit.line_number).collect(),
             matched_keywords,
-            ..block.clone()
+            ..(*block).clone()
         };
         let tokens = tokenize_block(&annotated);
         out.push((annotated, tokens));
@@ -364,10 +359,12 @@ fn retrieve_blocks(
 /// none is dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only
 /// the part of the line inside the block counts, which sends the match to the member or holder that actually contains
 /// the text. Where no block's own text matches (a match across the edge of every block on the line) every block on the
-/// line keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it.
+/// line keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it: blocks
+/// with the same line range (`mod m { #[cfg(test)] fn f() {} }` on one line) are nested only when the larger one's text
+/// contains the other's.
 /// `hits` must be in line order; each block's hits are too.
 fn owned_hits<'h>(
-    blocks: &[CodeBlock],
+    blocks: &[&CodeBlock],
     hits: &'h [LineHit],
     line_matches: &dyn Fn(&str) -> bool,
 ) -> Vec<Vec<&'h LineHit>> {
@@ -379,10 +376,15 @@ fn owned_hits<'h>(
             slot.push(index);
         }
     }
-    let range = |index: usize| (blocks[index].line_start, blocks[index].line_end);
     let own_text_matches = |index: usize, line: usize| {
-        let block = &blocks[index];
+        let block = blocks[index];
         block.code.split('\n').nth(line - block.line_start).is_some_and(line_matches)
+    };
+    let holds = |outer: usize, inner: usize| {
+        let (outer, inner) = (blocks[outer], blocks[inner]);
+        let within = inner.line_start >= outer.line_start && inner.line_end <= outer.line_end;
+        let same_lines = (inner.line_start, inner.line_end) == (outer.line_start, outer.line_end);
+        within && (!same_lines || (inner.code.len() < outer.code.len() && outer.code.contains(&inner.code)))
     };
     let mut per_block = vec![Vec::new(); blocks.len()];
     for (hit, containing_all) in hits.iter().zip(&containing) {
@@ -390,12 +392,7 @@ fn owned_hits<'h>(
             containing_all.iter().copied().filter(|&index| own_text_matches(index, hit.line_number)).collect();
         let candidates = if matching.is_empty() { containing_all } else { &matching };
         for &outer in candidates {
-            let (start, end) = range(outer);
-            let holds_a_smaller_block = candidates.iter().any(|&inner| {
-                let (inner_start, inner_end) = range(inner);
-                inner_start >= start && inner_end <= end && (inner_start, inner_end) != (start, end)
-            });
-            if !holds_a_smaller_block {
+            if !candidates.iter().any(|&inner| holds(outer, inner)) {
                 per_block[outer].push(hit);
             }
         }
@@ -930,6 +927,29 @@ class Foo {
         let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
         let result = search(&class_registry(), &request(&root, "foo")).unwrap();
         assert_eq!(nested_rows(&result), [(1, 9, SymbolKind::Class, vec![1], None)]);
+    }
+
+    fn owned_counts(blocks: &[CodeBlock]) -> Vec<usize> {
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        let hits = [LineHit { line_number: 1, text: String::new() }];
+        owned_hits(&refs, &hits, &|text| text.contains("needle")).iter().map(Vec::len).collect()
+    }
+
+    #[test]
+    fn a_block_on_the_same_lines_as_the_block_that_contains_it_takes_the_hit() {
+        let path = Utf8Path::new("a.rs");
+        let line = "mod m { #[cfg(test)] fn hidden() { needle(); } }";
+        let blocks = [block(path, line, 1, 1), block(path, "#[cfg(test)] fn hidden() { needle(); }", 1, 1)];
+        assert_eq!(owned_counts(&blocks), [0, 1]);
+        let reversed = [blocks[1].clone(), blocks[0].clone()];
+        assert_eq!(owned_counts(&reversed), [1, 0]);
+    }
+
+    #[test]
+    fn blocks_on_the_same_lines_that_do_not_contain_each_other_each_keep_the_hit() {
+        let path = Utf8Path::new("a.rs");
+        let blocks = [block(path, "fn a() { needle(); }", 1, 1), block(path, "fn b() { needle(); }", 1, 1)];
+        assert_eq!(owned_counts(&blocks), [1, 1]);
     }
 
     #[test]

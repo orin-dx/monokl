@@ -517,9 +517,21 @@ fn signatures(analysis: &FileAnalysis) -> Vec<&str> {
     analysis.blocks.iter().map(|b| b.symbol_signature.as_deref().unwrap()).collect()
 }
 
-/// Lets the shared thread that drops syntax trees finish before the test process ends.
-fn let_trees_drop() {
-    std::thread::sleep(std::time::Duration::from_millis(300));
+/// `ra_ap_syntax` drops a finished tree on a shared thread with the default 2 MiB stack, where a tree too deep for that
+/// stack aborts the process at some later moment. Dropping a tree of the deepest kept depth on such a stack and joining
+/// makes that overflow fail here, on the test's own thread, instead of after the test has returned.
+#[test]
+fn a_tree_of_the_deepest_kept_depth_drops_within_the_default_thread_stack() {
+    const DEFAULT_THREAD_STACK: usize = 2 * 1024 * 1024;
+    let dropped = std::thread::Builder::new().stack_size(DEFAULT_THREAD_STACK).spawn(|| {
+        let kind = ra_ap_syntax::SourceFile::parse("", ra_ap_syntax::Edition::CURRENT).syntax_node().green().kind();
+        let mut tree = ra_ap_syntax::GreenNode::new(kind, []);
+        for _ in 1..parse::MAX_TREE_DEPTH {
+            tree = ra_ap_syntax::GreenNode::new(kind, [ra_ap_syntax::NodeOrToken::Node(tree)]);
+        }
+        drop(tree);
+    });
+    assert!(dropped.unwrap().join().is_ok());
 }
 
 #[rstest]
@@ -535,7 +547,6 @@ fn expressions_nested_hundreds_deep_are_parsed(#[case] open: &str, #[case] close
     let analysis = analyze_source(&nested(open, close, 500));
     assert_eq!(analysis.degradation, None);
     assert_eq!(signatures(&analysis), ["pub fn deep()", "pub fn after()"]);
-    let_trees_drop();
 }
 
 #[rstest]
@@ -551,7 +562,6 @@ fn expressions_nested_past_the_tree_cap_are_degraded_not_dropped_on_the_wrong_st
     assert!(analysis.had_parse_errors);
     assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { cap: parse::MAX_TREE_DEPTH, .. })));
     assert_eq!(rows(&analysis.blocks), []);
-    let_trees_drop();
 }
 
 #[test]
@@ -562,7 +572,6 @@ fn modules_nested_just_under_the_tree_cap_are_parsed() {
     assert_eq!(analysis.degradation, None);
     assert_eq!(analysis.blocks.len(), depth + 1);
     assert_eq!(analysis.blocks[depth].symbol_signature.as_deref(), Some("pub fn leaf()"));
-    let_trees_drop();
 }
 
 #[test]
@@ -575,7 +584,6 @@ fn the_tree_cap_degradation_names_the_depth_and_the_cap() {
     };
     assert_eq!(cap, parse::MAX_TREE_DEPTH);
     assert_eq!(found, 2 * depth + 4);
-    let_trees_drop();
 }
 
 #[test]
@@ -752,6 +760,59 @@ fn test_methods_in_a_regular_impl_or_trait_are_not_credited_to_the_holder() {
     spans.sort();
     assert!(with.iter().all(|row| row.3 == SymbolKind::Method));
     assert_eq!(spans, [(9, 13, "Foo".to_owned()), (15, 16, "Foo".to_owned()), (22, 26, "Tr".to_owned())]);
+}
+
+const TEST_ITEMS_RS: &str = "\
+struct Foo;
+
+impl Foo {
+    #[cfg(test)]
+    const TEST_ONLY: &str = \"needleword\";
+
+    #[cfg(test)]
+    type Probe = needleword;
+
+    #[cfg(test)]
+    needleword! {}
+
+    fn real(&self) -> u32 {
+        let a = 1;
+        a
+    }
+}
+
+trait Tr {
+    fn a(&self);
+
+    #[cfg(test)]
+    fn gated(&self) -> needleword;
+}
+";
+
+#[test]
+fn test_only_associated_items_without_a_body_are_not_credited_to_the_holder() {
+    let (_dir, root) = tree(&[("l.rs", TEST_ITEMS_RS)]);
+    assert_eq!(found(&find(&root, "needleword", false, None), &root), []);
+    let with = found(&find(&root, "needleword", true, None), &root);
+    let mut spans: Vec<_> = with.iter().map(|row| (row.1, row.2, row.3, row.4.clone().unwrap())).collect();
+    spans.sort_by_key(|span| span.0);
+    assert_eq!(
+        spans,
+        [
+            (4, 5, SymbolKind::Variable, "Foo".to_owned()),
+            (7, 8, SymbolKind::TypeAlias, "Foo".to_owned()),
+            (10, 11, SymbolKind::Macro, "Foo".to_owned()),
+            (22, 23, SymbolKind::Method, "Tr".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_test_function_on_the_line_of_its_module_does_not_leak_to_the_module() {
+    let (_dir, root) = tree(&[("l.rs", "mod m { #[cfg(test)] fn hidden() { needleword(); } }\n")]);
+    assert_eq!(found(&find(&root, "needleword", false, None), &root), []);
+    let with = found(&find(&root, "needleword", true, None), &root);
+    assert_eq!(with, [("l.rs".to_owned(), 1, 1, SymbolKind::Function, Some("m".to_owned()), vec![1])]);
 }
 
 #[test]
