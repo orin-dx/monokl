@@ -668,6 +668,49 @@ fn asking_for_tests_adds_the_test_blocks_and_changes_nothing_else() {
     )));
 }
 
+const TEST_METHODS_RS: &str = "\
+struct Foo;
+
+impl Foo {
+    fn real(&self) -> u32 {
+        let a = 1;
+        a
+    }
+
+    #[cfg(test)]
+    fn fixture_secret(&self) -> u32 {
+        let leakword = 1;
+        leakword
+    }
+
+    #[test]
+    fn short_one(&self) { let leakword = 2; }
+}
+
+trait Tr {
+    fn a(&self);
+
+    #[cfg(test)]
+    fn tr_test(&self) {
+        let leakword = 3;
+        let _ = leakword;
+    }
+}
+";
+
+#[test]
+fn test_methods_in_a_regular_impl_or_trait_are_not_credited_to_the_holder() {
+    let (_dir, root) = tree(&[("l.rs", TEST_METHODS_RS)]);
+    for query in ["leakword", "fixture_secret", "short_one", "tr_test"] {
+        assert_eq!(found(&find(&root, query, false, None), &root), [], "{query}");
+    }
+    let with = found(&find(&root, "leakword", true, None), &root);
+    let mut spans: Vec<_> = with.iter().map(|row| (row.1, row.2, row.4.clone().unwrap())).collect();
+    spans.sort();
+    assert!(with.iter().all(|row| row.3 == SymbolKind::Method));
+    assert_eq!(spans, [(9, 13, "Foo".to_owned()), (15, 16, "Foo".to_owned()), (22, 26, "Tr".to_owned())]);
+}
+
 #[test]
 fn a_syntax_error_reports_a_degraded_file_and_still_returns_blocks() {
     let (_dir, root) = tree(&[("src/bad.rs", "fn fine() {\n    alpha();\n}\n\nstruct Oops {\n    a: ,\n")]);

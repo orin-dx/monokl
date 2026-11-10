@@ -327,13 +327,16 @@ fn retrieve_blocks(
         .map(|(_, matcher)| matcher)
         .collect();
     let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
-    // Test code joins the blocks only when asked for; the common case borrows and copies nothing.
-    let blocks: Cow<'_, [CodeBlock]> = if ctx.allow_tests && !analysis.test_blocks.is_empty() {
-        Cow::Owned(analysis.blocks.iter().chain(&analysis.test_blocks).cloned().collect())
-    } else {
+    // Test blocks always take part in deciding which block owns a hit, so a test method inside a regular `impl` or trait
+    // does not leak its matches to the holder; they are returned only when asked for. The common case borrows and
+    // copies nothing.
+    let blocks: Cow<'_, [CodeBlock]> = if analysis.test_blocks.is_empty() {
         Cow::Borrowed(&analysis.blocks)
+    } else {
+        Cow::Owned(analysis.blocks.iter().chain(&analysis.test_blocks).cloned().collect())
     };
-    for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_matches)) {
+    let returned = if ctx.allow_tests { blocks.len() } else { analysis.blocks.len() };
+    for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_matches)).take(returned) {
         if inside.is_empty() {
             continue;
         }

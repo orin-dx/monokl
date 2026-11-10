@@ -225,7 +225,8 @@ impl Walker<'_> {
         }
     }
 
-    /// A block for each method with a body in an `impl` or trait, at least [`MIN_MEMBER_LINES`] long.
+    /// A block for each method with a body in an `impl` or trait, at least [`MIN_MEMBER_LINES`] long unless it is test
+    /// code.
     fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &Holder, in_test: bool) {
         let Some(list) = list else { return };
         for member in list.assoc_items() {
@@ -236,7 +237,8 @@ impl Walker<'_> {
             let Some(name) = function.name() else { continue };
             let in_test = in_test || function.attrs().any(|attr| is_test_attr(&attr));
             let range = function.syntax().text_range();
-            if self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
+            // A short test method still gets a block, so a search can tell its matches from the holder's.
+            if !in_test && self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
                 continue;
             }
             let declared = Declared {
