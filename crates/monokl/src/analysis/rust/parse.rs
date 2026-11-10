@@ -19,8 +19,8 @@ const MIN_MEMBER_LINES: usize = 3;
 /// parse starts. Each level of the parser's recursion consumes at least one byte of source, and the costliest level
 /// measured (a nested `(`, `{` or unary `-`) uses under 1.6 KB of stack optimized and under 4 KB unoptimized.
 ///
-/// The parser's time grows with the square of the nesting depth (20,000 nested parentheses take a second, and a file
-/// of the longest parsed length made only of them over a minute). Only a pathological file reaches that.
+/// The parser's time grows with the square of the nesting depth (20,000 nested parentheses take a second), so a file of
+/// the longest parsed length made only of them takes minutes. Only a pathological file reaches that.
 ///
 /// `debug_assertions` stands in for "unoptimized", which `cfg!` cannot ask for directly.
 const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
@@ -28,8 +28,9 @@ const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else
 /// Stack for what does not grow with the source.
 const BASE_STACK: usize = 8 << 20;
 
-/// The most stack one parse reserves. Only touched pages are committed.
-const MAX_STACK: usize = 1 << 30;
+/// The most stack one parse reserves. Only touched pages are committed; a parse whose stack cannot be reserved is
+/// reported as degraded.
+const MAX_STACK: usize = 4 << 30;
 
 /// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
 pub(super) const MAX_PARSED_SOURCE_LEN: usize = (MAX_STACK - BASE_STACK) / STACK_PER_SOURCE_BYTE;

@@ -586,6 +586,15 @@ fn a_large_realistic_file_is_parsed() {
     assert_eq!(analysis.blocks.len(), 600);
 }
 
+#[test]
+fn a_generated_file_of_300_kilobytes_is_parsed() {
+    let method = "    fn method() -> u32 {\n        let a = 1;\n        a\n    }\n";
+    let count = 300_000 / method.len();
+    let analysis = analyze_source(&format!("struct S;\nimpl S {{\n{}}}\n", method.repeat(count)));
+    assert_eq!(analysis.degradation, None);
+    assert_eq!(analysis.blocks.len(), count + 2);
+}
+
 fn tree(files: &[(&str, &str)]) -> (tempfile::TempDir, Utf8PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     for (name, content) in files {
