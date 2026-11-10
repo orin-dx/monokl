@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01AEdt7db72HbjfwkYUkqTcv",
+  "agent_id": "a6733ebc6a6f085a5",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix-up for the object-literal PR",
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 94698,
+    "cache_read_tokens": 2434506,
+    "output_tokens": 12288,
+    "api_call_count": 32
+  },
+  "started_at": "2026-11-07T22:26:40.690736-08:00",
+  "completed_at": "2026-11-07T22:31:03.236492-08:00"
+}
