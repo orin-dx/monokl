@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016qKzcEGxZwjz9HzjFCvtqL",
+  "agent_id": "a79bd2e6a97f23208",
+  "subagent_type": "general-purpose",
+  "task_description": "Merge main into the Rust analyzer PR",
+  "token_usage": {
+    "input_tokens": 68,
+    "cache_creation_tokens": 95064,
+    "cache_read_tokens": 3231952,
+    "output_tokens": 9813,
+    "api_call_count": 34
+  },
+  "started_at": "2026-11-10T13:24:24.760313-08:00",
+  "completed_at": "2026-11-10T13:29:25.173244-08:00"
+}
