@@ -74,6 +74,9 @@ oxc_span = "0.152"
 oxc_allocator = "0.152"
 oxc_resolver = "11"
 
+# rust-analyzer's syntax crate. 0.0.350 and later need Rust 1.98; the MSRV is 1.96.
+ra_ap_syntax = "0.0.349"
+
 # Search
 ignore = "0.4"
 regex = "1"

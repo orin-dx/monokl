@@ -6,21 +6,21 @@
 </p>
 
 <p align="center">
-  <b>AST-aware code search for TypeScript and JavaScript.</b><br />
+  <b>AST-aware code search for TypeScript, JavaScript and Rust.</b><br />
   <i>Built for AI coding agents, not humans reading a terminal.</i>
 </p>
 
-> **Status: early.** `monokl search` works today for TypeScript and JavaScript. Symbol lookup, references, definitions and dependents are designed (see [`docs/spec/`](docs/spec/README.md)) but not built yet.
+> **Status: early.** `monokl search` works today for TypeScript, JavaScript and Rust. Symbol lookup, references, definitions and dependents are designed (see [`docs/spec/`](docs/spec/README.md)) but not built yet.
 
 ---
 
 ## What you get
 
-Grep finds text. Embeddings find _vibes_. monokl parses your code with a compiler-grade parser ([OXC](https://oxc.rs)), so a search returns the **function, class, interface or type** that matches, not a line number to open and read.
+Grep finds text. Embeddings find _vibes_. monokl parses your code with a compiler-grade parser ([OXC](https://oxc.rs) for TypeScript and JavaScript, [rust-analyzer's syntax crate](https://crates.io/crates/ra_ap_syntax) for Rust), so a search returns the **function, class, struct, trait or type** that matches, not a line number to open and read.
 
 - **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching. A block whose own name holds query words ranks above one that only uses them in its body.
 - **A small query language.** Plain words, `"quoted phrases"`, `+required` and `-excluded` terms, and `regex:` patterns. See [Writing a query](#writing-a-query).
-- **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files and binary files are skipped by default, and each has a flag to include it.
+- **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files, Rust items under `#[cfg(test)]` or `#[test]` and binary files are skipped by default, and each has a flag to include it.
 - **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests raising the cap or narrowing the query.
 - **Predictable.** The same search on the same files gives the same output, in the same order, every time. A bad pattern fails the whole search with a clear error instead of being quietly dropped.
 - **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is skipped instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
@@ -89,9 +89,9 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | `--max-results N` | 50 | Most results to print |
 | `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
 | `--max-bytes N` | 2 MiB | Most bytes across the printed rows. Counts the rows as printed, not the code blocks behind them |
-| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`) |
+| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust items under `#[cfg(test)]` or `#[test]` |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
-| `--language L` | all | Search one language only: `typescript`, `javascript`, chosen by file extension: `.ts .tsx .mts .cts` or `.js .jsx .mjs .cjs` (`rust` and `python` are accepted but match nothing yet) |
+| `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted but matches nothing yet) |
 
 ## Errors and exit codes
 
@@ -104,7 +104,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | Language | Status |
 | --- | --- |
 | TypeScript, JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`; not `.d.ts`) | Search works today |
-| Rust | Designed, not built |
+| Rust (`.rs`) | Search works today. Functions, structs, unions, enums, traits, type aliases, consts and statics, `macro_rules!` macros and inline modules are blocks, as are `impl` blocks and the methods in them and in traits (when 3 lines or more); modules declared in another file and `use` declarations are not |
 | Python, Go, Java | Designed, not built |
 
 ## Why

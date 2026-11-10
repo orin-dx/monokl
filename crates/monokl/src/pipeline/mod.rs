@@ -3,6 +3,7 @@
 //! Nothing here caps, budgets, serializes or prints. Callers get every surviving block with the counts needed to
 //! describe what was left out, and apply their own budget.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io;
 
@@ -30,12 +31,12 @@ pub struct SearchRequest<'a> {
     pub query: &'a str,
     /// Treats the whole query as one literal term, operators and quotes included.
     pub exact: bool,
-    /// Searches test files too.
+    /// Searches test files too, and test code inside source files: Rust items under `#[cfg(test)]` or `#[test]`.
     pub allow_tests: bool,
     /// Skips hidden files and what `.gitignore` and `.ignore` files exclude: inside the root and, within a git
     /// repository, in its parent directories up to the repository root.
     pub respect_ignore_files: bool,
-    /// Restricts the search to one language; only TypeScript and JavaScript are supported.
+    /// Restricts the search to one language; only TypeScript, JavaScript and Rust are supported.
     pub language: Option<Language>,
 }
 
@@ -121,7 +122,7 @@ fn search_with_ceiling(
         && !is_supported(language)
     {
         return Ok(SearchResult::skipped(format!(
-            "language {language:?} not supported in v1; only TypeScript/JavaScript"
+            "language {language:?} not supported in v1; only TypeScript, JavaScript and Rust"
         )));
     }
 
@@ -176,7 +177,7 @@ fn search_with_ceiling(
         if !has_every_required {
             continue;
         }
-        let ctx = FileContext { registry, plan: &plan, matchers: &matchers, language };
+        let ctx = FileContext { registry, plan: &plan, matchers: &matchers, language, allow_tests };
         retrieve_blocks(&ctx, path, hits, &read_source, &mut candidates, &mut diagnostics);
     }
 
@@ -191,8 +192,8 @@ fn search_with_ceiling(
 /// Returns whether `language` has an analyzer path in v1.
 fn is_supported(language: Language) -> bool {
     match language {
-        Language::TypeScript | Language::JavaScript => true,
-        Language::Rust | Language::Python => false,
+        Language::TypeScript | Language::JavaScript | Language::Rust => true,
+        Language::Python => false,
     }
 }
 
@@ -255,14 +256,17 @@ struct FileContext<'a> {
     plan: &'a QueryPlan,
     matchers: &'a [RegexMatcher],
     language: Option<Language>,
+    allow_tests: bool,
 }
 
-/// The TypeScript analyzer owns both languages, so the `--language` filter goes by extension.
+/// One analyzer can own several languages (TypeScript's owns JavaScript too), so the `--language` filter goes by
+/// extension.
 fn has_language_extension(language: Language, path: &Utf8Path) -> bool {
     match language {
         Language::TypeScript => matches!(path.extension(), Some("ts" | "tsx" | "mts" | "cts")),
         Language::JavaScript => matches!(path.extension(), Some("js" | "jsx" | "mjs" | "cjs")),
-        Language::Rust | Language::Python => false,
+        Language::Rust => path.extension() == Some("rs"),
+        Language::Python => false,
     }
 }
 
@@ -315,7 +319,13 @@ fn retrieve_blocks(
         .map(|(_, matcher)| matcher)
         .collect();
     let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
-    for (block, inside) in analysis.blocks.iter().zip(owned_hits(&analysis.blocks, hits, &line_matches)) {
+    // Test code joins the blocks only when asked for; the common case borrows and copies nothing.
+    let blocks: Cow<'_, [CodeBlock]> = if ctx.allow_tests && !analysis.test_blocks.is_empty() {
+        Cow::Owned(analysis.blocks.iter().chain(&analysis.test_blocks).cloned().collect())
+    } else {
+        Cow::Borrowed(&analysis.blocks)
+    };
+    for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_matches)) {
         if inside.is_empty() {
             continue;
         }
@@ -482,6 +492,7 @@ mod tests {
                 dependencies: Vec::new(),
                 exports: Vec::new(),
                 blocks,
+                test_blocks: Vec::new(),
                 lang: LangData::Ts(TsData::default()),
             }))
         }
@@ -539,22 +550,20 @@ mod tests {
     }
 
     #[test]
-    fn language_other_than_typescript_or_javascript_is_skipped_with_a_diagnostic() {
+    fn language_without_an_analyzer_path_is_skipped_with_a_diagnostic() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
-        for (language, name) in [(Language::Rust, "Rust"), (Language::Python, "Python")] {
-            let request = SearchRequest { language: Some(language), ..request(&root, "alpha") };
-            let result = search(&whole_file_registry(), &request).unwrap();
-            assert!(result.ranked.is_empty());
-            assert_eq!(result.files_total, 0);
-            assert_eq!(
-                summary(&result.diagnostics),
-                [(
-                    DiagnosticKind::Skipped,
-                    None,
-                    format!("language {name} not supported in v1; only TypeScript/JavaScript").as_str()
-                )]
-            );
-        }
+        let request = SearchRequest { language: Some(Language::Python), ..request(&root, "alpha") };
+        let result = search(&whole_file_registry(), &request).unwrap();
+        assert!(result.ranked.is_empty());
+        assert_eq!(result.files_total, 0);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(
+                DiagnosticKind::Skipped,
+                None,
+                "language Python not supported in v1; only TypeScript, JavaScript and Rust"
+            )]
+        );
     }
 
     #[test]
@@ -602,6 +611,7 @@ mod tests {
                     dependencies: Vec::new(),
                     exports: Vec::new(),
                     blocks: vec![block(path, &source, 1, 1)],
+                    test_blocks: Vec::new(),
                     lang: LangData::Ts(TsData::default()),
                 }))
             }
@@ -984,6 +994,7 @@ class Foo {
     )]
     #[case(Degradation::Panicked, "parser panicked")]
     #[case(Degradation::ThreadUnavailable, "could not start a parse thread")]
+    #[case(Degradation::TooDeep { depth: 9_000, cap: 8_000 }, "file nests too deeply to analyze (depth 9000, over the cap of 8000)")]
     fn a_degraded_file_names_its_reason_in_the_diagnostic(#[case] degradation: Degradation, #[case] message: &str) {
         let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
         let registry = AnalyzerRegistry::new(vec![Arc::new(Canned {
@@ -1002,7 +1013,8 @@ class Foo {
         let registry = whole_file_registry();
         let plan = QueryPlan::from_terms(parse("alpha").unwrap());
         let matchers = vec![compile("alpha").unwrap()];
-        let ctx = FileContext { registry: &registry, plan: &plan, matchers: &matchers, language: None };
+        let ctx =
+            FileContext { registry: &registry, plan: &plan, matchers: &matchers, language: None, allow_tests: false };
         let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
         let failing = |_: &Utf8Path| -> io::Result<Source> { Err(io::Error::from(io::ErrorKind::PermissionDenied)) };

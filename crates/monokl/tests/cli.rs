@@ -234,11 +234,11 @@ fn a_query_with_no_positive_terms_says_so() {
 
 #[test]
 fn an_unsupported_language_says_so() {
-    let output = monokl(&["search", "format", ".", "--language", "rust"]);
+    let output = monokl(&["search", "format", ".", "--language", "python"]);
     assert!(output.status.success());
     assert_eq!(
         stdout(&output),
-        "search: []\nhelp[2]: language Rust not supported in v1; only TypeScript/JavaScript,\
+        "search: []\nhelp[2]: \"language Python not supported in v1; only TypeScript, JavaScript and Rust\",\
          \"only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg\"\n"
     );
 }
@@ -309,4 +309,83 @@ fn a_result_within_every_cap_is_printed_whole_without_a_cut_marker() {
          \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,1.170466\n\
          \x20 src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,1.159101\n"
     );
+}
+
+const CART_RS: &str = "\
+pub struct Cart {
+    items: Vec<u32>,
+}
+
+impl Cart {
+    pub fn total_price(&self) -> u32 {
+        let sum = self.items.iter().sum();
+        sum
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn total_price_adds_up() {
+        assert_eq!(1, 1);
+    }
+}
+";
+
+const SEARCH_HEADER: &str =
+    "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:";
+
+/// A project with one Rust file and one TypeScript file that both mention `total_price`.
+fn mixed_project() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/cart.rs"), CART_RS).unwrap();
+    std::fs::write(dir.path().join("src/cart.ts"), "export function total_price(): number {\n  return 1;\n}\n")
+        .unwrap();
+    dir
+}
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
+    let dir = mixed_project();
+    let output = monokl_in(dir.path(), &["search", "total_price", "src", "--language", "rust"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,4.452186\n",
+            SEARCH_HEADER.replace("[N]", "[1]")
+        )
+    );
+
+    let output = monokl_in(dir.path(), &["search", "total_price", "src", "--language", "rust", "--tests"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "{}\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),\"15: fn total_price_adds_up() {{\",1,3.344136\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,2,3.18786\n",
+            SEARCH_HEADER.replace("[N]", "[2]")
+        )
+    );
+}
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn the_language_flag_selects_rust_or_typescript_files() {
+    let dir = mixed_project();
+    let files = |args: &[&str]| -> Vec<String> {
+        let output = monokl_in(dir.path(), args);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        let mut files: Vec<String> = stdout(&output)
+            .lines()
+            .skip(1)
+            .map(|line| line.trim_start().split(',').next().unwrap().to_owned())
+            .collect();
+        files.sort();
+        files
+    };
+    assert_eq!(files(&["search", "total_price", ".", "--tests"]), ["src/cart.rs", "src/cart.rs", "src/cart.ts"]);
+    assert_eq!(files(&["search", "total_price", ".", "--language", "rust"]), ["src/cart.rs"]);
+    assert_eq!(files(&["search", "total_price", ".", "--language", "typescript"]), ["src/cart.ts"]);
 }

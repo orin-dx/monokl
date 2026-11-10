@@ -187,6 +187,7 @@ mod tests {
             dependencies: Vec::new(),
             exports: Vec::new(),
             blocks: Vec::new(),
+            test_blocks: Vec::new(),
             lang: LangData::Ts(TsData::default()),
         }
     }
