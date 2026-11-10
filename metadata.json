@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M73F1QT84RXDEDK04PDC2VC4",
+  "strategy": "manual-commit",
+  "branch": "docs/adr-performance-bounds",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 23857,
+    "cache_read_tokens": 9555212,
+    "output_tokens": 10512,
+    "api_call_count": 14,
+    "subagent_tokens": {
+      "input_tokens": 18,
+      "cache_creation_tokens": 82303,
+      "cache_read_tokens": 734284,
+      "output_tokens": 4092,
+      "api_call_count": 9
+    }
+  },
+  "redaction": {
+    "replacements": 102,
+    "layers": {
+      "betterleaks": 14,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
