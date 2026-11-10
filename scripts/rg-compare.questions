@@ -38,3 +38,17 @@ axios | get set cookie | lib/core/AxiosHeaders.js | member:getSetCookie
 axios | parse parameters | lib/core/AxiosHeaders.js | member:parseParameters
 axios | get uri | lib/core/Axios.js | member:getUri
 axios | escape name | lib/helpers/formDataToStream.js | member:escapeName
+
+# Rust rows. Top-level questions name an item at the start of a line; `member:` names a `fn` or `const` on an indented
+# line inside an impl or trait block. They are scored together under --min-rust-recall, not with the TypeScript rows.
+fd | absolute path form | src/filesystem.rs | path_absolute_form
+fd | execute commands output buffer | src/exec/command.rs | execute_commands
+fd | merge exit codes | src/exit_codes.rs | merge_exitcodes
+fd | strip current directory | src/filesystem.rs | strip_current_dir
+fd | file types filter | src/filetypes.rs | FileTypes
+fd | owner filter uid gid | src/filter/owner.rs | OwnerFilter
+fd | command set execute batch | src/exec/mod.rs | member:execute_batch
+fd | size filter within | src/filter/size.rs | member:is_within
+fd | directory entry stripped path | src/dir_entry.rs | member:stripped_path
+fd | owner filter from string | src/filter/owner.rs | member:from_string
+fd | file types should ignore | src/filetypes.rs | member:should_ignore

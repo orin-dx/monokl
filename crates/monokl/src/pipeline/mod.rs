@@ -9,6 +9,7 @@ use std::io;
 use camino::{Utf8Path, Utf8PathBuf};
 use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::LanguageId;
@@ -111,6 +112,9 @@ pub fn search(registry: &AnalyzerRegistry, request: &SearchRequest<'_>) -> Resul
     search_with_ceiling(registry, request, DEFAULT_MAX_FILES)
 }
 
+/// A block annotated with its matches, and its tokens.
+type Candidate = (CodeBlock, Vec<String>);
+
 /// [`search`] with the file ceiling as a parameter, so tests can reach it without 100,000 files.
 fn search_with_ceiling(
     registry: &AnalyzerRegistry,
@@ -173,18 +177,27 @@ fn search_with_ceiling(
         excluded.hits.into_keys().collect()
     };
 
-    let mut candidates: Vec<(CodeBlock, Vec<String>)> = Vec::new();
-    for (path, hits) in &found.hits {
-        if excluded_files.contains(path) {
-            continue;
-        }
-        let has_every_required =
-            plan.required.iter().all(|&i| hits.iter().any(|hit| matches_text(&matchers[i], &hit.text)));
-        if !has_every_required {
-            continue;
-        }
-        let ctx = FileContext { registry, plan: &plan, matchers: &matchers, language, allow_tests };
-        retrieve_blocks(&ctx, path, hits, &read_source, &mut candidates, &mut diagnostics);
+    let survivors: Vec<(&Utf8PathBuf, &Vec<LineHit>)> = found
+        .hits
+        .iter()
+        .filter(|(path, _)| !excluded_files.contains(*path))
+        .filter(|(_, hits)| plan.required.iter().all(|&i| hits.iter().any(|hit| matches_text(&matchers[i], &hit.text))))
+        .collect();
+    // Files are analyzed on separate threads, but each result is kept in path order, so the output never depends on
+    // which thread finished first.
+    let ctx = FileContext { registry, plan: &plan, matchers: &matchers, language, allow_tests };
+    let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = survivors
+        .into_par_iter()
+        .map(|(path, hits)| {
+            let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
+            retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
+            (blocks, file_diagnostics)
+        })
+        .collect();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (blocks, file_diagnostics) in per_file {
+        candidates.extend(blocks);
+        diagnostics.extend(file_diagnostics);
     }
 
     let bm25_terms = bm25_terms(&plan);

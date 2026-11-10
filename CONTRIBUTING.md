@@ -26,7 +26,8 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just mutants` | Mutation testing, on demand only |
 | `just changeset <bump> "<summary>"` | Record a pending change for the next release (Callisto) |
 | `just changesets` | Check Callisto config and pending changesets |
-| `just rg-compare [--terms N] [--min-recall R]` | Whether `monokl search` puts a symbol's declaration in the top files, and how much output it costs against `rg -n`, on pinned public repos, plus 18 multi-word questions with known answers (`scripts/rg-compare.questions`, gated by `--min-question-recall`) (on demand, needs network) |
+| `just bench [--repo NAME] [--json PATH]` | p50/p95 wall time, peak RSS and output bytes of `monokl search` against `rg` for six query classes on pinned repos (one large) plus a synthetic stress set; warm cache only, no gates (on demand, needs network) |
+| `just rg-compare [--terms N] [--min-recall R]` | Whether `monokl search` puts a symbol's declaration in the top files, and how much output it costs against `rg -n`, on pinned public repos, plus 18 multi-word questions with known answers (`scripts/rg-compare.questions`, gated by `--min-question-recall`), and Rust rows on pinned `fd` (24 pooled, gated by `--min-rust-recall`, 0 until the Rust analyzer ships) (on demand, needs network) |
 | `just verify-release <version>` | Check a published release: tag, assets, crates.io, attestation, binary |
 
 ## Where things stand
