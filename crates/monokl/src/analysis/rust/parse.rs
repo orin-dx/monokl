@@ -153,7 +153,7 @@ struct Holder {
 struct Declared<'a> {
     node: &'a SyntaxNode,
     kind: SymbolKind,
-    /// `None` when the parse recovered the item without a name.
+    /// `None` for an item that has no name (a macro call, an `extern` block) or that the parse recovered without one.
     name: Option<&'a str>,
     visibility: Option<ast::Visibility>,
 }
@@ -252,7 +252,7 @@ impl Walker<'_> {
     }
 
     /// Records one item: its symbol unless it is test code, and its block, with attributes and doc comments, under the
-    /// full profile. `name` is `None` when the parse recovered the item without one, which leaves it without a symbol.
+    /// full profile. `name` is `None` for an item without one, which leaves it without a symbol.
     fn record(&mut self, declared: &Declared<'_>, holder: Option<&Holder>, in_test: bool) {
         let Declared { node, kind, name, ref visibility } = *declared;
         let signature = self.signature(node);
@@ -315,6 +315,7 @@ impl Walker<'_> {
                         | SyntaxKind::VARIANT_LIST
                         | SyntaxKind::ASSOC_ITEM_LIST
                         | SyntaxKind::ITEM_LIST
+                        | SyntaxKind::EXTERN_ITEM_LIST
                         | SyntaxKind::TOKEN_TREE
                 ),
                 NodeOrToken::Token(_) => kind == SyntaxKind::EQ,
@@ -340,7 +341,7 @@ impl Walker<'_> {
     }
 }
 
-/// The kind and name of the block an item makes, or `None` for an item that is not one. The name is `None` when the
+/// parse recovered the item without one or the item has none (a macro call, an `extern` block).
 /// parse recovered the item without one.
 fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
     let named = |name: Option<ast::Name>| name.map(|name| name.text().to_owned());
@@ -368,11 +369,11 @@ fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
             };
             (SymbolKind::Impl, name)
         }
-        ast::Item::AsmExpr(_)
-        | ast::Item::ExternBlock(_)
-        | ast::Item::ExternCrate(_)
-        | ast::Item::MacroCall(_)
-        | ast::Item::Use(_) => return None,
+        // These declare no name of their own, but what they hold (`thread_local!`'s statics, an `extern` block's
+        // functions) is searchable only through a block.
+        ast::Item::MacroCall(_) => (SymbolKind::Macro, None),
+        ast::Item::ExternBlock(_) => (SymbolKind::Other, None),
+        ast::Item::AsmExpr(_) | ast::Item::ExternCrate(_) | ast::Item::Use(_) => return None,
     })
 }
 

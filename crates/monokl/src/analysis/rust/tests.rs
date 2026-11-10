@@ -303,9 +303,43 @@ fn a_module_declared_in_another_file_has_no_block() {
 }
 
 #[test]
-fn use_declarations_and_macro_calls_are_not_blocks() {
-    let analysis = analyze_source("use std::fmt;\nextern crate core;\nthread_local! {\n    static X: u8 = 1;\n}\n");
+fn use_and_extern_crate_declarations_are_not_blocks() {
+    let analysis = analyze_source("use std::fmt;\nextern crate core;\n");
     assert_eq!(rows(&analysis.blocks), []);
+    assert_eq!(analysis.symbols.len(), 0);
+}
+
+#[test]
+fn item_macro_calls_and_extern_blocks_are_blocks_without_symbols() {
+    let analysis = analyze_source(
+        "thread_local! {\n    static X: u8 = 1;\n}\n\nlazy_static::lazy_static! {\n    static ref Y: u8 = 2;\n}\n\nextern \"C\" {\n    fn ffi(x: u32) -> u32;\n}\n\n#[cfg(test)]\nfixtures! {\n    a\n}\n",
+    );
+    assert_eq!(
+        rows(&analysis.blocks),
+        [
+            (1, 3, SymbolKind::Macro, "thread_local!", None),
+            (5, 7, SymbolKind::Macro, "lazy_static::lazy_static!", None),
+            (9, 11, SymbolKind::Other, "extern \"C\"", None),
+        ]
+    );
+    assert_eq!(rows(&analysis.test_blocks), [(13, 16, SymbolKind::Macro, "fixtures!", None)]);
+    assert_eq!(analysis.symbols.len(), 0);
+}
+
+#[test]
+fn a_search_finds_a_name_declared_inside_an_item_macro_or_extern_block() {
+    let (_dir, root) = tree(&[(
+        "m.rs",
+        "thread_local! {\n    static TL_FROB: u32 = 1;\n}\n\nextern \"C\" {\n    fn ffi_decl_word(x: u32) -> u32;\n}\n",
+    )]);
+    assert_eq!(
+        found(&find(&root, "TL_FROB", false, None), &root),
+        [("m.rs".to_owned(), 1, 3, SymbolKind::Macro, None, vec![2])]
+    );
+    assert_eq!(
+        found(&find(&root, "ffi_decl_word", false, None), &root),
+        [("m.rs".to_owned(), 5, 7, SymbolKind::Other, None, vec![6])]
+    );
 }
 
 const TESTS: &str = "\

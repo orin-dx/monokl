@@ -89,7 +89,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | `--max-results N` | 50 | Most results to print |
 | `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
 | `--max-bytes N` | 2 MiB | Most bytes across the printed rows. Counts the rows as printed, not the code blocks behind them |
-| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust items under `#[cfg(test)]` or `#[test]` |
+| `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust files named `tests.rs`, `test.rs`, `*_tests.rs` or `*_test.rs` (the usual out-of-line `mod tests;`) and Rust items under `#[cfg(test)]` or `#[test]` |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
 | `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted but matches nothing yet) |
 
@@ -104,7 +104,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | Language | Status |
 | --- | --- |
 | TypeScript, JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`; not `.d.ts`) | Search works today |
-| Rust (`.rs`) | Search works today. Functions, structs, unions, enums, traits, type aliases, consts and statics, `macro_rules!` macros and inline modules are blocks, as are `impl` blocks and the methods in them and in traits (when 3 lines or more); modules declared in another file and `use` declarations are not |
+| Rust (`.rs`) | Search works today. Functions, structs, unions, enums, traits, type aliases, consts and statics, `macro_rules!` macros and inline modules are blocks, as are `impl` blocks and the methods in them and in traits (when 3 lines or more), item-position macro calls (`thread_local! { ... }`, `lazy_static! { ... }`) and `extern` blocks; modules declared in another file, `use` declarations and `extern crate` are not |
 | Python, Go, Java | Designed, not built |
 
 ## Why
