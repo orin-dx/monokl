@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M734RTR5E8EHKRS5A2JX544R",
+  "strategy": "manual-commit",
+  "branch": "perf/dedup-blocks",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".changeset/dedup-blocks-per-file.md",
+    "crates/monokl/src/dedup.rs",
+    "crates/monokl/src/dedup/proptests.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 13512,
+    "cache_read_tokens": 1670940,
+    "output_tokens": 3337,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 14,
+      "cache_creation_tokens": 60574,
+      "cache_read_tokens": 532944,
+      "output_tokens": 2416,
+      "api_call_count": 7
+    }
+  },
+  "redaction": {
+    "replacements": 98,
+    "layers": {
+      "betterleaks": 10,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
