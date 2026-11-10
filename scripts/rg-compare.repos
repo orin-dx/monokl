@@ -5,3 +5,9 @@ zustand https://github.com/pmndrs/zustand.git 9fed2eb2f3af672da9f7bf694b996df383
 zod https://github.com/colinhacks/zod.git b500a2ee95134f81d74da7911d7378dd2853d042
 axios https://github.com/axios/axios.git aa54a5e1e0e50cd1a2561b854ae5490ff589d065
 fd https://github.com/sharkdp/fd.git b2a287b3993768e0ec52f0852916917f23fb2a38 rust
+# Held-out repositories: the sixth column is `held-out` (the fifth is the language). They are never sampled for the
+# identifier gate and no ranking change was tuned against them. Their questions are scored apart; see
+# rg-compare.questions. fastify is v5.12.8, trpc is v11.28.0, date-fns is v4.4.0.
+fastify https://github.com/fastify/fastify.git 0c7413a8332a7892e12dcc351c27a190fefc0053 ts held-out
+trpc https://github.com/trpc/trpc.git 705f8e44c84aab8420a1d16ea2705557566878c7 ts held-out
+date-fns https://github.com/date-fns/date-fns.git cd53d2538cfa318404eff7ade6449b49bf34562e ts held-out

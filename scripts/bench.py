@@ -24,6 +24,7 @@ import os
 import re
 import signal
 import statistics
+import importlib.util
 import subprocess
 import sys
 import time
@@ -32,6 +33,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "bench.repos"
 CACHE = ROOT / "target" / "bench"
+# rg-compare.py holds the mirror of monokl's test-path rule; its file name has a hyphen, so load it by path.
+_spec = importlib.util.spec_from_file_location("rg_compare", ROOT / "scripts" / "rg-compare.py")
+RG_COMPARE = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(RG_COMPARE)
 TIMEOUT_S = 60
 NO_MATCH = "zqxjvkwpnomatchzz"
 DARWIN = sys.platform == "darwin"
@@ -80,10 +85,17 @@ def glob_args(globs):
     return [arg for glob in globs for arg in ("--glob", glob)]
 
 
-def sample_terms(path, count, globs, declaration):
-    args = ["rg", "--no-filename", "--only-matching", "--no-line-number", "--replace", "$1", *glob_args(globs)]
+def sample_terms(path, count, globs, declaration, language):
+    """Declared names from files monokl searches: test paths are skipped, and declaration files are not globbed."""
+    args = ["rg", "--with-filename", "--only-matching", "--no-line-number", "--replace", "$1", *glob_args(globs)]
     out = run([*args, "-e", declaration + r"([A-Za-z_][A-Za-z0-9_]{3,})", "."], cwd=path, check=False).stdout
-    names = sorted(set(out.split()) - {"tests"})
+    lang = RG_COMPARE.LANGS[language]
+    names = set()
+    for line in out.splitlines():
+        file, _, name = line.rpartition(":")
+        if not RG_COMPARE.is_test_path(file.removeprefix("./"), lang):
+            names.add(name)
+    names = sorted(names - {"tests"})
     if len(names) <= count:
         return names
     step = len(names) / count
@@ -100,7 +112,7 @@ def declaring_dir(term, path, globs, declaration):
 def queries(path, language):
     """The six query classes as (class, monokl args, rg argv), all relative to `path`, and the chosen terms."""
     globs, declaration, broad = LANGS[language]
-    terms = sample_terms(path, 7, globs, declaration)
+    terms = sample_terms(path, 7, globs, declaration, language)
     if len(terms) < 6:
         sys.exit(f"{path}: fewer than 6 declared identifiers to sample")
     ident = terms[3]

@@ -1,4 +1,8 @@
-# repo | question words | answer file | answer symbol
+# Held-out policy: ranking changes may be tuned on the tuned rows (every row without `held_out`) but must be reported on
+# the held-out rows (fastify, trpc, date-fns), which nobody tuned against. A held-out miss is never fixed by editing its
+# question, symbol or file; the row stays as written and the miss is the result. A held-out question may be dropped only
+# before its first scored run, when it is genuinely ambiguous.
+# repo | question words | answer file | answer symbol | optional `held_out`
 # Each answer is the file and top-level declaration a maintainer would point to for the question, found with rg at the
 # sha pinned in rg-compare.repos. The script re-checks the declaration exists with rg, so a stale row fails loudly.
 zustand | persist storage | src/middleware/persist.ts | createJSONStorage
@@ -52,3 +56,44 @@ fd | size filter within | src/filter/size.rs | member:is_within
 fd | directory entry stripped path | src/dir_entry.rs | member:stripped_path
 fd | owner filter from string | src/filter/owner.rs | member:from_string
 fd | file types should ignore | src/filetypes.rs | member:should_ignore
+
+# Held-out rows. Written from each repository's README, docs headings and source before monokl was run on them.
+# fastify (JavaScript, function-style modules; members are the three classes with methods)
+fastify | request trust proxy | lib/request.js | getTrustProxyFn | held_out
+fastify | add content type parser | lib/content-type-parser.js | addContentTypeParser | held_out
+fastify | plugin version check | lib/plugin-utils.js | checkVersion | held_out
+fastify | request id generator | lib/req-id-gen-factory.js | reqIdGenFactory | held_out
+fastify | set error status code | lib/error-status.js | setErrorStatusCode | held_out
+fastify | initial config validation | lib/initial-config-validation.js | validateInitialConfig | held_out
+fastify | send web stream | lib/reply.js | sendWebStream | held_out
+fastify | default client error handler | fastify.js | defaultClientErrorHandler | held_out
+fastify | incoming request log | lib/log-controller.js | member:incomingRequest | held_out
+fastify | log route not found | lib/log-controller.js | member:routeNotFound | held_out
+fastify | log stream error | lib/log-controller.js | member:streamError | held_out
+fastify | setup serializer | lib/schema-controller.js | member:setupSerializer | held_out
+fastify | get validator builder | lib/schema-controller.js | member:getValidatorBuilder | held_out
+fastify | log disabled request | lib/log-controller.js | member:isLogDisabled | held_out
+# trpc (TypeScript monorepo)
+trpc | create router factory | packages/server/src/unstable-core-do-not-import/router.ts | createRouterFactory | held_out
+trpc | merge routers | packages/server/src/unstable-core-do-not-import/router.ts | mergeRouters | held_out
+trpc | sse stream producer | packages/server/src/unstable-core-do-not-import/stream/sse.ts | sseStreamProducer | held_out
+trpc | http status code error | packages/server/src/unstable-core-do-not-import/http/getHTTPStatusCode.ts | getHTTPStatusCodeFromError | held_out
+trpc | form data object | packages/server/src/unstable-core-do-not-import/http/formDataToObject.ts | formDataToObject | held_out
+trpc | merge async iterables | packages/server/src/unstable-core-do-not-import/stream/utils/mergeAsyncIterables.ts | mergeAsyncIterables | held_out
+trpc | batch link http | packages/client/src/links/httpBatchLink.ts | httpBatchLink | held_out
+trpc | create websocket client | packages/client/src/links/wsLink/createWsClient.ts | createWSClient | held_out
+trpc | client mutation request | packages/client/src/internals/TRPCUntypedClient.ts | member:mutation | held_out
+trpc | request as promise | packages/client/src/internals/TRPCUntypedClient.ts | member:requestAsPromise | held_out
+trpc | websocket reconnect closed | packages/client/src/links/wsLink/wsClient/wsClient.ts | member:reconnect | held_out
+trpc | fail pending requests | packages/client/src/links/wsLink/wsClient/wsClient.ts | member:failPendingRequests | held_out
+trpc | handle response message | packages/client/src/links/wsLink/wsClient/wsClient.ts | member:handleResponseMessage | held_out
+trpc | stop subscription | packages/client/src/links/wsLink/wsClient/wsClient.ts | member:stopSubscription | held_out
+# date-fns (many small single-function modules; no classes, so no member rows)
+date-fns | add business days | pkgs/core/src/addBusinessDays/index.ts | addBusinessDays | held_out
+date-fns | iso week number | pkgs/core/src/getISOWeek/index.ts | getISOWeek | held_out
+date-fns | difference calendar days | pkgs/core/src/differenceInCalendarDays/index.ts | differenceInCalendarDays | held_out
+date-fns | format distance strict | pkgs/core/src/formatDistanceStrict/index.ts | formatDistanceStrict | held_out
+date-fns | format relative date | pkgs/core/src/formatRelative/index.ts | formatRelative | held_out
+date-fns | parse iso string | pkgs/core/src/parseISO/index.ts | parseISO | held_out
+date-fns | intervals overlapping | pkgs/core/src/areIntervalsOverlapping/index.ts | areIntervalsOverlapping | held_out
+date-fns | start of week year | pkgs/core/src/startOfWeekYear/index.ts | startOfWeekYear | held_out
