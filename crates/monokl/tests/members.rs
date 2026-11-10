@@ -279,7 +279,7 @@ fn a_query_naming_one_object_method_returns_that_method_alone_with_its_object() 
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "loadUser"),
-        table(&["  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",null,1,2.307646"])
+        table(&["  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",null,1,4.922939"])
     );
 }
 
@@ -288,7 +288,7 @@ fn an_arrow_function_property_of_an_object_is_a_row_of_its_own() {
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "saveUser"),
-        table(&["  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",null,1,2.003261"])
+        table(&["  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",null,1,4.009783"])
     );
 }
 
@@ -297,7 +297,7 @@ fn an_object_getter_is_a_method_row() {
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "label"),
-        table(&["  src/api.ts,9,11,method,variable api,\"get label(): string\",null,1,1.575364"])
+        table(&["  src/api.ts,9,11,method,variable api,\"get label(): string\",null,1,2.726091"])
     );
 }
 
@@ -306,7 +306,7 @@ fn a_query_naming_the_object_returns_the_object_alone() {
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "api"),
-        table(&["  src/api.ts,1,13,variable,null,null,\"1: export const api = {\",1,1.31645"])
+        table(&["  src/api.ts,1,13,variable,null,null,\"1: export const api = {\",1,1.949351"])
     );
 }
 
