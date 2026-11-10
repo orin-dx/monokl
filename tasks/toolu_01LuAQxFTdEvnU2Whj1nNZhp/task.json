@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LuAQxFTdEvnU2Whj1nNZhp",
+  "agent_id": "a70a221210f98dd22",
+  "subagent_type": "general-purpose",
+  "task_description": "Diagnose slow path-restricted search",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 62777,
+    "cache_read_tokens": 1865659,
+    "output_tokens": 8999,
+    "api_call_count": 27
+  },
+  "started_at": "2026-11-10T10:28:21.413522-08:00",
+  "completed_at": "2026-11-10T10:31:57.054837-08:00"
+}

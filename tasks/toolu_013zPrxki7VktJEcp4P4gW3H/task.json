@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_013zPrxki7VktJEcp4P4gW3H",
+  "agent_id": "a79e48cab9fce7ba4",
+  "subagent_type": "general-purpose",
+  "task_description": "Build a performance benchmark harness",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 99760,
+    "cache_read_tokens": 2281083,
+    "output_tokens": 19085,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-10T10:18:37.931194-08:00",
+  "completed_at": "2026-11-10T10:27:03.857076-08:00"
+}

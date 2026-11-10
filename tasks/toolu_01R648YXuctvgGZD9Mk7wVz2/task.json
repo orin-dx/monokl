@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01R648YXuctvgGZD9Mk7wVz2",
+  "agent_id": "a76902c84260a97ef",
+  "subagent_type": "general-purpose",
+  "task_description": "Performance architecture risk review",
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 146451,
+    "cache_read_tokens": 6986674,
+    "output_tokens": 28699,
+    "api_call_count": 63
+  },
+  "started_at": "2026-11-10T10:18:37.79139-08:00",
+  "completed_at": "2026-11-10T10:27:41.691447-08:00"
+}
