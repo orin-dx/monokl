@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01B5uhNA2hjQSowSBXQafUBp",
+  "agent_id": "a74555b2e49c92733",
+  "subagent_type": "general-purpose",
+  "task_description": "Write the performance architecture ADR",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 46700,
+    "cache_read_tokens": 1086600,
+    "output_tokens": 4578,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-10T11:29:56.107246-08:00",
+  "completed_at": "2026-11-10T11:31:33.802751-08:00"
+}
