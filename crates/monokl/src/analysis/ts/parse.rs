@@ -547,10 +547,15 @@ fn statement_kind(statement: &Statement<'_>) -> Option<SymbolKind> {
         Statement::ExportDeclaration(export) => {
             Some(declaration_kind(&export.declaration).unwrap_or(SymbolKind::Other))
         }
+        Statement::ExportDefaultDeclaration(export) => Some(match &export.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(_) => SymbolKind::Function,
+            ExportDefaultDeclarationKind::ClassDeclaration(_) => SymbolKind::Class,
+            ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => SymbolKind::Interface,
+            _ => SymbolKind::Other,
+        }),
         Statement::ImportDeclaration(_)
         | Statement::ExportNamedDeclaration(_)
         | Statement::ExportFromDeclaration(_)
-        | Statement::ExportDefaultDeclaration(_)
         | Statement::ExportAllDeclaration(_) => Some(SymbolKind::Other),
         _ => None,
     }
