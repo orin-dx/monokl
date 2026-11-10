@@ -16,18 +16,18 @@ Two categories of work:
 
 1. **TypeScript signature normalization for variable-bound callables.** Arrow functions, function expressions, and call-wrapped React exports assigned to a `const` now produce normalized multi-line signatures instead of `None`.
 
-2. **Rust AST-based symbol extraction.** When `lang-rs` is enabled, `extract_symbols` uses the `ra-ap-syntax` parse tree instead of the line scanner. The AST version adds normalized signatures, correct visibility, `impl_owner`, and `trait_impl` fields.
+2. **Rust AST-based symbol extraction.** When `lang-rust` is enabled, `extract_symbols` uses the `ra-ap-syntax` parse tree instead of the line scanner. The AST version adds normalized signatures, correct visibility, `impl_owner`, and `trait_impl` fields.
 
 ---
 
-## 1. Rust: AST-based `extract_symbols` (`#[cfg(feature = "lang-rs")]`)
+## 1. Rust: AST-based `extract_symbols` (`#[cfg(feature = "lang-rust")]`)
 
 ### What changed
 
-The `#[cfg(not(feature = "lang-rs"))]` line scanner (Part 3 §4) is now the fallback only. When parser support is compiled in, a parallel function takes the already-parsed `SourceFile` tree produced by `parse_with_profile`:
+The `#[cfg(not(feature = "lang-rust"))]` line scanner (Part 3 §4) is now the fallback only. When parser support is compiled in, a parallel function takes the already-parsed `SourceFile` tree produced by `parse_with_profile`:
 
 ```rust
-#[cfg(feature = "lang-rs")]
+#[cfg(feature = "lang-rust")]
 fn extract_symbols(source: &str, tree: &SourceFile) -> Vec<SymbolEntry> {
     let mut symbols = Vec::new();
     for item in tree.items() {
@@ -90,7 +90,7 @@ All others (`"rust-struct"`, `"rust-enum"`, `"rust-trait"`, `"rust-function"`, `
 ### Tests added
 
 ```rust
-#[cfg(feature = "lang-rs")]
+#[cfg(feature = "lang-rust")]
 #[test]
 fn rust_ast_symbols_include_signatures_impl_owner_and_trait_impl() {
     // Source: pub(crate) struct Widget<T>, pub trait Render,
