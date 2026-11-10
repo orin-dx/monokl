@@ -384,4 +384,26 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Decision.** A question row whose symbol cell is `member:name` names a method, constructor, accessor or arrow-function property declared on an indented line inside a class. The script re-checks that line with `rg` and scores these rows apart from the top-level questions. A hit needs the answer file in the first `--top` files and the member's declaration line in the output. The gate is `--min-member-recall`, default 0.125 (2 of the 16 current rows).
 - **Why.** Top-level questions cannot show whether member blocks help. A separate score keeps the top-level gate unmoved by a change to members, and lets that change be measured against its own rows.
 - **Rows.** Eight in zod and eight in axios. zustand has no classes at the pinned sha, so it has none.
-- **Open.** The member gate is a floor, not a target; raise it when members become blocks of their own.
+- **Open.** The member gate is a floor, not a target; raise it when members become blocks of their own. Closed in §33.
+
+## 31. Members are blocks of their own (2026-11-10)
+
+- **Decision.** A class method, constructor, getter or setter, a class property holding an arrow or function expression, and the same kinds of member in a top-level or exported `const`/`let`/`var` object literal or `export default { ... }`, get a block next to the block that holds them when they span three or more lines. A new `parent` column after `nodeKind` names the holder (`class Foo`, `variable api`); `CodeBlock.parent` carries it and ranking copies it into `RankedBlock.parent_context`.
+- **Why.** A query naming a method returned the whole class, so the row neither named nor ranked the member. On the pinned repositories the member questions went from 2 of 16 to 15 of 16 with the declaration line in the output.
+- **A match goes to one place.** A hit goes to the innermost block whose own text on that line matches, and to every block on the line when none matches, so a match is never lost. A holder keeps only the hits outside its members and is dropped when it has none. Rejected: giving the hit to the smallest block by line range, which credited a member that only shared the line (`} b() {`, `}, // note`) and lost `const needle` in `const a = 1; const needle = 2;`.
+- **Dedup.** A member is exempt only against the holder that strictly encloses it; same-level overlap behaves as before.
+- **Not split.** Interface and type members, hooks, members of anonymous classes, `module.exports = { ... }`, nested functions and nested object literals, and members under three lines (found through their holder).
+- **Open.** Hooks inside components. The parent of an object member renders as `variable api` because there is no object symbol kind.
+
+## 32. A block whose declared name holds the query words ranks higher (2026-11-10)
+
+- **Decision.** `final_score = round6(bm25 * name * ntype + coverage)`, where `name = 1 + 2 * (query terms found in the declared name / query terms)`. The declared name is the signature, or the first line that is not a comment or decorator, cut at `(`, `<`, `{`, `=` or `:`.
+- **Why.** `toJSONSchema` and `safeParse` lost to blocks that repeat a common word. With the bonus, on main, the multi-word questions score 17 of 18 (was 14) and identifier hit@3 58 of 59 (was 56), with output size unchanged.
+- **Rejected.** A file-stem bonus alone: it scored 17 of 18 questions but cost member questions (12 of 16). Name plus stem: no gain over name alone.
+- **Open.** `export default function X` is classified `other` (weight 0.7), not `function`, which keeps `buildFullPath` and `dispatchRequest` lower than they should be. That is an analyzer defect, not a ranking one.
+
+## 33. The harness gates follow the measured numbers (2026-11-10)
+
+- **Decision.** The defaults are `--min-recall 0.95`, `--min-question-recall 0.9` and `--min-member-recall 0.9`, against 58 of 59 (98.3%), 17 of 18 (94.4%) and 15 of 16 (93.8%) on main. One more miss in any set fails the run.
+- **Why.** The old floors (0.9, 0.75, 0.125) were set from the first baselines and sat far below what main now scores, so a regression could pass.
+- **Open.** The floors are a ratchet: raise them with the numbers, never lower them to make a change pass.
