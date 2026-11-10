@@ -38,7 +38,8 @@ Stages that violate a rule today are follow-up work, not done:
 - Rule 2: size is not checked before reading, so memory still grows with bytes.
 - Rule 3: there is no `--timeout`, so no deadline.
 - Rule 4: the per-file dedup fix removed the known quadratic step, but the CI scaling test is follow-up work.
-- Rules 5 and 6 are what the batch fold and the language filter before reading already do.
+- Rule 5 is what the ordered batch fold already does.
+- Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
 
 The trade-off: a stateless search pays the cold cost on every run, and the bounds reject or skip some inputs (deeply nested or oversized files) that analysis would otherwise attempt. Each skip is reported, not silent.
 
