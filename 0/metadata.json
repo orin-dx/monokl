@@ -1,0 +1,151 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M73C4CD2KB7JCZTX1C2YD9PY",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-10T18:39:49.4068Z",
+  "branch": "perf/filter-by-language-before-reading",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "1ea08b8a1f36",
+  "checkpoint_transcript_start": 23144,
+  "transcript_lines_at_start": 23144,
+  "compact_transcript_start": 1615,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 154,
+      "cache_creation_tokens": 107092,
+      "cache_read_tokens": 9146199,
+      "output_tokens": 40788,
+      "api_call_count": 77
+    }
+  },
+  "redaction": {
+    "replacements": 98,
+    "layers": {
+      "betterleaks": 10,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 106
+  },
+  "summary": {
+    "intent": "Evaluate whether a two-phase search analysis (cheap file score first, then analyze only the top K files) could speed up monokl's search pipeline without changing result quality, via a prototype on an experiment branch delegated to a subagent.",
+    "outcome": "The subagent's prototype failed its gates: top-50 rows changed on broad queries (rank 1 included) and speedup was under 2x at best. Nothing was pushed and no PR was made; the prototype remains uncommitted in a worktree.",
+    "learnings": {
+      "repo": [
+        "Text search and the file walk dominate latency in monokl, not parsing; `rg` alone takes about 364 ms on the 20k-file set.",
+        "The quality harness `rg-compare.py` is weak evidence for batching because most of its queries have fewer than 100 eligible files and never reach the batching path.",
+        "The harness scores fd at 0 because this main branch has no Rust analyzer.",
+        "BM25 statistics and name boosts depend on the analyzed set, so a safe bound on the remaining files' scores cannot be computed cheaply.",
+        "The prototype added the knobs `MONOKL_FIRST_BATCH` (`all` or a number, sets K) and `MONOKL_TRACE` (prints files analyzed vs eligible), plus a debug env var `MONOKL_DEBUG_ORDER`."
+      ],
+      "code": [
+        {
+          "path": "crates/monokl/src/pipeline/mod.rs",
+          "finding": "File modified by the two-phase search prototype; changes are uncommitted on `experiment/two-phase-search` and include the `MONOKL_DEBUG_ORDER` debug env var that must be removed if the work is kept."
+        }
+      ],
+      "workflow": [
+        "Subagent results are reported as hand-back text and carry no user authority; they should be treated as information, not approval.",
+        "Measure speedups with a release build and the median of many runs (15 here), and compare top-N row identity across K values, not just aggregate quality metrics.",
+        "Isolating experiments in an agent worktree on an experiment branch keeps failed prototypes out of main."
+      ]
+    },
+    "friction": [
+      "The harness has weak coverage for the batching path because most queries have fewer than 100 eligible files.",
+      "K=100 truncation changed top-10 results for 11 of 25 truncated queries on zustand/zod/axios and rank 1 for 4 of 30 queries on the TypeScript repo.",
+      "Speedups were inconsistent: some cases slowed down (zod `type` 0.88x, axios `string` 0.91x).",
+      "A declaration-line signal in the phase-1 score reduced top-10 misses from 4 to 2 of 25 queries but did not fully fix the problem.",
+      "`just ci` was not run on the prototype."
+    ],
+    "open_items": [
+      "Decide whether to discard the `experiment/two-phase-search` worktree or keep it; if kept, remove the `MONOKL_DEBUG_ORDER` env var.",
+      "Record the decision-log bullets: two-phase analysis rejected, text search bounds latency, and no cheap safe bound exists on remaining files.",
+      "Consider targeting text search and the file walk for future latency work instead of analysis batching.",
+      "Optionally extend the quality harness with queries that have more than 100 eligible files so batching is actually exercised."
+    ]
+  }
+}
