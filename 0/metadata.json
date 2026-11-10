@@ -1,0 +1,143 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M73FBEDBJ9X0W8A78PT1A1CP",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-10T19:36:03.714894Z",
+  "branch": "eval/held-out",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "5d335b52daa1",
+  "checkpoint_transcript_start": 23607,
+  "transcript_lines_at_start": 23607,
+  "compact_transcript_start": 1647,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 499,
+    "cache_read_tokens": 1411500,
+    "output_tokens": 653,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 12,
+      "cache_creation_tokens": 8220,
+      "cache_read_tokens": 660033,
+      "output_tokens": 2710,
+      "api_call_count": 6
+    }
+  },
+  "redaction": {
+    "replacements": 102,
+    "layers": {
+      "betterleaks": 14,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 112
+  },
+  "summary": {
+    "intent": "Write and publish an ADR (0004) recording the decision to keep search stateless with bounded work per stage, including rejected alternatives and the benchmark data behind them.",
+    "outcome": "ADR 0004 was pushed (without force) as PR #80, ready for review; `just typos` and `just check-drift` pass and CI is pending. An overclaim about rule 6 was caught and corrected so the ADR states rule 5 holds today and rule 6 holds only once #79 merges.",
+    "learnings": {
+      "repo": [
+        "Repo uses `just typos` and `just check-drift` as pre-push checks for docs/ADRs.",
+        "ADR 0004 defines bounded-work rules: 1) parse stacks bounded by nesting, 2) file size checked before reading, 3) `--timeout`, 4) dedup without quadratic steps with a CI scaling test, 5) ordered batch fold, 6) a file no analyzer owns is never opened.",
+        "Rule 5 is satisfied on main today; rule 6 depends on PR #79 merging.",
+        "Two-phase search was rejected: top-50 rows changed on 20 of 181 queries (including rank 1) and speedups were inconsistent (1.25x, 0.88x, 0.91x, 1.04x, 1.7x).",
+        "On-disk cache only helps warm repeats; a daemon is not needed at current performance numbers."
+      ],
+      "code": [],
+      "workflow": [
+        "Verify claims in docs against what is actually on main versus pending PRs; an agent-written ADR overclaimed that rule 6 was already met.",
+        "Push doc fixes without force to preserve PR history.",
+        "Record rejected alternatives with measured numbers in ADRs so decisions are defensible."
+      ]
+    },
+    "friction": [
+      "The drafting agent overstated the current state of rule 6, requiring a correction pass before the ADR was accurate."
+    ],
+    "open_items": [
+      "Rule 1: TypeScript and Rust parse stacks still scale with input; no nesting pre-scan exists.",
+      "Rule 2: file size is not checked before reading, so memory grows with bytes.",
+      "Rule 3: no `--timeout` exists.",
+      "Rule 4: dedup fix removed the quadratic step, but the CI scaling test is still to do.",
+      "Held-out question set agent is still running.",
+      "After #77 and #79 merge, start the bounded-work PRs in rule order.",
+      "CI for #80 is pending."
+    ]
+  }
+}
