@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M7389G9Y4XT5GA0X8GFCC5Z4",
+  "strategy": "manual-commit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/monokl/Cargo.toml",
+    "crates/monokl/src/text_search.rs",
+    "crates/monokl/tests/text_search_memory.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 10998,
+    "cache_read_tokens": 1782910,
+    "output_tokens": 2934,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 92,
+      "cache_creation_tokens": 153504,
+      "cache_read_tokens": 4563511,
+      "output_tokens": 37403,
+      "api_call_count": 49
+    }
+  },
+  "redaction": {
+    "replacements": 98,
+    "layers": {
+      "betterleaks": 10,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
