@@ -1,0 +1,7 @@
+# name url sha [language]  (release tags, pinned by commit so runs are reproducible; same format as rg-compare.repos)
+# typescript is the large repository: v5.9.3, several thousand source files. fd is v10.5.2.
+zustand https://github.com/pmndrs/zustand.git 9fed2eb2f3af672da9f7bf694b996df3831fc207
+zod https://github.com/colinhacks/zod.git b500a2ee95134f81d74da7911d7378dd2853d042
+axios https://github.com/axios/axios.git aa54a5e1e0e50cd1a2561b854ae5490ff589d065
+typescript https://github.com/microsoft/TypeScript.git c63de15a992d37f0d6cec03ac7631872838602cb
+fd https://github.com/sharkdp/fd.git b2a287b3993768e0ec52f0852916917f23fb2a38 rust

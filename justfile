@@ -99,6 +99,11 @@ rg-compare *args:
     cargo build --release -q
     python3 -I scripts/rg-compare.py {{ args }}
 
+# Time and peak memory of `monokl search` against ripgrep on pinned repos and a stress set. Warm cache; needs network and `rg`; on demand.
+bench *args:
+    cargo build --release -q
+    python3 -I scripts/bench.py {{ args }}
+
 # Mutation testing. Slow, so on demand only, not part of `just ci`.
 mutants:
     cargo mutants --workspace
