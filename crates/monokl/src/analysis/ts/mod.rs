@@ -486,11 +486,27 @@ export const y = 1;
                 (11, 13, SymbolKind::Enum, None),
                 (14, 14, SymbolKind::Variable, None),
                 (15, 15, SymbolKind::Function, Some("function g()")),
-                (16, 16, SymbolKind::Other, None),
+                (16, 16, SymbolKind::Function, None),
                 (17, 17, SymbolKind::Other, None),
                 (18, 18, SymbolKind::Variable, None),
             ]
         );
+    }
+
+    #[rstest]
+    #[case::function("export default function X() {}\n", SymbolKind::Function)]
+    #[case::async_function("export default async function X() {}\n", SymbolKind::Function)]
+    #[case::anonymous_function("export default function () {}\n", SymbolKind::Function)]
+    #[case::class("export default class X {}\n", SymbolKind::Class)]
+    #[case::anonymous_class("export default class {}\n", SymbolKind::Class)]
+    #[case::interface("export default interface X {}\n", SymbolKind::Interface)]
+    #[case::arrow("export default () => {};\n", SymbolKind::Other)]
+    #[case::identifier("export default X;\n", SymbolKind::Other)]
+    #[case::renamed_specifier("const x = 1;\nexport { x as default };\n", SymbolKind::Other)]
+    #[case::plain_function("export function X() {}\n", SymbolKind::Function)]
+    fn a_default_export_block_has_the_kind_of_what_it_declares(#[case] source: &str, #[case] kind: SymbolKind) {
+        let analysis = analyze_source("kind.ts", source, AnalysisProfile::Full);
+        assert_eq!(analysis.blocks.last().map(|b| b.node_kind), Some(kind));
     }
 
     #[test]
@@ -498,7 +514,7 @@ export const y = 1;
         let analysis = analyze_source("anon.ts", "export default function () {}\n", AnalysisProfile::Full);
         assert_eq!(symbols(&analysis), []);
         assert_eq!(exports(&analysis), [("default", 1, false)]);
-        assert_eq!(blocks(&analysis), [(1, 1, SymbolKind::Other, None)]);
+        assert_eq!(blocks(&analysis), [(1, 1, SymbolKind::Function, None)]);
     }
 
     type MemberBlock<'a> = (usize, usize, SymbolKind, Option<&'a str>, Option<(SymbolKind, &'a str, usize)>);
