@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(summary(&result.diagnostics), []);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "lang-ts"))]
     #[test]
     fn files_nothing_owns_are_never_opened() {
         use std::os::unix::fs::PermissionsExt;
