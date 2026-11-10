@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M7334S76XX63JA3N9VSS1KR1",
+  "strategy": "manual-commit",
+  "branch": "fix/object-member-scores",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/monokl/tests/members.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 534682,
+    "cache_read_tokens": 7324795,
+    "output_tokens": 9790,
+    "api_call_count": 16
+  },
+  "redaction": {
+    "replacements": 98,
+    "layers": {
+      "betterleaks": 10,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
