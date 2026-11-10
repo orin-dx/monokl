@@ -53,12 +53,13 @@ TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
 TEST_SUFFIXES = tuple(
     f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
 )
+RUST_TEST_SUFFIXES = ("/tests.rs", "/test.rs", "_tests.rs", "_test.rs")
 
 
 def is_test_path(relative):
     """Mirrors `is_test_path` in crates/monokl/src/text_search.rs; change both together."""
     path = "/" + relative
-    return any(d in path for d in TEST_DIRS) or path.endswith(TEST_SUFFIXES)
+    return any(d in path for d in TEST_DIRS) or path.endswith(TEST_SUFFIXES + RUST_TEST_SUFFIXES)
 
 
 def run(args, cwd=None, check=True):

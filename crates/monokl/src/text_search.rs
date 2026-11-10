@@ -445,6 +445,12 @@ fn is_test_path(relative: &Utf8Path) -> bool {
         || path.ends_with(".spec.cjs")
         || path.ends_with(".spec.mts")
         || path.ends_with(".spec.cts")
+        // The out-of-line `#[cfg(test)] mod tests;` of Rust: the attribute is in the parent file, so the file itself
+        // can only be recognized by its name.
+        || path.ends_with("/tests.rs")
+        || path.ends_with("/test.rs")
+        || path.ends_with("_tests.rs")
+        || path.ends_with("_test.rs")
 }
 
 #[cfg(test)]
@@ -1001,6 +1007,11 @@ mod tests {
     #[case("src/a.spec.cjs")]
     #[case("src/a.spec.mts")]
     #[case("src/a.spec.cts")]
+    #[case("tests.rs")]
+    #[case("src/analysis/rust/tests.rs")]
+    #[case("src/test.rs")]
+    #[case("src/cart_tests.rs")]
+    #[case("src/cart_test.rs")]
     fn test_paths_are_classified_as_tests(#[case] relative: &str) {
         assert!(is_test_path(Utf8Path::new(relative)));
     }
@@ -1018,6 +1029,10 @@ mod tests {
     #[case("Test/a.ts")]
     #[case("src/Spec/a.ts")]
     #[case("src/a.Test.ts")]
+    #[case("src/contests.rs")]
+    #[case("src/latest.rs")]
+    #[case("src/tests_helper.rs")]
+    #[case("src/tests.rs.bak")]
     fn other_paths_are_not_classified_as_tests(#[case] relative: &str) {
         assert!(!is_test_path(Utf8Path::new(relative)));
     }
