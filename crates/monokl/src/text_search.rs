@@ -9,6 +9,7 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
 use ignore::gitignore::Gitignore;
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::error::{MonoklError, Result};
@@ -122,11 +123,8 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
     // Passthru hands every line to the sink, so a CRLF line the matcher rejected because it saw the `\r` can still be
     // checked against its text without the terminator. BOM sniffing is off so a UTF-16 file's NUL bytes mark it binary
     // and a UTF-8 BOM stays in the first line's text instead of being decoded away.
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(b'\x00'))
-        .bom_sniffing(false)
-        .passthru(true)
-        .build();
+    let mut searcher_builder = SearcherBuilder::new();
+    searcher_builder.binary_detection(BinaryDetection::quit(b'\x00')).bom_sniffing(false).passthru(true);
     // The `ignore` crate's own parent support reads every ancestor up to `/`, so the walk covers the root and the
     // repository's parent files are applied by `ParentIgnores`. Global and `.git/info/exclude` rules stay off so the
     // same checkout gives the same result on every machine.
@@ -148,6 +146,7 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         });
     }
     let walk = builder.build();
+    let mut paths = Vec::new();
     for entry in walk {
         let entry = match entry {
             Ok(entry) => entry,
@@ -170,7 +169,22 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         if !opts.allow_tests && is_test_path(path.strip_prefix(root).unwrap_or(&path)) {
             continue;
         }
-        match search_file(&mut searcher, &matcher, &path) {
+        paths.push(path);
+    }
+    // Files are searched on separate threads and folded in walk order, so the result and the ceiling never depend on
+    // which thread finished first.
+    let outcomes: Vec<(Utf8PathBuf, FileOutcome)> = paths
+        .into_par_iter()
+        .map_init(
+            || searcher_builder.build(),
+            |searcher, path| {
+                let outcome = search_file(searcher, &matcher, &path);
+                (path, outcome)
+            },
+        )
+        .collect();
+    for (path, outcome) in outcomes {
+        match outcome {
             FileOutcome::Binary => {}
             FileOutcome::Unreadable => result.unreadable.push(path),
             FileOutcome::Lines(hits) => {
