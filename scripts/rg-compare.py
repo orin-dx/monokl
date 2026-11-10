@@ -226,10 +226,10 @@ def main():
     parser.add_argument("--repo", action="append", help="limit to a repository name from rg-compare.repos")
     parser.add_argument("--terms", type=int, default=25, help="identifiers sampled per repository")
     parser.add_argument("--top", type=int, default=3, help="a declaration must appear within this many files")
-    parser.add_argument("--min-recall", type=float, default=0.9, help="fail when the share of hits is lower")
-    parser.add_argument("--min-question-recall", type=float, default=0.75,
+    parser.add_argument("--min-recall", type=float, default=0.95, help="fail when the share of hits is lower")
+    parser.add_argument("--min-question-recall", type=float, default=0.9,
                         help="fail when the share of questions with the answer file in the top files is lower")
-    parser.add_argument("--min-member-recall", type=float, default=0.125,
+    parser.add_argument("--min-member-recall", type=float, default=0.9,
                         help="fail when the share of member questions with the answer file in the top files and the "
                              "member's declaration in the output is lower")
     parser.add_argument("--no-questions", action="store_true", help="skip the question set")
