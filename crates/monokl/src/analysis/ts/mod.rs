@@ -669,6 +669,158 @@ export class Ctl {
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
 
+    const OBJECT_WITH_MEMBERS: &str = "\
+export const api = {
+  version: 1,
+  async load(id: string): Promise<User> {
+    return get(id);
+  },
+  save: (user: User) => {
+    put(user);
+  },
+  fetch: async function (url: string) {
+    return url;
+  },
+  get name(): string {
+    return 'x';
+  },
+  set name(value: string) {
+    store(value);
+  },
+  short() { return 1; },
+  alias: (a: number) => a + 1,
+  two: () => {
+  },
+  data: {
+    nested() {
+      return 1;
+    },
+  },
+  ...rest,
+};
+";
+
+    #[test]
+    fn an_object_literal_yields_a_block_for_each_long_function_valued_property_and_method() {
+        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS, AnalysisProfile::Full);
+        assert!(!analysis.had_parse_errors);
+        let api = Some((SymbolKind::Variable, "api", 1));
+        assert_eq!(
+            blocks_with_parents(&analysis),
+            [
+                (1, 28, SymbolKind::Variable, None, None),
+                (3, 5, SymbolKind::Method, Some("async load(id: string): Promise<User>"), api),
+                (6, 8, SymbolKind::Property, Some("save: (user: User) =>"), api),
+                (9, 11, SymbolKind::Property, Some("fetch: async function (url: string)"), api),
+                (12, 14, SymbolKind::Method, Some("get name(): string"), api),
+                (15, 17, SymbolKind::Method, Some("set name(value: string)"), api),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_object_member_block_holds_exactly_the_member_text() {
+        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS, AnalysisProfile::Full);
+        let codes: Vec<&str> = analysis.blocks.iter().skip(1).take(2).map(|b| b.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            [
+                "async load(id: string): Promise<User> {\n    return get(id);\n  }",
+                "save: (user: User) => {\n    put(user);\n  }"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::declared("const api = OBJ;\n", (SymbolKind::Variable, "api"))]
+    #[case::exported("export const api = OBJ;\n", (SymbolKind::Variable, "api"))]
+    #[case::let_binding("let api = OBJ;\n", (SymbolKind::Variable, "api"))]
+    #[case::as_const("export const api = OBJ as const;\n", (SymbolKind::Variable, "api"))]
+    #[case::satisfies("export const api = OBJ satisfies Api;\n", (SymbolKind::Variable, "api"))]
+    #[case::parenthesized("export const api = (OBJ);\n", (SymbolKind::Variable, "api"))]
+    #[case::typed("export const api: Api = OBJ;\n", (SymbolKind::Variable, "api"))]
+    #[case::default_export("export default OBJ;\n", (SymbolKind::Other, "default"))]
+    #[case::default_export_as("export default OBJ as Api;\n", (SymbolKind::Other, "default"))]
+    fn members_of_a_declared_or_exported_object_literal_name_it(
+        #[case] source: &str,
+        #[case] parent: (SymbolKind, &str),
+    ) {
+        let source = source.replace("OBJ", "{\n  m() {\n    return 1;\n  },\n}");
+        let analysis = analyze_source("named.ts", &source, AnalysisProfile::Full);
+        let parents: Vec<_> =
+            analysis.blocks.iter().map(|b| b.parent.as_ref().map(|p| (p.kind, p.name.as_str()))).collect();
+        assert_eq!(parents, [None, Some(parent)]);
+    }
+
+    #[test]
+    fn each_declarator_of_a_statement_owns_its_own_members() {
+        let source = "const a = {\n  m() {\n    return 1;\n  },\n}, b = {\n  n() {\n    return 2;\n  },\n};\n";
+        let analysis = analyze_source("two.ts", source, AnalysisProfile::Full);
+        assert_eq!(
+            blocks_with_parents(&analysis),
+            [
+                (1, 9, SymbolKind::Variable, None, None),
+                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Variable, "a", 1))),
+                (6, 8, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "b", 5))),
+            ]
+        );
+    }
+
+    /// Pins the extraction boundary: these shapes are documented gaps or too small to split, and must stay inside
+    /// their holder's block.
+    #[rstest]
+    #[case::too_short_method("const o = {\n  m() {\n  },\n};\n")]
+    #[case::too_short_arrow("const o = {\n  m: () => {\n  },\n};\n")]
+    #[case::data_property("const o = {\n  m: {\n    a: 1,\n    b: 2,\n  },\n};\n")]
+    #[case::call_value("const o = {\n  m: wrap(() => {\n    return 1;\n  }),\n};\n")]
+    #[case::spread("const o = {\n  ...other,\n  ...more,\n  ...rest,\n};\n")]
+    #[case::computed_data("const o = {\n  [key]: 1,\n  [other]: 2,\n  x: 3,\n};\n")]
+    #[case::inside_a_function("function f() {\n  const o = {\n    m() {\n      return 1;\n    },\n  };\n}\n")]
+    #[case::inside_a_block("{\n  const o = {\n    m() {\n      return 1;\n    },\n  };\n}\n")]
+    #[case::conditional("const o = c ? {\n  m() {\n    return 1;\n  },\n} : null;\n")]
+    #[case::call_argument("const o = make({\n  m() {\n    return 1;\n  },\n});\n")]
+    #[case::destructured("const { a } = {\n  m() {\n    return 1;\n  },\n};\n")]
+    #[case::assigned("module.exports = {\n  m() {\n    return 1;\n  },\n};\n")]
+    #[case::class_property_object("export class C {\n  o = {\n    m() {\n      return 1;\n    },\n  };\n}\n")]
+    fn only_a_top_level_or_exported_object_literal_with_long_functions_gets_member_blocks(#[case] source: &str) {
+        let analysis = analyze_source("none.ts", source, AnalysisProfile::Full);
+        let members: Vec<_> = analysis.blocks.iter().filter(|b| b.parent.is_some()).map(|b| b.line_start).collect();
+        assert_eq!(members, Vec::<usize>::new());
+    }
+
+    /// Only the direct properties of the literal are split; whatever a member holds stays inside its block.
+    #[rstest]
+    #[case::arrow_in_arrow("export const o = {\n  a: () => {\n    const inner = () => {\n      return 1;\n    };\n  },\n};\n", &[(2, 6)])]
+    #[case::object_in_method("export const o = {\n  a() {\n    return {\n      b() {\n        return 1;\n      },\n    };\n  },\n};\n", &[(2, 8)])]
+    #[case::object_in_property("export const o = {\n  a: {\n    b() {\n      return 1;\n    },\n  },\n  c() {\n    return 2;\n  },\n};\n", &[(7, 9)])]
+    #[case::class_in_method("export const o = {\n  a() {\n    class K {\n      m() {\n        return 1;\n      }\n    }\n  },\n};\n", &[(2, 8)])]
+    #[case::sibling_after_nested("export const o = {\n  a() {\n    return () => {\n      return 1;\n    };\n  },\n  b() {\n    return 2;\n  },\n};\n", &[(2, 6), (7, 9)])]
+    fn nested_functions_stay_inside_the_member_that_holds_them(
+        #[case] source: &str,
+        #[case] members: &[(usize, usize)],
+    ) {
+        let analysis = analyze_source("nested.ts", source, AnalysisProfile::Full);
+        let found: Vec<_> =
+            analysis.blocks.iter().filter(|b| b.parent.is_some()).map(|b| (b.line_start, b.line_end)).collect();
+        assert_eq!(found, members);
+    }
+
+    #[test]
+    fn a_class_and_an_object_in_one_file_each_name_their_own_members() {
+        let source =
+            "export class C {\n  m() {\n    return 1;\n  }\n}\nexport const o = {\n  n() {\n    return 2;\n  },\n};\n";
+        let analysis = analyze_source("both.ts", source, AnalysisProfile::Full);
+        assert_eq!(
+            blocks_with_parents(&analysis),
+            [
+                (1, 5, SymbolKind::Class, None, None),
+                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Class, "C", 1))),
+                (6, 10, SymbolKind::Variable, None, None),
+                (7, 9, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "o", 6))),
+            ]
+        );
+    }
+
     #[test]
     fn imports_record_namespace_side_effect_and_inline_type_bindings() {
         let text = "\

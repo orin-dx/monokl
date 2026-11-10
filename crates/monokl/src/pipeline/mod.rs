@@ -67,8 +67,8 @@ impl SearchResult {
 /// Text search finds the lines matching the query's positive terms; files with a line matching an excluded term, or
 /// lacking a match for a required term, drop out. Each remaining file goes to the analyzer that owns it, and only
 /// blocks containing a matching line are kept, ranked with BM25 and deduplicated. A matching line belongs to the
-/// smallest block containing it, so a class keeps only the matches outside its members and is dropped when it has
-/// none. Files no analyzer supports are ignored without a diagnostic.
+/// smallest block containing it, so a class or object literal keeps only the matches outside its members and is
+/// dropped when it has none. Files no analyzer supports are ignored without a diagnostic.
 ///
 /// BM25 query terms are the lowercase [`tokenize`] output of each non-excluded literal term. Regex terms select
 /// lines and appear in `matched_keywords` but add no BM25 terms. A query with only excluded terms has nothing to
@@ -339,12 +339,12 @@ fn retrieve_blocks(
 }
 
 /// Splits `hits` among `blocks`: a hit goes to every block whose own text on that line matches, except one that holds
-/// a smaller such block. A class therefore keeps only the matches outside its members, and a block left with none is
-/// dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only the part
-/// of the line inside the block counts, which sends the match to the member or holder that actually contains the text.
-/// Where no block's own text matches (a match across the edge of every block on the line) every block on the line
-/// keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it. `hits`
-/// must be in line order; each block's hits are too.
+/// a smaller such block. A class or object therefore keeps only the matches outside its members, and a block with
+/// none is dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only
+/// the part of the line inside the block counts, which sends the match to the member or holder that actually contains
+/// the text. Where no block's own text matches (a match across the edge of every block on the line) every block on the
+/// line keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it.
+/// `hits` must be in line order; each block's hits are too.
 fn owned_hits<'h>(
     blocks: &[CodeBlock],
     hits: &'h [LineHit],

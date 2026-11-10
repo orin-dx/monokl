@@ -11,7 +11,8 @@ use oxc_ast::ast::{
     ExportDefaultDeclaration, ExportDefaultDeclarationKind, ExportFromDeclaration, ExportNamedDeclaration, Expression,
     Function, ImportDeclaration, ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
     JSXElement, JSXElementName, JSXMemberExpression, JSXMemberExpressionObject, MethodDefinition, MethodDefinitionKind,
-    ModuleExportName, Program, PropertyDefinition, Statement, VariableDeclaration,
+    ModuleExportName, ObjectExpression, ObjectProperty, ObjectPropertyKind, Program, PropertyDefinition, PropertyKind,
+    Statement, VariableDeclaration,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
@@ -23,8 +24,8 @@ use crate::types::{
     JsxElementEntry, ParentContext, SymbolEntry, SymbolKind,
 };
 
-/// The fewest lines a class member needs to get a block of its own. A shorter one is a stub or accessor that the class
-/// block already shows whole.
+/// The fewest lines a class or object member needs to get a block of its own. A shorter one is a stub or accessor that
+/// the block holding it already shows whole.
 const MIN_MEMBER_LINES: usize = 3;
 
 /// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
@@ -409,11 +410,65 @@ impl Extractor<'_> {
         self.out.blocks.push(block);
     }
 
-    /// Pushes a block for each long method, constructor and function-valued property of a named class that is a
-    /// top-level statement or exported, after the class's own block. An anonymous class has no name to give its
-    /// members as a parent, so it gets none.
+    /// Pushes a block for each long member of the named class or object literal that a top-level or exported statement
+    /// holds, after the statement's own block. An anonymous class has no name to give its members as a parent, so it
+    /// gets none.
     fn member_blocks(&mut self, statement: &Statement<'_>) {
-        let Some(class) = statement_class(statement) else { return };
+        if let Some(class) = statement_class(statement) {
+            self.class_member_blocks(class);
+        }
+        for (parent, object) in self.statement_objects(statement) {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => self.object_property_block(property, &parent),
+                    ObjectPropertyKind::SpreadProperty(_) => {}
+                }
+            }
+        }
+    }
+
+    /// The object literals a top-level or exported statement binds to a name, each with the parent its members get: the
+    /// declarator's name for `const api = { ... }`, `default` for `export default { ... }`.
+    fn statement_objects<'a, 'b>(
+        &self,
+        statement: &'b Statement<'a>,
+    ) -> Vec<(ParentContext, &'b ObjectExpression<'a>)> {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => Some(&**declaration),
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::VariableDeclaration(declaration) => Some(&**declaration),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(declaration) = declaration {
+            return declaration
+                .declarations
+                .iter()
+                .filter_map(|declarator| {
+                    let BindingPattern::BindingIdentifier(id) = &declarator.id else { return None };
+                    let object = object_literal(declarator.init.as_ref()?)?;
+                    let parent = ParentContext {
+                        kind: SymbolKind::Variable,
+                        name: id.name.as_str().to_owned(),
+                        line: self.lines.line(declarator.span.start),
+                    };
+                    Some((parent, object))
+                })
+                .collect();
+        }
+        let Statement::ExportDefaultDeclaration(export) = statement else { return Vec::new() };
+        let Some(object) = export.declaration.as_expression().and_then(object_literal) else { return Vec::new() };
+        let parent = ParentContext {
+            kind: SymbolKind::Other,
+            name: "default".to_owned(),
+            line: self.lines.line(export.span.start),
+        };
+        vec![(parent, object)]
+    }
+
+    /// A method, constructor or function-valued property of a named class.
+    fn class_member_blocks(&mut self, class: &Class<'_>) {
         let Some(id) = &class.id else { return };
         let parent = ParentContext {
             kind: SymbolKind::Class,
@@ -447,17 +502,23 @@ impl Extractor<'_> {
     /// A property holding an arrow or function expression: `handle = async (req) => { ... }`. Any other value is data,
     /// which the class block shows well enough.
     fn property_block(&mut self, property: &PropertyDefinition<'_>, parent: &ParentContext) {
-        let body_start = match &property.value {
-            Some(Expression::ArrowFunctionExpression(arrow)) => arrow.body.span().start,
-            Some(Expression::FunctionExpression(function)) => match &function.body {
-                Some(body) => body.span.start,
-                None => return,
-            },
-            _ => return,
-        };
+        let Some(body_start) = property.value.as_ref().and_then(function_body_start) else { return };
         let head = Span::new(property.decorators.last().map_or(property.span.start, |d| d.span.end), body_start);
         let signature = self.signature_text(head);
         self.member_block(property.span, SymbolKind::Property, signature, parent);
+    }
+
+    /// An object property that is a method (`async f() { ... }`, a getter or a setter) or holds an arrow or function
+    /// expression (`f: () => { ... }`). Any other value is data, which the object's block shows well enough.
+    fn object_property_block(&mut self, property: &ObjectProperty<'_>, parent: &ParentContext) {
+        let Some(body_start) = function_body_start(&property.value) else { return };
+        let node_kind = if property.method || property.kind != PropertyKind::Init {
+            SymbolKind::Method
+        } else {
+            SymbolKind::Property
+        };
+        let signature = self.signature_text(Span::new(property.span.start, body_start));
+        self.member_block(property.span, node_kind, signature, parent);
     }
 
     fn member_block(&mut self, span: Span, node_kind: SymbolKind, signature: String, parent: &ParentContext) {
@@ -507,6 +568,28 @@ fn declaration_kind(decl: &Declaration<'_>) -> Option<SymbolKind> {
         | Declaration::TSNamespaceDeclaration(_)
         | Declaration::TSGlobalDeclaration(_)
         | Declaration::TSImportEqualsDeclaration(_) => None,
+    }
+}
+
+/// Where the body of an arrow function or function expression starts; `None` for any other expression and for a
+/// function without a body.
+fn function_body_start(expression: &Expression<'_>) -> Option<u32> {
+    match expression {
+        Expression::ArrowFunctionExpression(arrow) => Some(arrow.body.span().start),
+        Expression::FunctionExpression(function) => function.body.as_ref().map(|body| body.span.start),
+        _ => None,
+    }
+}
+
+/// The object literal an expression is, looking through parentheses, `as`, `satisfies` and `!`.
+fn object_literal<'a, 'b>(expression: &'b Expression<'a>) -> Option<&'b ObjectExpression<'a>> {
+    match expression {
+        Expression::ObjectExpression(object) => Some(object),
+        Expression::ParenthesizedExpression(inner) => object_literal(&inner.expression),
+        Expression::TSAsExpression(inner) => object_literal(&inner.expression),
+        Expression::TSSatisfiesExpression(inner) => object_literal(&inner.expression),
+        Expression::TSNonNullExpression(inner) => object_literal(&inner.expression),
+        _ => None,
     }
 }
 

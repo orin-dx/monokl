@@ -256,3 +256,170 @@ fn a_member_row_is_ranked_with_the_kind_boost_of_its_own_kind() {
         (monokl::types::SymbolKind::Method, 1.4, 1, Some("Foo"))
     );
 }
+
+/// An object literal with a data property, two functions, an accessor and a member too short to get a block.
+const API: &str = "\
+export const api = {
+  baseUrl: 'example.test',
+  async loadUser(id: string): Promise<User> {
+    return http.get(id);
+  },
+  saveUser: (user: User) => {
+    http.put(user);
+  },
+  get label(): string {
+    return 'x';
+  },
+  tiny() { return 0; },
+};
+";
+
+#[test]
+fn a_query_naming_one_object_method_returns_that_method_alone_with_its_object() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "loadUser"),
+        table(&["  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",null,1,2.307646"])
+    );
+}
+
+#[test]
+fn an_arrow_function_property_of_an_object_is_a_row_of_its_own() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "saveUser"),
+        table(&["  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",null,1,2.003261"])
+    );
+}
+
+#[test]
+fn an_object_getter_is_a_method_row() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "label"),
+        table(&["  src/api.ts,9,11,method,variable api,\"get label(): string\",null,1,1.575364"])
+    );
+}
+
+#[test]
+fn a_query_naming_the_object_returns_the_object_alone() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "api"),
+        table(&["  src/api.ts,1,13,variable,null,null,\"1: export const api = {\",1,1.31645"])
+    );
+}
+
+#[test]
+fn an_object_member_shorter_than_three_lines_is_found_through_its_object() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "tiny"),
+        table(&["  src/api.ts,1,13,variable,null,null,\"12: tiny() { return 0; },\",1,1.31645"])
+    );
+}
+
+#[test]
+fn every_object_member_matching_a_query_gets_its_own_row_in_rank_order() {
+    let dir = project(&[("src/api.ts", API)]);
+    assert_eq!(
+        run(&dir, "http"),
+        table(&[
+            "  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",\"4: return http.get(id);\",1,1.243096",
+            "  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",\"7: http.put(user);\",2,1.191917",
+        ])
+    );
+}
+
+#[test]
+fn an_exported_default_object_names_its_members_default() {
+    let source = "export default {\n  run() {\n    return needle();\n  },\n};\n";
+    let dir = project(&[("src/job.ts", source)]);
+    assert_eq!(
+        run(&dir, "needle"),
+        table(&["  src/job.ts,2,4,method,other default,run(),\"3: return needle();\",1,1.402755"])
+    );
+}
+
+#[test]
+fn an_object_keeps_only_the_matches_outside_its_members() {
+    let source = "\
+export const config = {
+  label: 'needle',
+  run() {
+    return 'needle';
+  },
+  other() {
+    return 1;
+  },
+};
+";
+    let dir = project(&[("src/config.ts", source)]);
+    let result = library_search(&dir, "needle");
+    let mut rows: Vec<_> = result
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone(), r.parent_context.is_some()))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(1, 9, vec![2], false), (3, 5, vec![4], true)]);
+}
+
+#[test]
+fn an_object_whose_matches_are_all_inside_members_is_dropped() {
+    let source = "export const config = {\n  run() {\n    return 'needle';\n  },\n};\n";
+    let dir = project(&[("src/config.ts", source)]);
+    let result = library_search(&dir, "needle");
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.line_start, r.block.line_end)).collect();
+    assert_eq!(rows, [(2, 4)]);
+}
+
+/// Two object members that share a line: `a` ends where `b` starts.
+const SHARED_LINE: &str = "const o = { a() {\n  return needleX;\n}, b() {\n  return needleY;\n} };\n";
+
+#[test]
+fn no_line_of_an_object_is_credited_to_two_blocks_whatever_the_query() {
+    let dir = project(&[("src/shared.ts", SHARED_LINE)]);
+    let queries = ["needle", "return", "const", "b", "a", "regex:\\w+", "regex:\\}", "regex:\\{", "o a b"];
+    for query in queries {
+        let result = library_search(&dir, query);
+        let mut owners: BTreeMap<usize, usize> = BTreeMap::new();
+        for ranked in &result.ranked {
+            for &line in &ranked.block.matched_lines {
+                *owners.entry(line).or_default() += 1;
+            }
+        }
+        let shared: Vec<_> = owners.iter().filter(|&(_, &count)| count > 1).collect();
+        assert_eq!(shared, [], "{query}: lines in more than one block");
+    }
+}
+
+#[test]
+fn a_match_on_a_line_two_object_members_share_goes_to_the_member_that_holds_it() {
+    let dir = project(&[("f.ts", SHARED_LINE)]);
+    // `b()` is written only in the second member, though the line it is on also ends the first.
+    assert_eq!(found(&library_search(&dir, "regex:b\\(\\)")), [(3, 5, vec![3])]);
+}
+
+#[test]
+fn a_match_on_the_header_line_of_an_object_stays_with_the_object() {
+    let dir = project(&[("f.ts", SHARED_LINE)]);
+    assert_eq!(found(&library_search(&dir, "const")), [(1, 5, vec![1])]);
+}
+
+#[test]
+fn a_comment_after_an_object_members_closing_brace_stays_with_the_object() {
+    let source =
+        "export const svc = {\n  load() {\n    return 1;\n  }, // zebra note\n  save() {\n    return 2;\n  },\n};\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "zebra")), [(1, 8, vec![4])]);
+}
+
+#[test]
+fn the_same_object_search_prints_the_same_rows_every_time() {
+    let dir = project(&[("src/api.ts", API), ("src/other.ts", API.replace("api", "other").as_str())]);
+    let first = run(&dir, "http user");
+    for _ in 0..5 {
+        assert_eq!(run(&dir, "http user"), first);
+    }
+}

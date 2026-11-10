@@ -228,7 +228,7 @@ fn a_query_with_no_positive_terms_says_so() {
     assert_eq!(
         stdout(&output),
         "search: []\nhelp[2]: query has no positive terms; add a term without a leading `-`,\
-         \"only top-level declarations and class members are searched; for text in tests, calls or config try rg\"\n"
+         \"only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg\"\n"
     );
 }
 
@@ -239,7 +239,7 @@ fn an_unsupported_language_says_so() {
     assert_eq!(
         stdout(&output),
         "search: []\nhelp[2]: language Rust not supported in v1; only TypeScript/JavaScript,\
-         \"only top-level declarations and class members are searched; for text in tests, calls or config try rg\"\n"
+         \"only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg\"\n"
     );
 }
 
@@ -295,7 +295,7 @@ fn a_first_row_larger_than_the_budget_prints_no_rows_and_says_so() {
     assert_eq!(
         stdout(&output),
         "search: []\ntotalCount: 8\nhelp[2]: showing 0 of 8; raise the cap or refine the query with +term or -term,\
-         \"only top-level declarations and class members are searched; for text in tests, calls or config try rg\"\n"
+         \"only top-level declarations and the members of their classes and objects are searched; for text in tests, calls or config try rg\"\n"
     );
 }
 
