@@ -1,0 +1,5 @@
+All PRs are merged, what's next in our work and our trails?
+
+---
+
+Keep going on this work, parallize as much as possible with agent teams and workflows, use models and efforts for quality keeping in mind token cost. Be efficient with your usage and be expedient. Succinct, don't do work that is not necessary, don't over-engineer. Build with rigor, quality and amazing performance.
