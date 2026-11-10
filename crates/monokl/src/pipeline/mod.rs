@@ -12,6 +12,7 @@ use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::LanguageId;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::dedup::dedup_blocks;
 use crate::error::{MonoklError, Result};
@@ -118,12 +119,18 @@ fn search_with_ceiling(
     max_files: usize,
 ) -> Result<SearchResult> {
     let SearchRequest { root, query, exact, allow_tests, respect_ignore_files, language } = *request;
-    if let Some(language) = language
-        && !is_supported(language)
-    {
-        return Ok(SearchResult::skipped(format!(
-            "language {language:?} not supported in v1; only TypeScript, JavaScript and Rust"
-        )));
+    if let Some(language) = language {
+        match analyzer_language(language) {
+            None => {
+                return Ok(SearchResult::skipped(format!(
+                    "language {language:?} not supported in v1; only TypeScript, JavaScript and Rust"
+                )));
+            }
+            Some(id) if !registry.handles(id) => {
+                return Ok(SearchResult::skipped(format!("language {language:?} has no analyzer in this build")));
+            }
+            Some(_) => {}
+        }
     }
 
     let terms = if exact {
@@ -189,11 +196,12 @@ fn search_with_ceiling(
     Ok(SearchResult { ranked, files_total: found.files_total, ceiling_hit: found.ceiling_hit, diagnostics })
 }
 
-/// Returns whether `language` has an analyzer path in v1.
-fn is_supported(language: Language) -> bool {
+/// The analyzer language that serves `language` in v1, or `None` when no analyzer path exists for it.
+fn analyzer_language(language: Language) -> Option<LanguageId> {
     match language {
-        Language::TypeScript | Language::JavaScript | Language::Rust => true,
-        Language::Python => false,
+        Language::TypeScript | Language::JavaScript => Some(LanguageId::TypeScript),
+        Language::Rust => Some(LanguageId::Rust),
+        Language::Python => None,
     }
 }
 
@@ -563,6 +571,19 @@ mod tests {
                 None,
                 "language Python not supported in v1; only TypeScript, JavaScript and Rust"
             )]
+        );
+    }
+
+    #[test]
+    fn language_with_no_registered_analyzer_is_skipped_with_a_diagnostic() {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.rs", "alpha\n")]);
+        let request = SearchRequest { language: Some(Language::Rust), ..request(&root, "alpha") };
+        let result = search(&whole_file_registry(), &request).unwrap();
+        assert!(result.ranked.is_empty());
+        assert_eq!(result.files_total, 0);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Skipped, None, "language Rust has no analyzer in this build")]
         );
     }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use camino::Utf8Path;
 
-use super::lang::LanguageAnalyzer;
+use super::lang::{LanguageAnalyzer, LanguageId};
 
 /// Analyzers in registration order.
 ///
@@ -39,6 +39,20 @@ impl AnalyzerRegistry {
     /// ```
     pub fn analyzer_for(&self, path: &Utf8Path) -> Option<&dyn LanguageAnalyzer> {
         self.analyzers.iter().find(|analyzer| analyzer.supports(path)).map(Arc::as_ref)
+    }
+
+    /// Whether any registered analyzer handles `language`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monokl::analysis::LanguageId;
+    /// use monokl::analysis::registry::AnalyzerRegistry;
+    ///
+    /// assert!(!AnalyzerRegistry::new(Vec::new()).handles(LanguageId::Rust));
+    /// ```
+    pub fn handles(&self, language: LanguageId) -> bool {
+        self.analyzers.iter().any(|analyzer| analyzer.languages().contains(&language))
     }
 }
 
