@@ -76,7 +76,7 @@ pub struct TextSearchResult {
     pub walk_errors_without_path: u64,
 }
 
-/// Searches every regular file under `root` for lines matching any of `patterns`, regexes matched case-insensitively
+/// Searches every regular file under `root` (see [`search_files_where`] to skip some) for lines matching any of `patterns`, regexes matched case-insensitively
 /// with Unicode case folding.
 ///
 /// A pattern sees each line without its `\n` or `\r\n` terminator, exactly the text a hit reports, so `^` and `$`
@@ -112,7 +112,41 @@ pub struct TextSearchResult {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions) -> Result<TextSearchResult> {
-    search_in_batches(root, patterns, opts, rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
+    search_files_where(root, patterns, opts, &|_| true)
+}
+
+/// [`search_files`] restricted to the files `wanted` accepts, which it asks before a file is opened.
+///
+/// A file `wanted` rejects is never opened, counted in [`files_total`](TextSearchResult::files_total) or the ceiling,
+/// or listed in [`unreadable`](TextSearchResult::unreadable). `wanted` sees the path joined to `root`; for a path that
+/// is not UTF-8 it sees the path with each invalid byte sequence replaced by U+FFFD, so a rejected file is not counted
+/// in [`non_utf8_paths`](TextSearchResult::non_utf8_paths) either. Directories are always walked. Errors are those of
+/// [`search_files`].
+///
+/// # Examples
+///
+/// ```
+/// use camino::Utf8Path;
+/// use monokl::text_search::{search_files_where, TextSearchOptions};
+///
+/// let dir = tempfile::tempdir()?;
+/// std::fs::write(dir.path().join("a.ts"), "alpha\n")?;
+/// std::fs::write(dir.path().join("a.txt"), "alpha\n")?;
+/// let root = Utf8Path::from_path(dir.path()).ok_or("temp dir is not UTF-8")?;
+///
+/// let result =
+///     search_files_where(root, &["alpha"], &TextSearchOptions::default(), &|path| path.extension() == Some("ts"))?;
+/// assert_eq!(result.hits.keys().collect::<Vec<_>>(), [&root.join("a.ts")]);
+/// assert_eq!(result.files_total, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn search_files_where(
+    root: &Utf8Path,
+    patterns: &[&str],
+    opts: &TextSearchOptions,
+    wanted: &dyn Fn(&Utf8Path) -> bool,
+) -> Result<TextSearchResult> {
+    search_in_batches(root, patterns, opts, wanted, rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
 }
 
 /// [`search_files`] with the number of files searched before their outcomes are folded into the result. The result does
@@ -121,6 +155,7 @@ fn search_in_batches(
     root: &Utf8Path,
     patterns: &[&str],
     opts: &TextSearchOptions,
+    wanted: &dyn Fn(&Utf8Path) -> bool,
     batch_size: usize,
 ) -> Result<TextSearchResult> {
     let matcher = compile(patterns)?;
@@ -178,9 +213,15 @@ fn search_in_batches(
         if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
             continue;
         }
-        let Ok(path) = Utf8PathBuf::from_path_buf(entry.into_path()) else {
-            result.non_utf8_paths += 1;
-            continue;
+        let path = match Utf8PathBuf::from_path_buf(entry.into_path()) {
+            Ok(path) if wanted(&path) => path,
+            Ok(_) => continue,
+            Err(path) => {
+                if wanted(Utf8Path::new(&path.to_string_lossy())) {
+                    result.non_utf8_paths += 1;
+                }
+                continue;
+            }
         };
         if !opts.allow_tests && is_test_path(path.strip_prefix(root).unwrap_or(&path)) {
             continue;
@@ -982,7 +1023,7 @@ mod tests {
             ("i.ts", b"alpha\n"),
         ]);
         let opts = with_max_files(max_files);
-        let result = search_in_batches(&root, &["alpha"], &opts, batch_size).unwrap();
+        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, batch_size).unwrap();
         let kept = ["a.ts", "c/d.ts", "f.ts", "h.ts", "i.ts"].into_iter().take(max_files).collect::<Vec<_>>();
         assert_eq!(hit_files(&root, &result), kept);
         assert_eq!((result.files_total, result.ceiling_hit), (5, max_files < 5));
@@ -1566,6 +1607,118 @@ mod tests {
                 hits: hits(&root, &[("a.ts", vec![hit(1, "alpha")])]),
                 files_total: 1,
                 unreadable: vec![root.join("test")],
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    fn ts_only(path: &Utf8Path) -> bool {
+        path.extension() == Some("ts")
+    }
+
+    #[test]
+    fn a_rejected_file_is_not_counted_and_does_not_use_the_ceiling() {
+        let (_dir, root) = tree(&[
+            ("a.txt", b"alpha\n"),
+            ("b.json", b"alpha\n"),
+            ("c.ts", b"alpha\n"),
+            ("d.ts", b"alpha\n"),
+            ("e.ts", b"alpha\n"),
+        ]);
+        let result = search_files_where(&root, &["alpha"], &with_max_files(2), &ts_only).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("c.ts", vec![hit(1, "alpha")]), ("d.ts", vec![hit(1, "alpha")])]),
+                files_total: 3,
+                ceiling_hit: true,
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_filter_sees_the_path_below_the_root_and_applies_with_a_batch_of_one() {
+        let (_dir, root) = tree(&[("src/a.ts", b"alpha\n"), ("src/a.txt", b"alpha\n"), ("b.ts", b"alpha\n")]);
+        let seen = Mutex::new(Vec::new());
+        let wanted = |path: &Utf8Path| {
+            seen.lock().unwrap().push(path.to_owned());
+            ts_only(path)
+        };
+        let result = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &wanted, 1).unwrap();
+        assert_eq!(hit_files(&root, &result), ["b.ts", "src/a.ts"]);
+        assert_eq!(result.files_total, 2);
+        assert_eq!(*seen.lock().unwrap(), [root.join("b.ts"), root.join("src/a.ts"), root.join("src/a.txt")]);
+    }
+
+    #[test]
+    fn accepting_every_file_is_search_files() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.txt", b"alpha\n"), ("test/c.ts", b"alpha\n")]);
+        let opts = TextSearchOptions::default();
+        assert_eq!(
+            search_files_where(&root, &["alpha"], &opts, &|_| true).unwrap(),
+            search_files(&root, &["alpha"], &opts).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_rejected_test_file_and_an_accepted_one_follow_the_test_rules() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("test/b.ts", b"alpha\n"), ("test/c.txt", b"alpha\n")]);
+        let skipped = search_files_where(&root, &["alpha"], &TextSearchOptions::default(), &ts_only).unwrap();
+        assert_eq!(hit_files(&root, &skipped), ["a.ts"]);
+        let opts = TextSearchOptions { allow_tests: true, ..TextSearchOptions::default() };
+        let allowed = search_files_where(&root, &["alpha"], &opts, &ts_only).unwrap();
+        assert_eq!(hit_files(&root, &allowed), ["a.ts", "test/b.ts"]);
+        assert_eq!(allowed.files_total, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rejected_file_is_never_opened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.txt", b"alpha\n"), ("c.bin", b"alpha\n\0")]);
+        for name in ["b.txt", "c.bin"] {
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let readable = fs::read(root.join("b.txt")).is_ok();
+        let outcome = search_files_where(&root, &["alpha"], &TextSearchOptions::default(), &ts_only);
+        let unfiltered = search_files(&root, &["alpha"], &TextSearchOptions::default());
+        for name in ["b.txt", "c.bin"] {
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        if readable {
+            // Running as root: permissions cannot make the files unreadable.
+            return;
+        }
+        assert_eq!(
+            outcome.unwrap(),
+            TextSearchResult {
+                hits: hits(&root, &[("a.ts", vec![hit(1, "alpha")])]),
+                files_total: 1,
+                ..TextSearchResult::default()
+            }
+        );
+        // Without the filter the same files are opened and listed.
+        assert_eq!(unfiltered.unwrap().unreadable, [root.join("b.txt"), root.join("c.bin")]);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_non_utf8_path_is_counted_only_when_the_filter_accepts_it() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n")]);
+        fs::write(root.as_std_path().join(OsStr::from_bytes(b"bad\xff.ts")), b"alpha\n").unwrap();
+        fs::write(root.as_std_path().join(OsStr::from_bytes(b"bad\xff.txt")), b"alpha\n").unwrap();
+        let result = search_files_where(&root, &["alpha"], &TextSearchOptions::default(), &ts_only).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("a.ts", vec![hit(1, "alpha")])]),
+                files_total: 1,
+                non_utf8_paths: 1,
                 ..TextSearchResult::default()
             }
         );
