@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01C9RqXqKqvzrYoQXVW8NarP",
+  "agent_id": "a42d39fb0e5b2776e",
+  "subagent_type": "general-purpose",
+  "task_description": "Add a held-out question set to the harness",
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 110023,
+    "cache_read_tokens": 3840440,
+    "output_tokens": 19837,
+    "api_call_count": 39
+  },
+  "started_at": "2026-11-10T11:29:56.05847-08:00",
+  "completed_at": "2026-11-10T11:36:48.278475-08:00"
+}
