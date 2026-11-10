@@ -18,7 +18,7 @@ use crate::error::{MonoklError, Result};
 use crate::file_io::FileIoError;
 use crate::query::{Modifier, ParsedTerm, QueryPlan, parse};
 use crate::rank::{rank_blocks, tokenize_block};
-use crate::text_search::{DEFAULT_MAX_FILES, TextSearchOptions, TextSearchResult, search_files};
+use crate::text_search::{DEFAULT_MAX_FILES, TextSearchOptions, TextSearchResult, search_files_where};
 use crate::tokens::tokenize;
 use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, Language, LineHit, RankedBlock};
 
@@ -45,7 +45,7 @@ pub struct SearchRequest<'a> {
 pub struct SearchResult {
     /// Deduplicated blocks with 1-based, contiguous ranks.
     pub ranked: Vec<RankedBlock>,
-    /// Files with at least one line matching a positive term, kept or not.
+    /// Files an analyzer owns with at least one line matching a positive term, kept or not.
     pub files_total: u64,
     /// Whether `files_total` exceeded the file ceiling, so some matching files were never examined.
     pub ceiling_hit: bool,
@@ -69,7 +69,7 @@ impl SearchResult {
 /// lacking a match for a required term, drop out. Each remaining file goes to the analyzer that owns it, and only
 /// blocks containing a matching line are kept, ranked with BM25 and deduplicated. A matching line belongs to the
 /// smallest block containing it, so a class or object literal keeps only the matches outside its members and is
-/// dropped when it has none. Files no analyzer supports are ignored without a diagnostic.
+/// dropped when it has none. Files no analyzer supports, or that `language` excludes, are never opened, counted or reported.
 ///
 /// BM25 query terms are the lowercase [`tokenize`] output of each non-excluded literal term. Regex terms select
 /// lines and appear in `matched_keywords` but add no BM25 terms. A query with only excluded terms has nothing to
@@ -101,9 +101,9 @@ impl SearchResult {
 ///     language: None,
 /// };
 ///
-/// // With no analyzer registered, the file matches but yields no blocks.
+/// // With no analyzer registered, no file is owned, so none is searched.
 /// let result = search(&AnalyzerRegistry::new(Vec::new()), &request)?;
-/// assert_eq!(result.files_total, 1);
+/// assert_eq!(result.files_total, 0);
 /// assert!(result.ranked.is_empty());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -148,7 +148,15 @@ fn search_with_ceiling(
     let matchers = plan.terms.iter().map(|term| compile(&term.pattern)).collect::<Result<Vec<_>>>()?;
     let root = canonicalize(root)?;
 
-    let found = search_files(&root, &patterns, &TextSearchOptions { allow_tests, respect_ignore_files, max_files })?;
+    // A file no analyzer would read, or that `language` excludes, is never opened: it could not yield a block, and
+    // counting it would let it use up the file ceiling.
+    let wanted = |path: &Utf8Path| searchable(registry, language, path);
+    let found = search_files_where(
+        &root,
+        &patterns,
+        &TextSearchOptions { allow_tests, respect_ignore_files, max_files },
+        &wanted,
+    )?;
     let mut diagnostics = text_search_diagnostics(&found);
 
     // The ceiling must not apply here: an excluded file past it would wrongly survive.
@@ -156,10 +164,11 @@ fn search_with_ceiling(
         BTreeSet::new()
     } else {
         let excluded_patterns: Vec<&str> = plan.excluded.iter().map(|&i| plan.terms[i].pattern.as_str()).collect();
-        let excluded = search_files(
+        let excluded = search_files_where(
             &root,
             &excluded_patterns,
             &TextSearchOptions { allow_tests, respect_ignore_files, max_files: usize::MAX },
+            &wanted,
         )?;
         // The walk is the same, so only a file unreadable for the excluded patterns alone is new.
         for path in &excluded.unreadable {
@@ -277,6 +286,12 @@ fn has_language_extension(language: Language, path: &Utf8Path) -> bool {
         Language::JavaScript => matches!(path.extension(), Some("js" | "jsx" | "mjs" | "cjs")),
         Language::Rust | Language::Python => false,
     }
+}
+
+/// Whether a file can yield blocks: an analyzer owns it and, when `language` is set, its extension belongs to it. Text
+/// search asks this before opening a file; [`retrieve_blocks`] keeps the same two checks for a file it is handed.
+fn searchable(registry: &AnalyzerRegistry, language: Option<Language>, path: &Utf8Path) -> bool {
+    registry.analyzer_for(path).is_some() && language.is_none_or(|language| has_language_extension(language, path))
 }
 
 /// Analyzes one surviving file and pushes the annotated blocks that contain a matching line onto `out`.
@@ -717,6 +732,84 @@ mod tests {
     }
 
     #[test]
+    fn files_nothing_owns_are_not_counted_and_do_not_use_the_ceiling() {
+        let (_dir, root) = tree(&[
+            ("a.txt", "alpha\n"),
+            ("b.json", "alpha\n"),
+            ("c.md", "alpha\n"),
+            ("d.ts", "alpha\n"),
+            ("e.ts", "alpha\n"),
+        ]);
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha"), 2).unwrap();
+        assert_eq!(files(&result, &root), ["d.ts", "e.ts"]);
+        assert_eq!(result.files_total, 2);
+        assert!(!result.ceiling_hit);
+        assert_eq!(summary(&result.diagnostics), []);
+    }
+
+    #[test]
+    fn a_language_filter_leaves_other_owned_files_out_of_the_total() {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.js", "alpha\n"), ("c.txt", "alpha\n")]);
+        let request = SearchRequest { language: Some(Language::JavaScript), ..request(&root, "alpha") };
+        let result = search(&whole_file_registry(), &request).unwrap();
+        assert_eq!(files(&result, &root), ["b.js"]);
+        assert_eq!(result.files_total, 1);
+        // The ceiling counts only the files the filter keeps.
+        let result = search_with_ceiling(&whole_file_registry(), &request, 1).unwrap();
+        assert_eq!((result.files_total, result.ceiling_hit), (1, false));
+    }
+
+    #[test]
+    fn a_file_that_only_matches_an_excluded_term_and_is_not_owned_changes_nothing() {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.ts", "alpha gamma\n"), ("c.txt", "alpha gamma\n")]);
+        let result = search(&whole_file_registry(), &request(&root, "alpha -gamma")).unwrap();
+        assert_eq!(files(&result, &root), ["a.ts"]);
+        assert_eq!(result.files_total, 2);
+        assert_eq!(summary(&result.diagnostics), []);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn files_nothing_owns_are_never_opened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let ts = AnalyzerRegistry::new(vec![Arc::new(crate::analysis::ts::TsAnalyzer::new())]);
+        let function = "function alpha() {\n  return 1;\n}\n";
+        let (_dir, root) = tree(&[
+            ("a.ts", function),
+            ("notes.txt", "alpha\n"),
+            ("types/a.d.ts", "alpha\n"),
+            ("types/b.d.mts", "alpha\n"),
+            ("types/c.d.cts", "alpha\n"),
+            ("b.js", function),
+        ]);
+        let closed = ["notes.txt", "types/a.d.ts", "types/b.d.mts", "types/c.d.cts"];
+        for name in closed {
+            std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let readable = std::fs::read(root.join("notes.txt")).is_ok();
+        let outcome = search(&ts, &request(&root, "alpha -beta"));
+        let javascript_only = SearchRequest { language: Some(Language::JavaScript), ..request(&root, "alpha") };
+        std::fs::set_permissions(root.join("a.ts"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let narrowed = search(&ts, &javascript_only);
+        for name in closed.into_iter().chain(["a.ts"]) {
+            std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        if readable {
+            // Running as root: permissions cannot make the files unreadable.
+            return;
+        }
+        let outcome = outcome.unwrap();
+        assert_eq!(files(&outcome, &root), ["a.ts", "b.js"]);
+        assert_eq!(outcome.files_total, 2);
+        assert_eq!(summary(&outcome.diagnostics), []);
+        let narrowed = narrowed.unwrap();
+        assert_eq!(files(&narrowed, &root), ["b.js"]);
+        assert_eq!(narrowed.files_total, 1);
+        assert_eq!(summary(&narrowed.diagnostics), []);
+    }
+
+    #[test]
     fn exact_treats_the_whole_query_as_one_escaped_literal() {
         let (_dir, root) =
             tree(&[("a.ts", "see a.b -x here\n"), ("b.ts", "see axb -x here\n"), ("c.ts", "see a.b here\n")]);
@@ -953,7 +1046,7 @@ class Foo {
         let (_dir, root) = tree(&[("notes.md", "alpha\n")]);
         let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
         assert!(result.ranked.is_empty());
-        assert_eq!(result.files_total, 1);
+        assert_eq!(result.files_total, 0);
         assert!(result.diagnostics.is_empty());
     }
 
@@ -1188,7 +1281,8 @@ class Foo {
         let query = "login -deprecated";
         let result = search(&whole_file_registry(), &request(&root, query)).unwrap();
         assert_eq!(files(&result, &root), ["src/auth.ts", "src/session.ts"]);
-        assert_eq!(result.files_total, 4);
+        // `src/notes.md` has the word but no analyzer owns it, so it is not counted.
+        assert_eq!(result.files_total, 3);
         assert!(!result.ceiling_hit);
         assert!(result.diagnostics.is_empty());
         let ranks: Vec<usize> = result.ranked.iter().map(|r| r.rank).collect();
