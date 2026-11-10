@@ -1,4 +1,5 @@
 use super::bm25::{as_f64, round6};
+use crate::tokens::tokenize_source;
 use crate::types::{CodeBlock, SymbolKind};
 
 /// Returns the fraction of the block's matched lines that fall inside `line_start..=line_end`, rounded with
@@ -33,6 +34,56 @@ pub fn coverage_boost(block: &CodeBlock) -> f64 {
     let lines = block.line_start..=block.line_end;
     let inside = block.matched_lines.iter().filter(|line| lines.contains(*line)).count();
     round6(as_f64(inside) / as_f64(block.matched_lines.len()))
+}
+
+/// Returns the multiplier for how many query terms the block's declared name contains, from 1.0 to 3.0.
+///
+/// The name is the head of the block: its signature, or without one its first line that is not a comment or a
+/// decorator, cut at the first `(`, `<`, `{`, `=` or `:`. So parameters, return types and the body do not count. The
+/// head is tokenized like a document, and the multiplier is `round6(1 + 2 * matched / query_terms.len())`, where
+/// `matched` counts the query terms, repeats included, that the head contains. Returns 1.0 when `query_terms` is empty.
+///
+/// A body can mention every query word without the block being about them; a name that holds them says what it is.
+///
+/// # Examples
+///
+/// ```
+/// use camino::Utf8PathBuf;
+/// use monokl::rank::name_match_boost;
+/// use monokl::types::{CodeBlock, SymbolKind};
+///
+/// let block = CodeBlock {
+///     file: Utf8PathBuf::from("src/a.ts"),
+///     line_start: 1,
+///     line_end: 3,
+///     node_kind: SymbolKind::Function,
+///     code: String::new(),
+///     symbol_signature: Some("function mergeConfig(a: Config, b: Config)".to_string()),
+///     matched_lines: Vec::new(),
+///     matched_keywords: Vec::new(),
+///     parent: None,
+/// };
+/// assert_eq!(name_match_boost(&block, &["merge", "config", "deep", "copy"]), 2.0);
+/// ```
+pub fn name_match_boost(block: &CodeBlock, query_terms: &[&str]) -> f64 {
+    if query_terms.is_empty() {
+        return 1.0;
+    }
+    let text = block.symbol_signature.as_deref().unwrap_or(&block.code);
+    let line = text.lines().map(str::trim).find(|line| !is_comment_or_decorator(line)).unwrap_or_default();
+    let head = line.split(['(', '<', '{', '=', ':']).next().unwrap_or_default();
+    let name_tokens = tokenize_source(head);
+    let matched = query_terms.iter().filter(|term| name_tokens.iter().any(|token| token == *term)).count();
+    round6(1.0 + 2.0 * as_f64(matched) / as_f64(query_terms.len()))
+}
+
+/// Whether a trimmed line carries no declaration: it is blank, a comment or comment continuation, or a decorator.
+fn is_comment_or_decorator(line: &str) -> bool {
+    line.is_empty()
+        || line.starts_with("//")
+        || line.starts_with("/*")
+        || line.starts_with('*')
+        || line.starts_with('@')
 }
 
 /// Returns the score multiplier for a block's symbol kind.
@@ -81,6 +132,40 @@ mod tests {
             matched_keywords: Vec::new(),
             parent: None,
         }
+    }
+
+    fn named(code: &str, symbol_signature: Option<&str>) -> CodeBlock {
+        CodeBlock {
+            code: code.to_string(),
+            symbol_signature: symbol_signature.map(ToString::to_string),
+            ..block(1, 9, vec![])
+        }
+    }
+
+    // The head of the block (up to its first `(`, `<`, `{`, `=` or `:`) is tokenized and compared with the terms:
+    // the multiplier is round6(1 + 2 * matched_terms / total_terms).
+    #[rstest]
+    // Head "function toJSONSchema" tokenizes to function, to, json, schema: 2 of 3 terms, 1 + 2 * 2/3.
+    #[case::signature_head(named("", Some("function toJSONSchema<T>(schema: T): Json")), &["json", "schema", "convert"], 2.333_333)]
+    // No signature: the first line, "export const safeParse", gives safe, parse; `export` and `const` are stop words.
+    #[case::first_code_line(named("export const safeParse: $SafeParse = _safeParse(x);", None), &["safe", "parse", "result"], 2.333_333)]
+    #[case::every_term_in_the_name(named("", Some("mergeConfig(a, b)")), &["merge", "config"], 3.0)]
+    #[case::one_of_two_terms(named("", Some("mergeConfig(a, b)")), &["merge", "other"], 2.0)]
+    #[case::no_term_in_the_name(named("", Some("mergeConfig(a, b)")), &["other"], 1.0)]
+    #[case::the_body_is_not_the_name(named("function f() { return parse(); }", None), &["parse"], 1.0)]
+    #[case::the_parameters_are_not_the_name(named("", Some("function f(parse: string)")), &["parse"], 1.0)]
+    #[case::comment_lines_are_skipped(named("// parse it\n/* more */\n * parse\nclass Parser {}", None), &["parser", "it"], 2.0)]
+    #[case::decorator_lines_are_skipped(named("@Injectable()\nclass Foo {}", None), &["foo", "injectable"], 2.0)]
+    #[case::the_signature_wins_over_the_code(named("function other() {}", Some("function wanted()")), &["wanted"], 3.0)]
+    #[case::repeated_query_terms_count_per_occurrence(named("", Some("parse()")), &["parse", "parse", "other", "other"], 2.0)]
+    #[case::no_terms(named("", Some("parse()")), &[], 1.0)]
+    #[case::empty_block(named("", None), &["parse"], 1.0)]
+    fn name_match_boost_rewards_query_terms_in_the_declared_name(
+        #[case] block: CodeBlock,
+        #[case] terms: &[&str],
+        #[case] expected: f64,
+    ) {
+        assert_eq!(name_match_boost(&block, terms), expected);
     }
 
     #[rstest]

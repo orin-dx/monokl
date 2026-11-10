@@ -1174,7 +1174,7 @@ class Foo {
         ]);
         let query = "login -deprecated";
         let result = search(&whole_file_registry(), &request(&root, query)).unwrap();
-        assert_eq!(files(&result, &root), ["src/session.ts", "src/auth.ts"]);
+        assert_eq!(files(&result, &root), ["src/auth.ts", "src/session.ts"]);
         assert_eq!(result.files_total, 4);
         assert!(!result.ceiling_hit);
         assert!(result.diagnostics.is_empty());

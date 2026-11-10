@@ -18,7 +18,7 @@
 
 Grep finds text. Embeddings find _vibes_. monokl parses your code with a compiler-grade parser ([OXC](https://oxc.rs)), so a search returns the **function, class, interface or type** that matches, not a line number to open and read.
 
-- **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching.
+- **Whole code units, best first.** Results are ranked, with functions, classes and methods ahead of imports and re-exports. A search for `format price` puts `formatCurrency` and `validatePrice` first, because names are split on `camelCase`, `snake_case` and acronyms before matching. A block whose own name holds query words ranks above one that only uses them in its body.
 - **A small query language.** Plain words, `"quoted phrases"`, `+required` and `-excluded` terms, and `regex:` patterns. See [Writing a query](#writing-a-query).
 - **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files and binary files are skipped by default, and each has a flag to include it.
 - **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests raising the cap or narrowing the query.

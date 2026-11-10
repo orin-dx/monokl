@@ -1,4 +1,5 @@
-//! Ranks code blocks by BM25 relevance, boosted by symbol kind and by how many matched lines each block covers.
+//! Ranks code blocks by BM25 relevance, boosted by symbol kind, by query terms in the declared name and by how many
+//! matched lines each block covers.
 
 mod bm25;
 mod boost;
@@ -9,7 +10,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 pub use bm25::{round6, score};
-pub use boost::{coverage_boost, node_type_boost};
+pub use boost::{coverage_boost, name_match_boost, node_type_boost};
 pub use tokenize_doc::tokenize_block;
 
 use crate::types::{CodeBlock, RankedBlock, SymbolKind};
@@ -76,13 +77,14 @@ pub fn rank_blocks<S: BuildHasher>(
             let bm25_score = score(&doc_tokens, query_terms, avg_doc_len, corpus_size, df);
             let coverage_boost = coverage_boost(&block);
             let node_type_boost = node_type_boost(block.node_kind);
+            let name_boost = name_match_boost(&block, query_terms);
             let parent_context = block.parent.clone();
             RankedBlock {
                 block,
                 bm25_score,
                 coverage_boost,
                 node_type_boost,
-                final_score: round6(bm25_score * node_type_boost + coverage_boost),
+                final_score: round6(bm25_score * name_boost * node_type_boost + coverage_boost),
                 rank: 0,
                 parent_context,
             }
@@ -419,6 +421,31 @@ mod tests {
         let ranked = rank_blocks(blocks, &["foo"], &df);
         let scores: Vec<_> = ranked.iter().map(|r| (r.bm25_score, r.coverage_boost, r.final_score, r.rank)).collect();
         assert_eq!(scores, [(0.410_974, 0.0, 0.616_461, 1)]);
+    }
+
+    #[test]
+    fn rank_blocks_lifts_a_block_whose_name_holds_the_query_terms_over_one_that_only_repeats_them() {
+        // Both terms have document frequency 2 in a corpus of 2, and the average length is (2 + 7) / 2 = 4.5.
+        // bm25: the named block 0.437572, the repeating block 0.556235, so without the name multiplier the
+        // repeating block wins. The name holds both terms, so the multiplier is 3.0 and the named block scores
+        // round6(0.437572 * 3.0 * 1.5) = 1.969074 against round6(0.556235 * 1.0 * 1.5) = 0.834353.
+        let function = |file: &str, code: &str| {
+            let mut b = block(file, 1, 3, SymbolKind::Function, vec![]);
+            b.code = code.to_string();
+            b
+        };
+        let blocks = vec![
+            (
+                function("a.ts", "function load() { parse(); config(); }"),
+                tokens(&["parse", "parse", "parse", "config", "config", "config", "load"]),
+            ),
+            (function("b.ts", "function parseConfig() {}"), tokens(&["parse", "config"])),
+        ];
+        let df = HashMap::from([("parse".to_string(), 2), ("config".to_string(), 2)]);
+        let ranked = rank_blocks(blocks, &["parse", "config"], &df);
+        let scores: Vec<_> =
+            ranked.iter().map(|r| (r.block.file.as_str(), r.bm25_score, r.final_score, r.rank)).collect();
+        assert_eq!(scores, [("b.ts", 0.437_572, 1.969_074, 1), ("a.ts", 0.556_235, 0.834_353, 2)]);
     }
 
     /// Calls `visit` once per ordering of `items[k..]`.

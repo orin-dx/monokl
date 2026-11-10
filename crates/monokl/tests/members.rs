@@ -68,14 +68,14 @@ fn a_query_naming_one_method_returns_that_method_alone_with_its_class() {
     let dir = project(&[("src/foo.ts", FOO)]);
     assert_eq!(
         run(&dir, "loadUser"),
-        table(&["  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",null,1,2.307646"])
+        table(&["  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",null,1,4.922939"])
     );
 }
 
 #[test]
 fn a_query_naming_the_class_returns_the_class_alone() {
     let dir = project(&[("src/foo.ts", FOO)]);
-    assert_eq!(run(&dir, "Foo"), table(&["  src/foo.ts,1,17,class,null,null,\"1: export class Foo {\",1,1.402755"]));
+    assert_eq!(run(&dir, "Foo"), table(&["  src/foo.ts,1,17,class,null,null,\"1: export class Foo {\",1,2.208264"]));
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn a_constructor_is_a_row_of_its_own() {
     assert_eq!(
         run(&dir, "constructor"),
         table(&[
-            "  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",null,1,1.575364"
+            "  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",null,1,2.726091"
         ])
     );
 }
@@ -94,7 +94,7 @@ fn an_arrow_function_property_is_a_row_of_its_own() {
     let dir = project(&[("src/foo.ts", FOO)]);
     assert_eq!(
         run(&dir, "onChange"),
-        table(&["  src/foo.ts,11,13,property,class Foo,\"onChange = (event: Event) =>\",null,1,1.821949"])
+        table(&["  src/foo.ts,11,13,property,class Foo,\"onChange = (event: Event) =>\",null,1,3.465847"])
     );
 }
 
