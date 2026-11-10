@@ -26,6 +26,13 @@ pub enum Degradation {
     Panicked,
     /// The analyzer could not start the thread the parse runs on.
     ThreadUnavailable,
+    /// The syntax tree nests deeper than the analyzer can drop safely.
+    TooDeep {
+        /// The depth of the tree.
+        depth: usize,
+        /// The deepest tree the analyzer keeps.
+        cap: usize,
+    },
 }
 
 impl fmt::Display for Degradation {
@@ -36,6 +43,9 @@ impl fmt::Display for Degradation {
             }
             Self::Panicked => f.write_str("parser panicked"),
             Self::ThreadUnavailable => f.write_str("could not start a parse thread"),
+            Self::TooDeep { depth, cap } => {
+                write!(f, "file nests too deeply to analyze (depth {depth}, over the cap of {cap})")
+            }
         }
     }
 }
@@ -58,6 +68,9 @@ pub struct FileAnalysis {
     pub dependencies: Vec<DependencyRecord>,
     pub exports: Vec<ExportRecord>,
     pub blocks: Vec<CodeBlock>,
+    /// Blocks of test-only code (Rust `#[cfg(test)]` and `#[test]` items), kept apart from `blocks` so a search can leave
+    /// them out. Empty for a language with no such code and under profiles other than [`AnalysisProfile::Full`].
+    pub test_blocks: Vec<CodeBlock>,
     pub lang: LangData,
 }
 
@@ -67,6 +80,7 @@ impl FileAnalysis {
     pub fn language(&self) -> &str {
         match &self.lang {
             LangData::Ts(_) => "typescript",
+            LangData::Rust => "rust",
         }
     }
 
@@ -101,6 +115,7 @@ mod tests {
             dependencies: Vec::new(),
             exports: Vec::new(),
             blocks: Vec::new(),
+            test_blocks: Vec::new(),
             lang,
         }
     }
@@ -121,6 +136,7 @@ mod tests {
     #[case(Degradation::TooLarge { bytes: 300_000, cap: 260_096 }, "file too large to parse (300000 bytes, over the cap of 260096)")]
     #[case(Degradation::Panicked, "parser panicked")]
     #[case(Degradation::ThreadUnavailable, "could not start a parse thread")]
+    #[case(Degradation::TooDeep { depth: 9_000, cap: 8_000 }, "file nests too deeply to analyze (depth 9000, over the cap of 8000)")]
     fn a_degradation_names_its_reason(#[case] degradation: Degradation, #[case] text: &str) {
         assert_eq!(degradation.to_string(), text);
     }

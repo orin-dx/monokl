@@ -39,7 +39,8 @@ pub fn coverage_boost(block: &CodeBlock) -> f64 {
 /// Returns the multiplier for how many query terms the block's declared name contains, from 1.0 to 3.0.
 ///
 /// The name is the head of the block: its signature, or without one its first line that is not a comment or a
-/// decorator, cut at the first `(`, `<`, `{`, `=` or `:`. So parameters, return types and the body do not count. The
+/// decorator, cut at the first `(`, `<`, `{`, `=` or `:`. So parameters, return types and the body do not count. In a
+/// Rust file the parentheses of a restricted visibility (`pub(crate)`) do not cut the head. The
 /// head is tokenized like a document, and the multiplier is `round6(1 + 2 * matched / query_terms.len())`, where
 /// `matched` counts the query terms, repeats included, that the head contains. Returns 1.0 when `query_terms` is empty.
 ///
@@ -71,10 +72,32 @@ pub fn name_match_boost(block: &CodeBlock, query_terms: &[&str]) -> f64 {
     }
     let text = block.symbol_signature.as_deref().unwrap_or(&block.code);
     let line = text.lines().map(str::trim).find(|line| !is_comment_or_decorator(line)).unwrap_or_default();
-    let head = line.split(['(', '<', '{', '=', ':']).next().unwrap_or_default();
-    let name_tokens = tokenize_source(head);
+    let name_tokens = if block.file.extension() == Some("rs") {
+        tokenize_source(&unrestricted(line))
+    } else {
+        tokenize_source(head_of(line))
+    };
     let matched = query_terms.iter().filter(|term| name_tokens.iter().any(|token| token == *term)).count();
     round6(1.0 + 2.0 * as_f64(matched) / as_f64(query_terms.len()))
+}
+
+fn head_of(line: &str) -> &str {
+    line.split(['(', '<', '{', '=', ':']).next().unwrap_or_default()
+}
+
+/// The head of a Rust declaration line with a restricted visibility (`pub(crate)`, `pub(super)`, `pub(in path)`) read as
+/// a plain `pub`, whose `(` would otherwise end the head before the name. The other modifiers (`async`, `const`,
+/// `unsafe`, `extern "C"`, `default`) hold no cut character and stay in the head.
+fn unrestricted(line: &str) -> String {
+    let restriction = line
+        .strip_prefix("pub")
+        .map(str::trim_start)
+        .filter(|rest| rest.starts_with('('))
+        .and_then(|rest| rest.split_once(')'));
+    match restriction {
+        Some((_, rest)) => format!("pub {}", head_of(rest)),
+        None => head_of(line).to_owned(),
+    }
 }
 
 /// Whether a trimmed line carries no declaration: it is blank, a comment or comment continuation, or a decorator.
@@ -134,6 +157,10 @@ mod tests {
         }
     }
 
+    fn rust(symbol_signature: &str) -> CodeBlock {
+        CodeBlock { file: Utf8PathBuf::from("src/a.rs"), ..named("", Some(symbol_signature)) }
+    }
+
     fn named(code: &str, symbol_signature: Option<&str>) -> CodeBlock {
         CodeBlock {
             code: code.to_string(),
@@ -159,6 +186,22 @@ mod tests {
     #[case::the_signature_wins_over_the_code(named("function other() {}", Some("function wanted()")), &["wanted"], 3.0)]
     #[case::repeated_query_terms_count_per_occurrence(named("", Some("parse()")), &["parse", "parse", "other", "other"], 2.0)]
     #[case::no_terms(named("", Some("parse()")), &[], 1.0)]
+    #[case::rust_plain_pub(rust("pub fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_pub_crate(rust("pub(crate) fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_pub_super(rust("pub(super) fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_pub_self(rust("pub(self) fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_pub_in_path(rust("pub(in crate::config) fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_space_before_the_restriction(rust("pub (crate) fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_restriction_and_async(rust("pub(crate) async fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_restriction_and_const_fn(rust("pub(crate) const fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_restriction_and_unsafe_extern(rust("pub(crate) unsafe extern \"C\" fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_modifiers_without_visibility(rust("async unsafe fn load_config()"), &["load", "config"], 3.0)]
+    #[case::rust_default_method(rust("default fn load_config(&self)"), &["load", "config"], 3.0)]
+    #[case::rust_restricted_struct(rust("pub(crate) struct LoadConfig<T>"), &["load", "config"], 3.0)]
+    #[case::rust_restricted_const(rust("pub(crate) const LOAD_CONFIG: u32"), &["load", "config"], 3.0)]
+    #[case::rust_restricted_parameters_are_not_the_name(rust("pub(crate) fn run(load_config: u32)"), &["load"], 1.0)]
+    #[case::rust_restricted_generics_are_not_the_name(rust("pub(crate) fn run<LoadConfig>()"), &["load"], 1.0)]
+    #[case::only_rust_reads_a_restriction(named("", Some("pub(crate) load_config()")), &["load", "config"], 1.0)]
     #[case::empty_block(named("", None), &["parse"], 1.0)]
     fn name_match_boost_rewards_query_terms_in_the_declared_name(
         #[case] block: CodeBlock,

@@ -52,6 +52,12 @@ MANIFEST = ROOT / "scripts" / "rg-compare.repos"
 QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 UNCAPPED ="1000000"
+# One copy of each rule from `is_test_path` in crates/monokl/src/text_search.rs, which applies every rule to every file.
+TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
+TS_TEST_SUFFIXES = tuple(
+    f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
+)
+RUST_TEST_SUFFIXES = ("/tests.rs", "/test.rs", "_tests.rs", "_test.rs")
 
 
 class Lang:
@@ -74,10 +80,8 @@ LANGS = {
         top_level=r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+",
         # An indented class member: optional modifiers, then the name followed by a call signature or an arrow value.
         member_modifiers=r"^\s+(?:(?:static|async|public|private|protected|readonly|override|get|set)\s+)*\*?",
-        test_dirs=("/__tests__/", "/test/", "/tests/", "/spec/"),
-        test_suffixes=tuple(
-            f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
-        ),
+        test_dirs=TEST_DIRS,
+        test_suffixes=TS_TEST_SUFFIXES,
     ),
     "rust": Lang(
         globs=["*.rs"],
@@ -85,8 +89,8 @@ LANGS = {
         top_level=r"^(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe|extern(?:\s+\"[A-Za-z]+\")?)\s+)*(?:fn|struct|enum|trait|type|const|static|mod|macro_rules!)\s+",
         # An indented `fn` or `const` inside an impl or trait block.
         member_modifiers=r"^\s+(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe)\s+)*(?:fn|const)\s+",
-        test_dirs=("/tests/",),
-        test_suffixes=(),
+        test_dirs=TEST_DIRS,
+        test_suffixes=RUST_TEST_SUFFIXES,
         skip_terms=("tests",),
     ),
 }

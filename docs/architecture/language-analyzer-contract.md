@@ -71,7 +71,7 @@ pub enum CapabilityPrecision { Unsupported, Heuristic, Structural, Exact }
 `Ord` derived in this order — gating code compares with `<` (`precision < CapabilityPrecision::Structural`), not just `==`.
 
 - `Unsupported` — can't answer this surface at all for this language.
-- `Heuristic` — regex/extension-based, no real parse (Rust's fallback when `lang-rs` off; the
+- `Heuristic` — regex/extension-based, no real parse (Rust's fallback when `lang-rust` off; the
   tree-sitter fallback tier for most languages).
 - `Structural` — real AST parse, approximate resolution — e.g. Rust's `use` heuristic, which can't
   distinguish a submodule from an external crate without crate-graph resolution.

@@ -102,6 +102,7 @@ impl LanguageAnalyzer for TsAnalyzer {
             dependencies,
             exports,
             blocks,
+            test_blocks: Vec::new(),
             lang: LangData::Ts(TsData { jsx_elements, type_only_imports, unresolved_aliases: Vec::new() }),
         }))
     }

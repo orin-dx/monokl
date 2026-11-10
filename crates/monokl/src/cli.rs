@@ -48,7 +48,7 @@ struct SearchArgs {
     /// Searches hidden files and files that .gitignore or .ignore (in the search path or its parents) would exclude.
     #[arg(long)]
     no_ignore: bool,
-    /// Searches only this language.
+    /// Searches only this language: typescript, javascript or rust.
     #[arg(long, value_enum)]
     language: Option<Language>,
     /// The most results to print.
@@ -97,11 +97,12 @@ fn exit_code(written: std::io::Result<()>, ok: ExitCode) -> ExitCode {
 }
 
 fn registry() -> AnalyzerRegistry {
-    #[cfg(feature = "lang-ts")]
-    let analyzers: Vec<Arc<dyn crate::analysis::LanguageAnalyzer>> =
-        vec![Arc::new(crate::analysis::ts::TsAnalyzer::new())];
-    #[cfg(not(feature = "lang-ts"))]
-    let analyzers: Vec<Arc<dyn crate::analysis::LanguageAnalyzer>> = Vec::new();
+    let analyzers: Vec<Arc<dyn crate::analysis::LanguageAnalyzer>> = vec![
+        #[cfg(feature = "lang-ts")]
+        Arc::new(crate::analysis::ts::TsAnalyzer::new()),
+        #[cfg(feature = "lang-rust")]
+        Arc::new(crate::analysis::rust::RustAnalyzer::new()),
+    ];
     AnalyzerRegistry::new(analyzers)
 }
 

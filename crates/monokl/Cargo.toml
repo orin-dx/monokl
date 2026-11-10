@@ -8,8 +8,8 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 categories.workspace = true
-keywords = ["monokl", "search", "ast", "semantic", "typescript"]
-description = "AST-aware semantic code search for TypeScript and JavaScript."
+keywords = ["monokl", "search", "ast", "typescript", "rust"]
+description = "AST-aware semantic code search for TypeScript, JavaScript and Rust."
 
 [lib]
 name = "monokl"
@@ -21,10 +21,13 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [features]
-default = ["cli", "lang-ts"]
+default = ["cli", "lang-ts", "lang-rust"]
 
 # The TypeScript/JavaScript analyzer, built on OXC.
 lang-ts = ["dep:oxc_parser", "dep:oxc_ast", "dep:oxc_ast_visit","dep:oxc_span", "dep:oxc_allocator"]
+
+# The Rust analyzer, built on rust-analyzer's syntax crate.
+lang-rust = ["dep:ra_ap_syntax"]
 
 # Agent-facing output via michi, search budgeting, and clap's ValueEnum on CLI-selectable types.
 cli = ["dep:clap", "dep:michi", "miette"]
@@ -53,6 +56,7 @@ oxc_ast = { workspace = true, optional = true }
 oxc_ast_visit = { workspace = true, optional = true }
 oxc_parser = { workspace = true, optional = true }
 oxc_span = { workspace = true, optional = true }
+ra_ap_syntax = { workspace = true, optional = true }
 
 [lints]
 workspace = true
