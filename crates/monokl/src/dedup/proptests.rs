@@ -59,7 +59,7 @@ fn reference(blocks: &[RankedBlock]) -> Vec<(Utf8PathBuf, usize, usize, usize)> 
 
 proptest! {
     #[test]
-    fn dedup_blocks_matches_the_set_based_reference(blocks in prop::collection::vec(block_strategy(), 0..24)) {
+    fn dedup_blocks_matches_the_set_based_reference(blocks in prop::collection::vec(block_strategy(), 0..64)) {
         let expected = reference(&blocks);
         let actual: Vec<_> = dedup_blocks(blocks)
             .iter()
@@ -117,6 +117,62 @@ proptest! {
         expected.sort_unstable();
         let mut actual: Vec<_> = dedup_blocks(blocks).iter().map(|r| (r.block.line_start, r.block.line_end)).collect();
         actual.sort_unstable();
+        prop_assert_eq!(actual, expected);
+    }
+}
+
+/// Blocks that may be members, many per file, with nested and partly overlapping ranges of widely varying length.
+fn dense_block_strategy() -> impl Strategy<Value = RankedBlock> {
+    let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+    (
+        prop::sample::select(vec!["a.ts", "b.ts"]),
+        0usize..60,
+        prop_oneof![8 => 0usize..12, 3 => 12usize..60, 1 => Just(0usize)],
+        prop::option::weighted(0.4, Just(parent)),
+    )
+        .prop_map(|(file, line_start, len, parent)| {
+            let mut block = ranked(line_start, line_start + len, parent);
+            block.block.file = Utf8PathBuf::from(file);
+            block
+        })
+}
+
+/// The rule applied to every earlier kept block in turn, with no index.
+fn quadratic_reference(blocks: &[RankedBlock]) -> Vec<(Utf8PathBuf, usize, usize, usize)> {
+    let mut kept: Vec<&RankedBlock> = Vec::new();
+    for candidate in blocks {
+        let duplicate = kept.iter().any(|earlier| {
+            earlier.block.file == candidate.block.file
+                && !encloses_member(&earlier.block, &candidate.block)
+                && !encloses_member(&candidate.block, &earlier.block)
+                && overlaps_significantly(&earlier.block, &candidate.block)
+        });
+        if !duplicate {
+            kept.push(candidate);
+        }
+    }
+    kept.iter()
+        .enumerate()
+        .map(|(idx, r)| (r.block.file.clone(), r.block.line_start, r.block.line_end, idx + 1))
+        .collect()
+}
+
+proptest! {
+    #[test]
+    fn dedup_blocks_matches_the_unindexed_rule_on_dense_files_with_members(
+        mut blocks in prop::collection::vec(dense_block_strategy(), 0..200),
+        inverted in prop::collection::vec((0usize..200, 1usize..20), 0..6),
+    ) {
+        for (at, back) in inverted {
+            if let Some(block) = blocks.get_mut(at) {
+                block.block.line_end = block.block.line_start.saturating_sub(back);
+            }
+        }
+        let expected = quadratic_reference(&blocks);
+        let actual: Vec<_> = dedup_blocks(blocks)
+            .iter()
+            .map(|r| (r.block.file.clone(), r.block.line_start, r.block.line_end, r.rank))
+            .collect();
         prop_assert_eq!(actual, expected);
     }
 }

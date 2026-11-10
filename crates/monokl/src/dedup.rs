@@ -1,5 +1,8 @@
 //! Removes ranked blocks that mostly repeat a better-ranked block in the same file.
 
+use camino::Utf8Path;
+use rustc_hash::FxHashMap;
+
 use crate::types::{CodeBlock, RankedBlock};
 
 /// Drops each block that overlaps an earlier kept block in the same file by more than half of the smaller block's
@@ -44,22 +47,130 @@ use crate::types::{CodeBlock, RankedBlock};
 /// assert_eq!(kept, [(1, 1), (20, 2)]);
 /// ```
 pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock> {
-    let mut kept: Vec<RankedBlock> = Vec::with_capacity(blocks.len());
-    for block in blocks {
-        let is_duplicate = kept.iter().any(|earlier| {
-            earlier.block.file == block.block.file
-                && !encloses_member(&earlier.block, &block.block)
-                && !encloses_member(&block.block, &earlier.block)
-                && overlaps_significantly(&earlier.block, &block.block)
+    let mut files = group_by_file(&blocks);
+    let mut is_kept = vec![true; blocks.len()];
+    for (idx, block) in blocks.iter().enumerate() {
+        let Some(slot) = files.slot_of[idx] else { continue };
+        let file = &mut files.groups[files.group_of[idx]];
+        let is_duplicate = file.any_kept_overlap(block.block.line_start, block.block.line_end, |earlier| {
+            let earlier = &blocks[earlier].block;
+            !encloses_member(earlier, &block.block)
+                && !encloses_member(&block.block, earlier)
+                && overlaps_significantly(earlier, &block.block)
         });
-        if !is_duplicate {
-            kept.push(block);
+        if is_duplicate {
+            is_kept[idx] = false;
+        } else {
+            file.mark_kept(slot, block.block.line_end);
         }
     }
-    for (rank, block) in (1..).zip(&mut kept) {
-        block.rank = rank;
+    let kept = blocks.into_iter().zip(is_kept).filter_map(|(block, is_kept)| is_kept.then_some(block));
+    kept.zip(1..)
+        .map(|(mut block, rank)| {
+            block.rank = rank;
+            block
+        })
+        .collect()
+}
+
+/// The blocks of one input, split by file.
+struct FileGroups {
+    groups: Vec<FileIndex>,
+    /// For each input block, the position of its file in `groups`.
+    group_of: Vec<usize>,
+    /// For each input block, its slot in its file's index, or `None` for an inverted block, which overlaps nothing.
+    slot_of: Vec<Option<usize>>,
+}
+
+fn group_by_file(blocks: &[RankedBlock]) -> FileGroups {
+    let mut group_ids: FxHashMap<&Utf8Path, usize> = FxHashMap::default();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    let mut group_of = Vec::with_capacity(blocks.len());
+    for (idx, block) in blocks.iter().enumerate() {
+        let group = *group_ids.entry(block.block.file.as_path()).or_insert_with(|| {
+            members.push(Vec::new());
+            members.len() - 1
+        });
+        group_of.push(group);
+        if block.block.line_start <= block.block.line_end {
+            members[group].push(idx);
+        }
     }
-    kept
+    let mut slot_of = vec![None; blocks.len()];
+    let groups = members
+        .into_iter()
+        .map(|mut indices| {
+            indices.sort_unstable_by_key(|&idx| (blocks[idx].block.line_start, idx));
+            for (slot, &idx) in indices.iter().enumerate() {
+                slot_of[idx] = Some(slot);
+            }
+            let starts = indices.iter().map(|&idx| blocks[idx].block.line_start).collect();
+            FileIndex::new(starts, indices)
+        })
+        .collect();
+    FileGroups { groups, group_of, slot_of }
+}
+
+/// The non-inverted blocks of one file, ordered by start line, with a max-`line_end` segment tree over the kept ones.
+///
+/// A candidate can only overlap a kept block that starts at or before the candidate's end and ends at or after the
+/// candidate's start. The first condition is a prefix of the slots; the tree skips every subtree of that prefix whose
+/// kept blocks all end too early, so a query costs time in the number of kept blocks it reaches, not the number kept.
+struct FileIndex {
+    /// Start line of each slot, ascending.
+    starts: Vec<usize>,
+    /// Input position of the block in each slot.
+    blocks: Vec<usize>,
+    /// Number of leaves, a power of two. Leaf `slot` is at `leaf_count + slot`; the root is at 1.
+    leaf_count: usize,
+    /// Largest `line_end` among the kept blocks below each node, `None` while none is kept.
+    max_end: Vec<Option<usize>>,
+}
+
+impl FileIndex {
+    fn new(starts: Vec<usize>, blocks: Vec<usize>) -> Self {
+        let leaf_count = starts.len().next_power_of_two();
+        Self { starts, blocks, leaf_count, max_end: vec![None; 2 * leaf_count] }
+    }
+
+    fn mark_kept(&mut self, slot: usize, line_end: usize) {
+        let mut node = self.leaf_count + slot;
+        self.max_end[node] = Some(line_end);
+        while node > 1 {
+            node /= 2;
+            let (left, right) = (self.max_end[2 * node], self.max_end[2 * node + 1]);
+            self.max_end[node] = left.max(right);
+        }
+    }
+
+    /// Returns whether `is_duplicate` holds for any kept block whose lines intersect `line_start..=line_end`, trying
+    /// them in slot order and stopping at the first that holds.
+    fn any_kept_overlap(&self, line_start: usize, line_end: usize, is_duplicate: impl FnMut(usize) -> bool) -> bool {
+        let limit = self.starts.partition_point(|&start| start <= line_end);
+        Probe { index: self, limit, min_end: line_start, is_duplicate }.visit(1, 0, self.leaf_count)
+    }
+}
+
+/// One search of a [`FileIndex`]: the slots before `limit` holding a kept block that ends at or after `min_end`.
+struct Probe<'a, F> {
+    index: &'a FileIndex,
+    limit: usize,
+    min_end: usize,
+    is_duplicate: F,
+}
+
+impl<F: FnMut(usize) -> bool> Probe<'_, F> {
+    /// Searches the slots of `lo..hi` below `node`.
+    fn visit(&mut self, node: usize, lo: usize, hi: usize) -> bool {
+        if lo >= self.limit || self.index.max_end[node].is_none_or(|end| end < self.min_end) {
+            return false;
+        }
+        if hi - lo == 1 {
+            return (self.is_duplicate)(self.index.blocks[lo]);
+        }
+        let mid = lo + (hi - lo) / 2;
+        self.visit(2 * node, lo, mid) || self.visit(2 * node + 1, mid, hi)
+    }
 }
 
 /// Returns whether `member` has a parent and lies strictly inside `outer`, a block that has none.
