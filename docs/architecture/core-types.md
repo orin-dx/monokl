@@ -106,6 +106,7 @@ pub struct CodeBlock {
     pub symbol_signature: Option<String>,
     pub matched_lines: Vec<usize>,
     pub matched_keywords: Vec<String>,
+    pub parent: Option<ParentContext>,
 }
 
 pub struct RankedBlock {
@@ -122,6 +123,8 @@ pub struct ParentContext { pub kind: SymbolKind, pub name: String, pub line: usi
 ```
 
 `RankedBlock` nests its `CodeBlock`; the output layer picks the columns it prints.
+`CodeBlock.parent` is the enclosing class or object literal of a member block and `None` for a top-level block; the analyzer sets it.
+Ranking copies it into `RankedBlock.parent_context`, and the agent output prints it as the `parent` column (`<kind> <name>`).
 Score breakdown fields (`bm25_score`, `coverage_boost`, `node_type_boost`) are additive inputs
 to `final_score`; see `query-and-ranking.md` for the ranking algorithm itself, not covered here.
 
