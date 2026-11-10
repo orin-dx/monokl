@@ -58,6 +58,7 @@ oxc_span = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
+peak_alloc.workspace = true
 proptest.workspace = true
 rstest.workspace = true
 serde_json.workspace = true

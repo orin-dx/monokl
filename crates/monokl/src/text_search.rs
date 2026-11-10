@@ -15,6 +15,10 @@ use rustc_hash::FxHashMap;
 use crate::error::{MonoklError, Result};
 use crate::types::LineHit;
 
+/// How many files each thread searches per batch. A batch ends in a wait for its slowest file, so a small batch costs
+/// speed; a large one holds more hits at once.
+const BATCH_FILES_PER_THREAD: usize = 16;
+
 /// The default for [`TextSearchOptions::max_files`].
 pub const DEFAULT_MAX_FILES: usize = 100_000;
 
@@ -108,6 +112,17 @@ pub struct TextSearchResult {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions) -> Result<TextSearchResult> {
+    search_in_batches(root, patterns, opts, rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
+}
+
+/// [`search_files`] with the number of files searched before their outcomes are folded into the result. The result does
+/// not depend on it; it bounds how many files' hits are held beyond the kept ones.
+fn search_in_batches(
+    root: &Utf8Path,
+    patterns: &[&str],
+    opts: &TextSearchOptions,
+    batch_size: usize,
+) -> Result<TextSearchResult> {
     let matcher = compile(patterns)?;
     let root_error = |source| MonoklError::Walk { path: root.to_owned(), source };
     let metadata = std::fs::metadata(root).map_err(|e| root_error(ignore::Error::Io(e)))?;
@@ -146,18 +161,19 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         });
     }
     let walk = builder.build();
-    let mut paths = Vec::new();
+    // Walk errors and files keep the position they had in the walk, so `unreadable` lists them in walk order.
+    let mut items = Vec::new();
     for entry in walk {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) if err.depth() == Some(0) => return Err(root_error(err)),
             Err(err) => {
-                record_walk_error(&err, &mut result);
+                collect_walk_error(&err, &mut items);
                 continue;
             }
         };
         if let Some(err) = entry.error() {
-            record_walk_error(err, &mut result);
+            collect_walk_error(err, &mut items);
         }
         if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
             continue;
@@ -169,33 +185,46 @@ pub fn search_files(root: &Utf8Path, patterns: &[&str], opts: &TextSearchOptions
         if !opts.allow_tests && is_test_path(path.strip_prefix(root).unwrap_or(&path)) {
             continue;
         }
-        paths.push(path);
+        items.push(WalkItem::File(path));
     }
-    // Files are searched on separate threads and folded in walk order, so the result and the ceiling never depend on
-    // which thread finished first.
-    let outcomes: Vec<(Utf8PathBuf, FileOutcome)> = paths
-        .into_par_iter()
-        .map_init(
-            || searcher_builder.build(),
-            |searcher, path| {
-                let outcome = search_file(searcher, &matcher, &path);
-                (path, outcome)
-            },
-        )
-        .collect();
-    for (path, outcome) in outcomes {
-        match outcome {
-            FileOutcome::Binary => {}
-            FileOutcome::Unreadable => result.unreadable.push(path),
-            FileOutcome::Lines(hits) => {
-                if hits.is_empty() {
-                    continue;
-                }
-                result.files_total += 1;
-                if result.hits.len() < opts.max_files {
-                    result.hits.insert(path, hits);
-                } else {
-                    result.ceiling_hit = true;
+    // Files are searched on separate threads a batch at a time and folded in walk order, so the result and the ceiling
+    // never depend on which thread finished first. A file's hits are dropped as soon as it is past the ceiling, so one
+    // batch's hits are held beyond the kept files, however many files match.
+    let batch_size = batch_size.max(1);
+    let mut items = items.into_iter();
+    loop {
+        let batch: Vec<WalkItem> = items.by_ref().take(batch_size).collect();
+        if batch.is_empty() {
+            break;
+        }
+        let searched: Vec<Searched> = batch
+            .into_par_iter()
+            .map_init(
+                || searcher_builder.build(),
+                |searcher, item| match item {
+                    WalkItem::File(path) => {
+                        let outcome = search_file(searcher, &matcher, &path);
+                        Searched::File(path, outcome)
+                    }
+                    WalkItem::WalkError(error) => Searched::WalkError(error),
+                },
+            )
+            .collect();
+        for item in searched {
+            match item {
+                Searched::WalkError(error) => error.record(&mut result),
+                Searched::File(_, FileOutcome::Binary) => {}
+                Searched::File(path, FileOutcome::Unreadable) => result.unreadable.push(path),
+                Searched::File(path, FileOutcome::Lines(hits)) => {
+                    if hits.is_empty() {
+                        continue;
+                    }
+                    result.files_total += 1;
+                    if result.hits.len() < opts.max_files {
+                        result.hits.insert(path, hits);
+                    } else {
+                        result.ceiling_hit = true;
+                    }
                 }
             }
         }
@@ -303,27 +332,67 @@ fn compile(patterns: &[&str]) -> Result<Option<RegexMatcher>> {
 
 /// Lists the path a walk error names in `unreadable`, or counts it when it names none that is UTF-8.
 fn record_walk_error(err: &ignore::Error, result: &mut TextSearchResult) {
+    let mut items = Vec::new();
+    collect_walk_error(err, &mut items);
+    for item in items {
+        match item {
+            WalkItem::WalkError(error) => error.record(result),
+            WalkItem::File(_) => {}
+        }
+    }
+}
+
+/// Appends one item per path a walk error names, or per failure that names no UTF-8 path.
+fn collect_walk_error(err: &ignore::Error, items: &mut Vec<WalkItem>) {
     match err {
         ignore::Error::Partial(errs) => {
             for err in errs {
-                record_walk_error(err, result);
+                collect_walk_error(err, items);
             }
         }
         ignore::Error::WithPath { path, .. } | ignore::Error::Loop { child: path, .. } => {
-            match Utf8Path::from_path(path) {
-                Some(path) if result.unreadable.iter().any(|listed| listed == path) => {}
-                Some(path) => result.unreadable.push(path.to_owned()),
-                None => result.walk_errors_without_path += 1,
-            }
+            items.push(WalkItem::WalkError(match Utf8Path::from_path(path) {
+                Some(path) => WalkError::Path(path.to_owned()),
+                None => WalkError::WithoutPath,
+            }));
         }
         ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
-            record_walk_error(err, result);
+            collect_walk_error(err, items);
         }
         ignore::Error::Io(_)
         | ignore::Error::Glob { .. }
         | ignore::Error::UnrecognizedFileType(_)
-        | ignore::Error::InvalidDefinition => result.walk_errors_without_path += 1,
+        | ignore::Error::InvalidDefinition => items.push(WalkItem::WalkError(WalkError::WithoutPath)),
     }
+}
+
+/// What the walk produced, in the order it produced it.
+enum WalkItem {
+    File(Utf8PathBuf),
+    WalkError(WalkError),
+}
+
+/// One failure the walk reported.
+enum WalkError {
+    Path(Utf8PathBuf),
+    WithoutPath,
+}
+
+impl WalkError {
+    /// Lists the path once, or counts a failure that names no UTF-8 path.
+    fn record(self, result: &mut TextSearchResult) {
+        match self {
+            Self::Path(path) if result.unreadable.contains(&path) => {}
+            Self::Path(path) => result.unreadable.push(path),
+            Self::WithoutPath => result.walk_errors_without_path += 1,
+        }
+    }
+}
+
+/// A [`WalkItem`] after its file, if any, has been searched.
+enum Searched {
+    File(Utf8PathBuf, FileOutcome),
+    WalkError(WalkError),
 }
 
 /// How searching one file ended.
@@ -886,6 +955,58 @@ mod tests {
                 hits: hits(&root, &[("a.ts", vec![hit(1, "alpha")])]),
                 files_total: 1,
                 unreadable: vec![root.join("b.ts"), root.join("m/n.ts"), root.join("z.ts")],
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[rstest]
+    fn the_batch_size_changes_neither_the_kept_files_nor_the_counts(
+        #[values(1, 2, 3, 7, 1000)] batch_size: usize,
+        #[values(0, 1, 3, 5, usize::MAX)] max_files: usize,
+    ) {
+        let (_dir, root) = tree(&[
+            ("a.ts", b"alpha\n"),
+            ("b.ts", b"beta\n"),
+            ("c/d.ts", b"alpha\nalpha\n"),
+            ("c/e.bin", b"alpha\0"),
+            ("f.ts", b"alpha\n"),
+            ("g.ts", b"gamma\n"),
+            ("h.ts", b"ALPHA\n"),
+            ("i.ts", b"alpha\n"),
+        ]);
+        let opts = with_max_files(max_files);
+        let result = search_in_batches(&root, &["alpha"], &opts, batch_size).unwrap();
+        let kept = ["a.ts", "c/d.ts", "f.ts", "h.ts", "i.ts"].into_iter().take(max_files).collect::<Vec<_>>();
+        assert_eq!(hit_files(&root, &result), kept);
+        assert_eq!((result.files_total, result.ceiling_hit), (5, max_files < 5));
+        assert_eq!(result, search_files(&root, &["alpha"], &opts).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unlistable_directory_and_an_unreadable_file_are_listed_in_walk_order() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) =
+            tree(&[("a.ts", b"alpha\n"), ("b.ts", b"alpha\n"), ("z/c.ts", b"alpha\n"), ("zz.ts", b"alpha\n")]);
+        for name in ["a.ts", "z"] {
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let readable = fs::read(root.join("a.ts")).is_ok();
+        let listable = fs::read_dir(root.join("z")).is_ok();
+        let result = (!readable && !listable).then(|| search_files(&root, &["alpha"], &TextSearchOptions::default()));
+        fs::set_permissions(root.join("z"), fs::Permissions::from_mode(0o755)).unwrap();
+        let Some(result) = result else {
+            // Running as root: permissions cannot make the file unreadable.
+            return;
+        };
+        assert_eq!(
+            result.unwrap(),
+            TextSearchResult {
+                hits: hits(&root, &[("b.ts", vec![hit(1, "alpha")]), ("zz.ts", vec![hit(1, "alpha")])]),
+                files_total: 2,
+                unreadable: vec![root.join("a.ts"), root.join("z")],
                 ..TextSearchResult::default()
             }
         );
