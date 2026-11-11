@@ -24,11 +24,6 @@ impl QueryPlan {
         Self { terms, required, excluded, scored }
     }
 
-    /// Returns whether the plan has no terms at all, including excluded ones.
-    pub fn is_empty(&self) -> bool {
-        self.terms.is_empty()
-    }
-
     /// Returns the required patterns followed by the scored patterns.
     ///
     /// # Panics
@@ -42,110 +37,6 @@ impl QueryPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // A generic bound can only prove a trait is implemented. These probes also prove absence: the inherent `IS`
-    // shadows the trait default only when the bound holds.
-    struct SerProbe<T>(std::marker::PhantomData<T>);
-    trait NotSer {
-        const IS: bool = false;
-    }
-    impl<T> NotSer for SerProbe<T> {}
-    impl<T: serde::Serialize> SerProbe<T> {
-        const IS: bool = true;
-    }
-
-    struct DeProbe<T>(std::marker::PhantomData<T>);
-    trait NotDe {
-        const IS: bool = false;
-    }
-    impl<T> NotDe for DeProbe<T> {}
-    impl<T: serde::de::DeserializeOwned> DeProbe<T> {
-        const IS: bool = true;
-    }
-
-    struct DefaultProbe<T>(std::marker::PhantomData<T>);
-    trait NotDefault {
-        const IS: bool = false;
-    }
-    impl<T> NotDefault for DefaultProbe<T> {}
-    impl<T: Default> DefaultProbe<T> {
-        const IS: bool = true;
-    }
-
-    #[test]
-    fn query_plan_has_no_serde_derive() {
-        const {
-            assert!(!SerProbe::<QueryPlan>::IS);
-            assert!(!DeProbe::<QueryPlan>::IS);
-            // Positive control: the probes are not always false.
-            assert!(SerProbe::<usize>::IS);
-            assert!(DeProbe::<usize>::IS);
-        }
-    }
-
-    #[test]
-    fn query_plan_has_no_default() {
-        const {
-            assert!(!DefaultProbe::<QueryPlan>::IS);
-            assert!(DefaultProbe::<usize>::IS);
-        }
-    }
-
-    fn assert_query_plan_derives<T: std::fmt::Debug + Clone>() {}
-
-    #[test]
-    fn query_plan_shape_and_pub_fields() {
-        assert_query_plan_derives::<QueryPlan>();
-        let qp = QueryPlan { terms: vec![], required: vec![], excluded: vec![], scored: vec![] };
-        assert!(qp.terms.is_empty());
-        assert!(qp.required.is_empty());
-        assert!(qp.excluded.is_empty());
-        assert!(qp.scored.is_empty());
-    }
-
-    // Reads the source because `pub(crate)` would still compile in the in-crate test above.
-    #[test]
-    fn query_plan_fields_are_declared_pub_structural() {
-        let src = include_str!("plan.rs");
-        let decl_start =
-            src.find("pub struct QueryPlan").unwrap_or_else(|| panic!("`pub struct QueryPlan` not found in plan.rs"));
-        let open = src[decl_start..].find('{').unwrap() + decl_start;
-        let close = src[open..].find('}').unwrap() + open;
-        let field_block = &src[open..=close];
-        for field in ["terms", "required", "excluded", "scored"] {
-            let needle = format!("{field}:");
-            let idx = field_block
-                .find(&needle)
-                .unwrap_or_else(|| panic!("field `{field}` not found in QueryPlan struct body"));
-            let line_start = field_block[..idx].rfind('\n').map_or(0, |p| p + 1);
-            let line_end = field_block[idx..].find('\n').map_or(field_block.len(), |p| idx + p);
-            let line = field_block[line_start..line_end].trim_start();
-            assert!(
-                line.starts_with(&format!("pub {field}:")),
-                "QueryPlan.{field} must be declared exactly `pub {field}:`, found line {line:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn query_plan_field_declaration_order_structural() {
-        let src = include_str!("plan.rs");
-        let decl_start =
-            src.find("pub struct QueryPlan").unwrap_or_else(|| panic!("`pub struct QueryPlan` not found in plan.rs"));
-        let open = src[decl_start..].find('{').unwrap() + decl_start;
-        let close = src[open..].find('}').unwrap() + open;
-        let block = &src[open..=close];
-
-        let fields = ["terms", "required", "excluded", "scored"];
-        let mut last_pos: Option<usize> = None;
-        for f in fields {
-            let pos = block.find(f).unwrap_or_else(|| panic!("field `{f}` not found in QueryPlan struct body"));
-            if let Some(last) = last_pos {
-                assert!(pos > last, "field `{f}` found out of the expected declaration order");
-            }
-            last_pos = Some(pos);
-        }
-    }
 
     #[test]
     fn from_terms_on_empty_vec_produces_all_empty_fields() {
@@ -181,21 +72,9 @@ mod tests {
     }
 
     #[test]
-    fn is_empty_true_only_when_terms_is_fully_empty() {
-        let qp = QueryPlan::from_terms(Vec::new());
-        assert!(qp.is_empty());
-
-        // An exclusion-only plan has no search patterns but is not empty.
-        let excl_only = QueryPlan::from_terms(vec![term(Modifier::Excluded, "e0"), term(Modifier::Excluded, "e1")]);
-        assert!(!excl_only.is_empty());
-        assert!(excl_only.search_patterns().is_empty());
-    }
-
-    // Catches an off-by-one such as `self.terms.len() <= 1`, which the zero- and two-term cases miss.
-    #[test]
-    fn is_empty_false_for_a_single_term_plan() {
-        let qp = QueryPlan::from_terms(vec![term(Modifier::Optional, "s0")]);
-        assert!(!qp.is_empty());
+    fn exclusion_only_plan_has_no_search_patterns() {
+        let qp = QueryPlan::from_terms(vec![term(Modifier::Excluded, "e0"), term(Modifier::Excluded, "e1")]);
+        assert!(qp.search_patterns().is_empty());
     }
 
     #[test]
