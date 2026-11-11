@@ -446,3 +446,70 @@ fn the_language_flag_selects_rust_or_typescript_files() {
     assert_eq!(files(&["search", "total_price", ".", "--language", "rust"]), ["src/cart.rs"]);
     assert_eq!(files(&["search", "total_price", ".", "--language", "typescript"]), ["src/cart.ts"]);
 }
+
+/// `count` TypeScript files that each hold one function matching `needle`.
+fn project_of_many_matching_files(count: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..count {
+        let folder = dir.path().join(format!("d{:03}", index % 200));
+        std::fs::create_dir_all(&folder).unwrap();
+        let text = format!("export function needle{index}(a: number) {{\n  return a + {index};\n}}\n");
+        std::fs::write(folder.join(format!("f{index:05}.ts")), text).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn a_tiny_timeout_returns_a_partial_result_that_says_so_and_still_succeeds() {
+    let dir = project_of_many_matching_files(20_000);
+    let output = monokl_in(dir.path(), &["search", "needle", ".", "--timeout", "0.001", "--max-results", "1"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    // Text search always finishes its first batch, which is 16 files per thread.
+    let reached = rayon::current_num_threads() * 16;
+    let expected = format!("partial result: 0.001 s timeout expired after searching {reached} of 20000 files");
+    assert!(stdout(&output).contains(&expected), "wanted `{expected}` in: {}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
+
+#[test]
+fn a_timeout_of_zero_runs_to_completion_without_a_partial_marker() {
+    let dir = project_of_many_matching_files(2_000);
+    let output = monokl_in(dir.path(), &["search", "needle", ".", "--timeout", "0", "--max-results", "1"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("totalCount: 2000"), "got: {}", stdout(&output));
+    assert!(!stdout(&output).contains("partial result"), "got: {}", stdout(&output));
+}
+
+#[test]
+fn help_names_the_timeout_its_default_and_how_to_disable_it() {
+    let output = monokl(&["search", "--help"]);
+    let help = stdout(&output);
+    assert!(help.contains("--timeout <SECONDS>"), "got: {help}");
+    assert!(help.contains("0 means no limit"), "got: {help}");
+    assert!(help.contains("[default: 30]"), "got: {help}");
+}
+
+#[test]
+fn a_timeout_that_is_not_a_number_of_seconds_is_a_usage_error() {
+    for bad in ["soon", "-1", "NaN", "inf"] {
+        let output = monokl(&["search", "format", ".", "--timeout", bad]);
+        assert_eq!(output.status.code(), Some(2), "{bad}: {}", stderr(&output));
+    }
+}
+
+#[test]
+fn files_over_the_size_limit_are_skipped_and_reported_in_one_line() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("small.ts"), "export const needle = 1;\n").unwrap();
+    for name in ["big_a.ts", "big_b.ts"] {
+        let mut text = b"export const needle = 1;\n".to_vec();
+        text.resize(4 * 1024 * 1024 + 1, b' ');
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let output = monokl_in(dir.path(), &["search", "needle", "."]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("2 files skipped: over 4 MiB: big_a.ts, big_b.ts"), "got: {text}");
+    assert!(text.contains("small.ts,1,1,"), "got: {text}");
+    assert!(!text.contains("big_a.ts,1"), "got: {text}");
+}

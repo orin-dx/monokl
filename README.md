@@ -92,6 +92,13 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust files named `tests.rs`, `test.rs`, `*_tests.rs` or `*_test.rs` (the usual out-of-line `mod tests;`) and Rust items under `#[cfg(test)]` or `#[test]` |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
 | `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted but matches nothing yet) |
+| `--timeout SECONDS` | 30 | Stop after this many seconds and print what was found so far. `0` means no limit. Fractions are accepted (`0.5`) |
+
+## Limits
+
+- **Time.** When `--timeout` expires the output says `partial result: 30 s timeout expired after analyzing 120 of 900 files` (or `searching`, when the text search itself ran out of time). The exit code is still 0. A partial result is the only output that can differ between runs, because which files are reached depends on how fast the machine is. At least one batch of files is always processed, so a very small timeout still returns something. A `-term` exclusion applies only to the files that were reached. The directory walk that lists the files is not interrupted.
+- **File size.** A file over 4 MiB is not read. The output says `2 files skipped: over 4 MiB: a.ts, b.ts`. Source that large is generated or bundled; reading it costs about 2.5 times its size in memory.
+- **Line length.** Only the first 4,096 bytes of a matching line are kept for matching terms against the line. A longer line still matches as a whole, and the output counts the lines it cut. A required term (`+term`) that appears only past that point in a line is not seen.
 
 ## Errors and exit codes
 

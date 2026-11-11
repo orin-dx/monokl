@@ -34,11 +34,11 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 
 Rule 1 is done. Every parse runs on one 256 MiB stack, and a file whose nesting could pass it is rejected by a linear scan before it is parsed (`TooDeep`). Size is capped by measured parse time and memory (4 MiB), not by the stack.
 
-Stages that violate a rule today are follow-up work, not done:
+Rules 2 to 4 are done:
 
-- Rule 2: size is not checked before reading, so memory still grows with bytes.
-- Rule 3: there is no `--timeout`, so no deadline.
-- Rule 4: the per-file dedup fix removed the known quadratic step, but the CI scaling test is follow-up work.
+- Rule 2: a file over 4 MiB (the analyzers' parse cap) is checked on its open handle and never read, and is reported as one grouped `over 4 MiB` line. A matching line is kept to 4,096 bytes and the cut lines are counted in a warning. 40 files of 5 MB went from 479 MB to 5 MB of RSS, and one 300 MB line from 752 MB to 5 MB.
+- Rule 3: `--timeout <SECONDS>` (default 30, `0` for none) is checked between files in text search and between batches in analysis. Each stage finishes its first batch, and an expired search reports `partial result: ... expired after searching|analyzing N of M files`.
+- Rule 4: `tests/scaling.rs` asserts that 4 times the blocks or files takes under 10 times as long, for ranking and dedup (three layouts), text search and a whole search.
 - Rule 5 is what the ordered batch fold already does.
 - Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
 

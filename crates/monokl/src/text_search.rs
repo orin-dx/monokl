@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -21,6 +22,19 @@ const BATCH_FILES_PER_THREAD: usize = 16;
 
 /// The default for [`TextSearchOptions::max_files`].
 pub const DEFAULT_MAX_FILES: usize = 100_000;
+
+/// The default for [`TextSearchOptions::max_file_bytes`]: 4 MiB.
+///
+/// It equals the length the TypeScript and Rust analyzers parse, so a file that is read can be analyzed and a larger
+/// one, which could only come back as too large to parse, is not read at all. Reading costs about 2.5 times a file's
+/// size in memory (40 files of 5 MB reached 479 MB, one 300 MB line 752 MB), and parsing costs 28 to 37 bytes per
+/// source byte, so one thread's file in flight is bounded by about 150 MB. Over the limit, those two runs peak at 5 MB.
+/// Hand-written source is far below it; a larger file is generated or bundled code.
+pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The default for [`TextSearchOptions::max_line_bytes`]: 4 KiB. Ordinary source lines are under 200 bytes, so only
+/// generated and minified lines reach it.
+pub const MAX_LINE_BYTES: usize = 4096;
 
 /// Options for [`search_files`].
 ///
@@ -47,12 +61,30 @@ pub struct TextSearchOptions {
     pub respect_ignore_files: bool,
     /// The most files whose hits are kept. Matching files past it are still searched and counted.
     pub max_files: usize,
+    /// The largest file, in bytes, that is read. A larger one is not opened, and is listed in
+    /// [`oversize`](TextSearchResult::oversize). The size is checked just before the file is read.
+    pub max_file_bytes: u64,
+    /// The most bytes of a matching line a [`LineHit`] keeps. A longer line is cut at a UTF-8 character boundary and
+    /// counted in [`truncated_lines`](TextSearchResult::truncated_lines); the line still matched as a whole.
+    pub max_line_bytes: usize,
+    /// When to stop searching. Files not yet started when it passes are not searched, and
+    /// [`incomplete`](TextSearchResult::incomplete) says how many were. The first batch of files is always searched, so
+    /// a deadline that has already passed still makes progress. `None` runs to completion.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for TextSearchOptions {
-    /// Skips tests, honors ignore files and keeps up to [`DEFAULT_MAX_FILES`] files.
+    /// Skips tests, honors ignore files, keeps up to [`DEFAULT_MAX_FILES`] files, reads files up to
+    /// [`MAX_FILE_BYTES`], keeps up to [`MAX_LINE_BYTES`] of a line and has no deadline.
     fn default() -> Self {
-        Self { allow_tests: false, respect_ignore_files: true, max_files: DEFAULT_MAX_FILES }
+        Self {
+            allow_tests: false,
+            respect_ignore_files: true,
+            max_files: DEFAULT_MAX_FILES,
+            max_file_bytes: MAX_FILE_BYTES,
+            max_line_bytes: MAX_LINE_BYTES,
+            deadline: None,
+        }
     }
 }
 
@@ -74,6 +106,21 @@ pub struct TextSearchResult {
     pub non_utf8_paths: u64,
     /// How many walk errors below the root carried no UTF-8 path to put in `unreadable`.
     pub walk_errors_without_path: u64,
+    /// In walk order, keyed like `hits`: files larger than [`TextSearchOptions::max_file_bytes`], which were not read.
+    pub oversize: Vec<Utf8PathBuf>,
+    /// How many matching lines were longer than [`TextSearchOptions::max_line_bytes`] and kept cut.
+    pub truncated_lines: u64,
+    /// Set when [`TextSearchOptions::deadline`] passed before every file was searched.
+    pub incomplete: Option<Incomplete>,
+}
+
+/// How far a search got when its deadline passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Incomplete {
+    /// Files that were searched or skipped for their size.
+    pub reached: u64,
+    /// Files the walk offered.
+    pub total: u64,
 }
 
 /// Searches every regular file under `root` (see [`search_files_where`] to skip some) for lines matching any of `patterns`, regexes matched case-insensitively
@@ -88,6 +135,10 @@ pub struct TextSearchResult {
 /// replaced by U+FFFD. A file that cannot be read, and any walk failure below `root`, go in
 /// [`unreadable`](TextSearchResult::unreadable) and the search continues. No patterns
 /// means nothing to search: once `root` is checked, the result is empty and nothing is walked.
+///
+/// The walk lists every file once and holds only the paths. Each file is then stat-ed before it is read, and one larger
+/// than [`TextSearchOptions::max_file_bytes`] is not read. Work and memory are bounded by the walk's file count,
+/// `max_file_bytes` per file in flight and `max_line_bytes` per kept hit.
 ///
 /// # Errors
 ///
@@ -232,42 +283,62 @@ fn search_in_batches(
     // never depend on which thread finished first. A file's hits are dropped as soon as it is past the ceiling, so one
     // batch's hits are held beyond the kept files, however many files match.
     let batch_size = batch_size.max(1);
+    let total = items.iter().filter(|item| matches!(item, WalkItem::File(_))).count() as u64;
+    let mut reached = 0_u64;
+    let mut first = true;
     let mut items = items.into_iter();
     loop {
         let batch: Vec<WalkItem> = items.by_ref().take(batch_size).collect();
         if batch.is_empty() {
             break;
         }
+        // The first batch is always searched, so a deadline that is already past still returns something.
+        let deadline = if first { None } else { opts.deadline };
+        first = false;
+        let limits = FileLimits { max_file_bytes: opts.max_file_bytes, max_line_bytes: opts.max_line_bytes, deadline };
         let searched: Vec<Searched> = batch
             .into_par_iter()
             .map_init(
                 || searcher_builder.build(),
                 |searcher, item| match item {
                     WalkItem::File(path) => {
-                        let outcome = search_file(searcher, &matcher, &path);
+                        let outcome = search_file(searcher, &matcher, &path, &limits);
                         Searched::File(path, outcome)
                     }
                     WalkItem::WalkError(error) => Searched::WalkError(error),
                 },
             )
             .collect();
+        let mut stopped = false;
         for item in searched {
             match item {
                 Searched::WalkError(error) => error.record(&mut result),
-                Searched::File(_, FileOutcome::Binary) => {}
-                Searched::File(path, FileOutcome::Unreadable) => result.unreadable.push(path),
-                Searched::File(path, FileOutcome::Lines(hits)) => {
-                    if hits.is_empty() {
-                        continue;
-                    }
-                    result.files_total += 1;
-                    if result.hits.len() < opts.max_files {
-                        result.hits.insert(path, hits);
-                    } else {
-                        result.ceiling_hit = true;
+                Searched::File(_, FileOutcome::NotReached) => stopped = true,
+                Searched::File(path, outcome) => {
+                    reached += 1;
+                    match outcome {
+                        FileOutcome::Binary | FileOutcome::NotReached => {}
+                        FileOutcome::Unreadable => result.unreadable.push(path),
+                        FileOutcome::Oversize => result.oversize.push(path),
+                        FileOutcome::Lines(hits, truncated) => {
+                            result.truncated_lines += truncated;
+                            if hits.is_empty() {
+                                continue;
+                            }
+                            result.files_total += 1;
+                            if result.hits.len() < opts.max_files {
+                                result.hits.insert(path, hits);
+                            } else {
+                                result.ceiling_hit = true;
+                            }
+                        }
                     }
                 }
             }
+        }
+        if stopped {
+            result.incomplete = Some(Incomplete { reached, total });
+            break;
         }
     }
     Ok(result)
@@ -440,16 +511,38 @@ enum Searched {
 enum FileOutcome {
     Binary,
     Unreadable,
-    /// The file's matching lines, possibly none.
-    Lines(Vec<LineHit>),
+    /// Larger than the size limit, so never read.
+    Oversize,
+    /// The deadline had passed before the file was started.
+    NotReached,
+    /// The file's matching lines, possibly none, and how many of them were cut to the line limit.
+    Lines(Vec<LineHit>, u64),
 }
 
-fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path) -> FileOutcome {
-    let mut sink = LineCollector::new(matcher);
-    match searcher.search_path(matcher, path.as_std_path(), &mut sink) {
+/// What bounds the search of one file.
+#[derive(Clone, Copy)]
+struct FileLimits {
+    max_file_bytes: u64,
+    max_line_bytes: usize,
+    deadline: Option<Instant>,
+}
+
+fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path, limits: &FileLimits) -> FileOutcome {
+    if limits.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return FileOutcome::NotReached;
+    }
+    // The size comes from the open handle, so it is the size of the file that is then read and costs no second lookup.
+    let Ok(file) = std::fs::File::open(path) else { return FileOutcome::Unreadable };
+    match file.metadata() {
+        Ok(metadata) if metadata.len() > limits.max_file_bytes => return FileOutcome::Oversize,
+        Ok(_) => {}
+        Err(_) => return FileOutcome::Unreadable,
+    }
+    let mut sink = LineCollector::new(matcher, limits.max_line_bytes);
+    match searcher.search_file(matcher, &file, &mut sink) {
         Err(_) => FileOutcome::Unreadable,
         Ok(()) if sink.binary => FileOutcome::Binary,
-        Ok(()) => FileOutcome::Lines(sink.hits),
+        Ok(()) => FileOutcome::Lines(sink.hits, sink.truncated),
     }
 }
 
@@ -467,16 +560,22 @@ struct LineCollector<'m> {
     line_buf: Vec<u8>,
     hits: Vec<LineHit>,
     binary: bool,
+    /// The most bytes of a line's text a hit keeps.
+    max_line_bytes: usize,
+    /// How many kept lines were cut to `max_line_bytes`.
+    truncated: u64,
 }
 
 impl<'m> LineCollector<'m> {
-    fn new(matcher: &'m RegexMatcher) -> Self {
+    fn new(matcher: &'m RegexMatcher, max_line_bytes: usize) -> Self {
         Self {
             matcher,
             line_searcher: SearcherBuilder::new().bom_sniffing(false).build(),
             line_buf: Vec::new(),
             hits: Vec::new(),
             binary: false,
+            max_line_bytes,
+            truncated: 0,
         }
     }
 
@@ -491,7 +590,9 @@ impl<'m> LineCollector<'m> {
         let line_number = line_number
             .and_then(|line_number| usize::try_from(line_number).ok())
             .ok_or_else(|| io::Error::other("matched line has no usable line number"))?;
-        self.hits.push(LineHit { line_number, text: String::from_utf8_lossy(text).into_owned() });
+        let kept = cut_at_char_boundary(text, self.max_line_bytes);
+        self.truncated += u64::from(kept.len() < text.len());
+        self.hits.push(LineHit { line_number, text: String::from_utf8_lossy(kept).into_owned() });
         Ok(())
     }
 
@@ -536,6 +637,19 @@ impl Sink for AnyMatch {
         self.0 = true;
         Ok(false)
     }
+}
+
+/// The first `max` bytes of `text`, or fewer so that a multi-byte character is never split.
+fn cut_at_char_boundary(text: &[u8], max: usize) -> &[u8] {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    // A continuation byte is `10xxxxxx`; the cut goes before the lead byte of the character it would split.
+    while end > 0 && text.get(end).is_some_and(|byte| byte & 0xC0 == 0x80) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Strips one trailing `\n` or `\r\n`. A `\r` not followed by `\n` is line content and stays.
@@ -620,10 +734,17 @@ mod tests {
     }
 
     #[test]
-    fn default_options_skip_tests_respect_ignore_files_and_keep_a_hundred_thousand_files() {
+    fn default_options_skip_tests_respect_ignore_files_and_bound_files_bytes_and_lines() {
         assert_eq!(
             TextSearchOptions::default(),
-            TextSearchOptions { allow_tests: false, respect_ignore_files: true, max_files: 100_000 }
+            TextSearchOptions {
+                allow_tests: false,
+                respect_ignore_files: true,
+                max_files: 100_000,
+                max_file_bytes: 4 * 1024 * 1024,
+                max_line_bytes: 4096,
+                deadline: None,
+            }
         );
     }
 
@@ -1722,5 +1843,133 @@ mod tests {
                 ..TextSearchResult::default()
             }
         );
+    }
+
+    fn with_max_file_bytes(max_file_bytes: u64) -> TextSearchOptions {
+        TextSearchOptions { max_file_bytes, ..TextSearchOptions::default() }
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_not_read_and_is_listed() {
+        let (_dir, root) = tree(&[("big.ts", b"alpha 12345"), ("small.ts", b"alpha")]);
+        let result = search_files(&root, &["alpha"], &with_max_file_bytes(10)).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("small.ts", vec![hit(1, "alpha")])]),
+                files_total: 1,
+                oversize: vec![root.join("big.ts")],
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_exactly_at_the_size_limit_is_read() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha 1234")]);
+        let result = search_files(&root, &["alpha"], &with_max_file_bytes(10)).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("a.ts", vec![hit(1, "alpha 1234")])]),
+                files_total: 1,
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[test]
+    fn an_oversize_file_without_a_match_is_still_listed() {
+        let (_dir, root) = tree(&[("big.ts", b"nothing to see")]);
+        let result = search_files(&root, &["alpha"], &with_max_file_bytes(4)).unwrap();
+        assert_eq!(result.oversize, [root.join("big.ts")]);
+    }
+
+    #[test]
+    fn the_default_size_limit_is_four_mebibytes() {
+        let (_dir, root) = tree(&[]);
+        let limit = usize::try_from(MAX_FILE_BYTES).unwrap();
+        let mut at_limit = b"alpha\n".to_vec();
+        at_limit.resize(limit, b'x');
+        let mut over_limit = at_limit.clone();
+        over_limit.push(b'x');
+        write_files(&root, &[("at.ts", &at_limit), ("over.ts", &over_limit)]);
+        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(hit_files(&root, &result), ["at.ts"]);
+        assert_eq!(result.oversize, [root.join("over.ts")]);
+    }
+
+    fn with_max_line_bytes(max_line_bytes: usize) -> TextSearchOptions {
+        TextSearchOptions { max_line_bytes, ..TextSearchOptions::default() }
+    }
+
+    #[test]
+    fn a_long_hit_line_is_cut_on_a_char_boundary_and_counted() {
+        // Byte 10 falls inside the second two-byte character.
+        let (_dir, root) = tree(&[("a.ts", "alpha \u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\nalpha short\n".as_bytes())]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(10)).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("a.ts", vec![hit(1, "alpha \u{e9}\u{e9}"), hit(2, "alpha shor")])]),
+                files_total: 1,
+                truncated_lines: 2,
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_hit_line_at_the_line_limit_is_kept_whole() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha 1234\nalpha 12345\n")]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(10)).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "alpha 1234"), hit(2, "alpha 1234")])]));
+        assert_eq!(result.truncated_lines, 1);
+    }
+
+    #[test]
+    fn a_match_past_the_line_limit_still_selects_the_line() {
+        let (_dir, root) = tree(&[("a.ts", b"0123456789 alpha\n")]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(4)).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "0123")])]));
+    }
+
+    #[test]
+    fn the_default_line_limit_is_four_kibibytes_and_leaves_normal_lines_alone() {
+        let long = format!("alpha {}", "x".repeat(5000));
+        let normal = format!("alpha {}", "y".repeat(100));
+        let (_dir, root) = tree(&[("a.ts", format!("{long}\n{normal}\n").as_bytes())]);
+        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, &long[..4096]), hit(2, &normal)])]));
+        assert_eq!(result.truncated_lines, 1);
+    }
+
+    #[test]
+    fn a_deadline_that_has_passed_still_searches_the_first_batch_and_reports_how_far_it_got() {
+        let names = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];
+        let files: Vec<(&str, &[u8])> = names.iter().map(|name| (*name, b"alpha\n".as_slice())).collect();
+        let (_dir, root) = tree(&files);
+        let opts = TextSearchOptions { deadline: Some(Instant::now()), ..TextSearchOptions::default() };
+        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, 2).unwrap();
+        assert_eq!(
+            result,
+            TextSearchResult {
+                hits: hits(&root, &[("a.ts", vec![hit(1, "alpha")]), ("b.ts", vec![hit(1, "alpha")])]),
+                files_total: 2,
+                incomplete: Some(Incomplete { reached: 2, total: 5 }),
+                ..TextSearchResult::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_deadline_far_in_the_future_changes_nothing() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.ts", b"alpha\n"), ("c.ts", b"alpha\n")]);
+        let far = Instant::now() + std::time::Duration::from_secs(3600);
+        let with_deadline = TextSearchOptions { deadline: Some(far), ..TextSearchOptions::default() };
+        let timed = search_in_batches(&root, &["alpha"], &with_deadline, &|_| true, 1).unwrap();
+        let untimed = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &|_| true, 1).unwrap();
+        assert_eq!(timed, untimed);
+        assert_eq!(timed.incomplete, None);
     }
 }

@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use camino::Utf8PathBuf;
 use clap::{Args, Parser, Subcommand};
@@ -14,7 +15,7 @@ use crate::analysis::registry::AnalyzerRegistry;
 use crate::budget::{Budget, apply_budget};
 use crate::error::MonoklError;
 use crate::output::agent::{ToDomainError, render_projection, search_row_text};
-use crate::pipeline::{SearchRequest, search};
+use crate::pipeline::{SearchRequest, search_with_timeout};
 use crate::text_search::DEFAULT_MAX_FILES;
 use crate::types::{Diagnostic, DiagnosticKind, Language};
 
@@ -60,6 +61,17 @@ struct SearchArgs {
     /// The most bytes across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_bytes)]
     max_bytes: usize,
+    /// Stops after this many seconds and prints what was found so far, marked as a partial result. 0 means no limit.
+    #[arg(long, value_name = "SECONDS", default_value = "30", value_parser = parse_timeout)]
+    timeout: f64,
+}
+
+/// Reads `--timeout`: a non-negative number of seconds, fractions allowed.
+fn parse_timeout(text: &str) -> Result<f64, String> {
+    let seconds: f64 = text.parse().map_err(|e| format!("`{text}` is not a number of seconds: {e}"))?;
+    Duration::try_from_secs_f64(seconds)
+        .map(|_| seconds)
+        .map_err(|e| format!("`{text}` is not a usable number of seconds: {e}"))
 }
 
 /// Runs the command line with `args`, writing results to `out` and errors to `err`.
@@ -115,7 +127,7 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
         respect_ignore_files: !args.no_ignore,
         language: args.language,
     };
-    let result = search(&registry(), &request).map_err(|e| error_text(&e))?;
+    let result = search_with_timeout(&registry(), &request, timeout(args)).map_err(|e| error_text(&e))?;
 
     let mut ranked = result.ranked;
     let mut diagnostics = result.diagnostics;
@@ -144,6 +156,11 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
     let total_before = ranked.len();
     let response = apply_budget(ranked, total_before, &budget, search_row_text, diagnostics);
     render_projection(&response).map_err(|e| e.render())
+}
+
+/// The deadline `--timeout` asks for; `0` asks for none.
+fn timeout(args: &SearchArgs) -> Option<Duration> {
+    (args.timeout > 0.0).then(|| Duration::from_secs_f64(args.timeout))
 }
 
 fn relativize(path: &mut Utf8PathBuf, base: &Utf8PathBuf) {
