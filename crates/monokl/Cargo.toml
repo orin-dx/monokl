@@ -36,7 +36,6 @@ cli = ["dep:clap", "dep:michi", "miette"]
 miette = ["dep:miette", "michi?/miette"]
 
 [dependencies]
-blake3.workspace = true
 camino.workspace = true
 grep-matcher.workspace = true
 grep-regex.workspace = true
@@ -45,7 +44,6 @@ ignore.workspace = true
 rayon.workspace = true
 regex.workspace = true
 rustc-hash.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 
 clap = { workspace = true, optional = true }
@@ -65,5 +63,4 @@ workspace = true
 peak_alloc.workspace = true
 proptest.workspace = true
 rstest.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true

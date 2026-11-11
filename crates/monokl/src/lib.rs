@@ -8,7 +8,6 @@ pub mod budget;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod dedup;
-pub mod digest;
 pub mod error;
 pub mod file_io;
 #[cfg(feature = "cli")]

@@ -3,13 +3,13 @@
 //! The parse owns its syntax tree. Everything leaving this module is owned data, so no tree node escapes.
 
 use camino::Utf8Path;
-use ra_ap_syntax::ast::{self, AstNode, HasAttrs, HasModuleItem, HasName, HasVisibility};
+use ra_ap_syntax::ast::{self, AstNode, HasAttrs, HasModuleItem, HasName};
 use ra_ap_syntax::{Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange};
 
+use crate::analysis::Degradation;
 use crate::analysis::nesting::{self, Syntax};
 use crate::analysis::parse_stack::on_parse_stack;
-use crate::analysis::{AnalysisProfile, Degradation};
-use crate::types::{CodeBlock, ParentContext, SymbolEntry, SymbolKind, Visibility};
+use crate::types::{CodeBlock, ParentContext, SymbolKind};
 
 /// The fewest lines an `impl` or trait method needs to get a block of its own. A shorter one is a stub or accessor
 /// that the block holding it already shows whole.
@@ -34,7 +34,6 @@ pub(crate) const MAX_NESTING_LEVELS: usize = 256;
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
 pub(super) struct Extraction {
-    pub(super) symbols: Vec<SymbolEntry>,
     pub(super) blocks: Vec<CodeBlock>,
     pub(super) test_blocks: Vec<CodeBlock>,
     pub(super) had_parse_errors: bool,
@@ -48,32 +47,29 @@ impl Extraction {
     }
 }
 
-/// Extracts what `profile` asks for from `source`.
+/// Extracts the blocks of `source`.
 ///
-/// Rust files have no dependency records, so the dependencies profile reads nothing. A file too long or nested too
+/// A file too long or nested too
 /// deeply for the parse stack and the tree drop is [`Extraction::degraded`] without being parsed, and so is one whose
 /// parse or extraction panics.
-pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
-    if profile == AnalysisProfile::Dependencies {
-        return Extraction::default();
-    }
+pub(super) fn extract(path: &Utf8Path, source: &str) -> Extraction {
     if source.len() > MAX_PARSED_SOURCE_LEN {
         return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
     if let Err(degradation) = nesting::check(source, Syntax::Rust, MAX_NESTING_LEVELS) {
         return Extraction::degraded(degradation);
     }
-    on_parse_stack(|| parse_and_extract(path, source, profile)).unwrap_or_else(Extraction::degraded)
+    on_parse_stack(|| parse_and_extract(path, source)).unwrap_or_else(Extraction::degraded)
 }
 
-fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
+fn parse_and_extract(path: &Utf8Path, source: &str) -> Extraction {
     let parse = SourceFile::parse(source, Edition::CURRENT);
     let had_parse_errors = !parse.errors().is_empty();
     // The root of a parse is always a source file, so the cast cannot fail; the let-else keeps that out of a panic.
     let Some(file) = SourceFile::cast(parse.syntax_node()) else {
         return Extraction::degraded(Degradation::Panicked);
     };
-    let mut walker = Walker { path, source, profile, lines: LineIndex::new(source), out: Extraction::default() };
+    let mut walker = Walker { path, source, lines: LineIndex::new(source), out: Extraction::default() };
     let file_is_test = file.attrs().any(|attr| attr.excl_token().is_some() && is_test_attr(&attr));
     walker.items(file.items(), None, file_is_test);
     Extraction { had_parse_errors, ..walker.out }
@@ -82,7 +78,7 @@ fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) ->
 /// Parses and extracts on the calling thread, for a test that supplies its own stack.
 #[cfg(all(test, feature = "lang-ts"))]
 pub(super) fn parse_here(source: &str) {
-    drop(parse_and_extract(Utf8Path::new("a.rs"), source, AnalysisProfile::Full));
+    drop(parse_and_extract(Utf8Path::new("a.rs"), source));
 }
 
 /// Maps byte offsets to 1-based line numbers.
@@ -107,28 +103,9 @@ impl LineIndex {
     }
 }
 
-/// The item whose members are being walked: what each member block takes as its parent.
-struct Holder {
-    parent: ParentContext,
-    /// The type that owns the members: an `impl`'s target or a trait's name; `None` for a module.
-    owner: Option<String>,
-    /// The trait an `impl` implements.
-    trait_impl: Option<String>,
-}
-
-/// An item or method as the walk found it.
-struct Declared<'a> {
-    node: &'a SyntaxNode,
-    kind: SymbolKind,
-    /// `None` for an item that has no name (a macro call, an `extern` block) or that the parse recovered without one.
-    name: Option<&'a str>,
-    visibility: Option<ast::Visibility>,
-}
-
 struct Walker<'s> {
     path: &'s Utf8Path,
     source: &'s str,
-    profile: AnalysisProfile,
     lines: LineIndex,
     out: Extraction,
 }
@@ -144,37 +121,26 @@ impl Walker<'_> {
 
     /// Walks the items of a file or an inline module. Each becomes a block, then its own members do. `in_test` marks
     /// the items as test code when an enclosing item or file is.
-    fn items(&mut self, items: impl Iterator<Item = ast::Item>, holder: Option<&Holder>, in_test: bool) {
+    fn items(&mut self, items: impl Iterator<Item = ast::Item>, holder: Option<&ParentContext>, in_test: bool) {
         for item in items {
             self.item(&item, holder, in_test);
         }
     }
 
-    fn item(&mut self, item: &ast::Item, holder: Option<&Holder>, in_test: bool) {
+    fn item(&mut self, item: &ast::Item, holder: Option<&ParentContext>, in_test: bool) {
         let Some((kind, name)) = describe(item) else { return };
         let in_test = in_test || item.attrs().any(|attr| is_test_attr(&attr));
-        let declared = Declared { node: item.syntax(), kind, name: name.as_deref(), visibility: item_visibility(item) };
-        self.record(&declared, holder, in_test);
+        self.record(item.syntax(), kind, holder, in_test);
 
         let Some(name) = name else { return };
-        let line = self.line_of(item.syntax().text_range().start());
+        let holder = ParentContext { kind, name };
         match item {
             ast::Item::Module(module) => {
                 let Some(list) = module.item_list() else { return };
-                let holder = Holder { parent: ParentContext { kind, name, line }, owner: None, trait_impl: None };
                 self.items(list.items(), Some(&holder), in_test);
             }
-            ast::Item::Impl(imp) => {
-                let trait_impl = imp.trait_().map(|ty| collapse(&ty.syntax().text().to_string()));
-                let owner = imp.self_ty().map(|ty| collapse(&ty.syntax().text().to_string()));
-                let holder = Holder { parent: ParentContext { kind, name, line }, owner, trait_impl };
-                self.methods(imp.assoc_item_list(), &holder, in_test);
-            }
-            ast::Item::Trait(item_trait) => {
-                let holder =
-                    Holder { owner: Some(name.clone()), parent: ParentContext { kind, name, line }, trait_impl: None };
-                self.methods(item_trait.assoc_item_list(), &holder, in_test);
-            }
+            ast::Item::Impl(imp) => self.methods(imp.assoc_item_list(), &holder, in_test),
+            ast::Item::Trait(item_trait) => self.methods(item_trait.assoc_item_list(), &holder, in_test),
             ast::Item::AsmExpr(_)
             | ast::Item::Const(_)
             | ast::Item::Enum(_)
@@ -195,79 +161,49 @@ impl Walker<'_> {
     /// A block for each method with a body in an `impl` or trait, at least [`MIN_MEMBER_LINES`] long unless it is test
     /// code. Any other member (a bodiless method, a constant, a type, a macro call) gets one only when it is itself
     /// marked as test code, so its matches do not go to the holder.
-    fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &Holder, in_test: bool) {
+    fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &ParentContext, in_test: bool) {
         let Some(list) = list else { return };
         for member in list.assoc_items() {
             let marked = member.attrs().any(|attr| is_test_attr(&attr));
-            let (kind, name, visibility, node) = match &member {
+            let (kind, node) = match &member {
                 ast::AssocItem::Fn(function) if function.body().is_some() => {
-                    let Some(name) = function.name() else { continue };
+                    if function.name().is_none() {
+                        continue;
+                    }
                     let in_test = in_test || marked;
                     let range = function.syntax().text_range();
                     // A short test method still gets a block, so a search can tell its matches from the holder's.
                     if !in_test && self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
                         continue;
                     }
-                    let declared = Declared {
-                        node: function.syntax(),
-                        kind: SymbolKind::Method,
-                        name: Some(name.text()),
-                        visibility: function.visibility(),
-                    };
-                    self.record(&declared, Some(holder), in_test);
+                    self.record(function.syntax(), SymbolKind::Method, Some(holder), in_test);
                     continue;
                 }
-                ast::AssocItem::Fn(function) => {
-                    (SymbolKind::Method, function.name(), function.visibility(), function.syntax())
-                }
-                ast::AssocItem::Const(item) => (SymbolKind::Variable, item.name(), item.visibility(), item.syntax()),
-                ast::AssocItem::TypeAlias(item) => {
-                    (SymbolKind::TypeAlias, item.name(), item.visibility(), item.syntax())
-                }
-                ast::AssocItem::MacroCall(call) => (SymbolKind::Macro, None, None, call.syntax()),
+                ast::AssocItem::Fn(function) => (SymbolKind::Method, function.syntax()),
+                ast::AssocItem::Const(item) => (SymbolKind::Variable, item.syntax()),
+                ast::AssocItem::TypeAlias(item) => (SymbolKind::TypeAlias, item.syntax()),
+                ast::AssocItem::MacroCall(call) => (SymbolKind::Macro, call.syntax()),
             };
             if marked {
-                let declared = Declared { node, kind, name: name.as_ref().map(ast::Name::text), visibility };
-                self.record(&declared, Some(holder), true);
+                self.record(node, kind, Some(holder), true);
             }
         }
     }
 
-    /// Records one item: its symbol unless it is test code, and its block, with attributes and doc comments, under the
-    /// full profile. `name` is `None` for an item without one, which leaves it without a symbol.
-    fn record(&mut self, declared: &Declared<'_>, holder: Option<&Holder>, in_test: bool) {
-        let Declared { node, kind, name, ref visibility } = *declared;
+    /// Records one item's block, with attributes and doc comments, in `test_blocks` when it is test code.
+    fn record(&mut self, node: &SyntaxNode, kind: SymbolKind, holder: Option<&ParentContext>, in_test: bool) {
         let signature = self.signature(node);
         let range = node.text_range();
-        let (line_start, line_end) = (self.line_of(range.start()), self.line_of(range.end()));
-        // A trait's methods and the methods implementing one are as visible as the trait, which they do not say.
-        let inherits_visibility =
-            holder.is_some_and(|h| h.trait_impl.is_some() || h.parent.kind == SymbolKind::Interface);
-        if let (Some(name), false) = (name, in_test) {
-            self.out.symbols.push(SymbolEntry {
-                name: name.to_owned(),
-                kind,
-                line: line_start,
-                signature: Some(signature.clone()),
-                owner: holder.and_then(|holder| holder.owner.clone()),
-                trait_impl: holder.and_then(|holder| holder.trait_impl.clone()),
-                visibility: (!inherits_visibility).then(|| self.visibility(visibility.as_ref())),
-                kind_detail: None,
-            });
-        }
-        if self.profile != AnalysisProfile::Full {
-            return;
-        }
         let block = CodeBlock {
             file: self.path.to_owned(),
-            line_start,
-            line_end,
+            line_start: self.line_of(range.start()),
+            line_end: self.line_of(range.end()),
             node_kind: kind,
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
             matched_lines: Vec::new(),
             matched_keywords: Vec::new(),
-            parent: holder.map(|holder| holder.parent.clone()),
+            parent: holder.cloned(),
         };
         if in_test {
             self.out.test_blocks.push(block);
@@ -310,17 +246,6 @@ impl Walker<'_> {
         let Some(start) = start else { return String::new() };
         collapse(self.text(TextRange::new(start, end.max(start)))).trim_end_matches([';', ',']).trim_end().to_owned()
     }
-
-    fn visibility(&self, visibility: Option<&ast::Visibility>) -> Visibility {
-        let Some(visibility) = visibility else { return Visibility::Private };
-        let text = collapse(self.text(visibility.syntax().text_range()));
-        let text = text.replace(' ', "");
-        match text.as_str() {
-            "pub" => Visibility::Public,
-            "pub(crate)" => Visibility::Crate,
-            _ => Visibility::Module,
-        }
-    }
 }
 
 /// The kind and the name of an item that gets a block, `None` for one that does not (a `use`, an `extern crate`, an
@@ -358,28 +283,6 @@ fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
         ast::Item::ExternBlock(_) => (SymbolKind::Other, None),
         ast::Item::AsmExpr(_) | ast::Item::ExternCrate(_) | ast::Item::Use(_) => return None,
     })
-}
-
-fn item_visibility(item: &ast::Item) -> Option<ast::Visibility> {
-    match item {
-        ast::Item::Fn(it) => it.visibility(),
-        ast::Item::Struct(it) => it.visibility(),
-        ast::Item::Union(it) => it.visibility(),
-        ast::Item::Enum(it) => it.visibility(),
-        ast::Item::Trait(it) => it.visibility(),
-        ast::Item::TypeAlias(it) => it.visibility(),
-        ast::Item::Const(it) => it.visibility(),
-        ast::Item::Static(it) => it.visibility(),
-        ast::Item::Module(it) => it.visibility(),
-        ast::Item::MacroDef(it) => it.visibility(),
-        ast::Item::Impl(it) => it.visibility(),
-        ast::Item::MacroRules(_)
-        | ast::Item::AsmExpr(_)
-        | ast::Item::ExternBlock(_)
-        | ast::Item::ExternCrate(_)
-        | ast::Item::MacroCall(_)
-        | ast::Item::Use(_) => None,
-    }
 }
 
 /// `text` on one line: every run of whitespace becomes one space.

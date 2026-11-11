@@ -228,8 +228,7 @@ mod tests {
         first.block.matched_lines = vec![11, 12];
         first.block.matched_keywords = vec!["a".to_string()];
         first.final_score = 2.25;
-        first.parent_context =
-            Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string(), line: 1 });
+        first.parent_context = Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string() });
         let duplicate = ranked("a.ts", 12, 18, 8);
         let mut other = ranked("b.ts", 1, 3, 9);
         other.block.code = "fn b() {}".to_string();
@@ -238,7 +237,7 @@ mod tests {
         let out = dedup_blocks(vec![first.clone(), duplicate, other.clone()]);
         let fields = |r: &RankedBlock| {
             let b = &r.block;
-            let parent = r.parent_context.as_ref().map(|p| (p.kind, p.name.clone(), p.line));
+            let parent = r.parent_context.as_ref().map(|p| (p.kind, p.name.clone()));
             // Two tuples: std implements PartialEq and Debug for tuples of at most 12 elements.
             (
                 (b.file.clone(), b.line_start, b.line_end, b.node_kind, b.code.clone(), b.symbol_signature.clone()),
@@ -345,7 +344,7 @@ mod tests {
 
     fn member_of_class(file: &str, line_start: usize, line_end: usize, rank: usize) -> RankedBlock {
         let mut member = ranked(file, line_start, line_end, rank);
-        member.block.parent = Some(ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 });
+        member.block.parent = Some(ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() });
         member
     }
 

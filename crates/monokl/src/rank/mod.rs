@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_ranked_block_carries_the_parent_of_its_block() {
-        let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+        let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
         let mut member = block("a.ts", 3, 5, SymbolKind::Method, vec![4]);
         member.parent = Some(parent.clone());
         let blocks =

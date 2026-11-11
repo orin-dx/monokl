@@ -9,15 +9,10 @@ use crate::analysis::nesting;
 use crate::analysis::parse_stack::on_parse_stack;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::pipeline::{SearchRequest, SearchResult, search};
-use crate::types::{CodeBlock, DiagnosticKind, Language, SymbolKind, Visibility};
-
-fn analyze_with(text: &str, profile: AnalysisProfile) -> Arc<FileAnalysis> {
-    let text = text.to_owned();
-    RustAnalyzer::new().analyze_with_profile(Utf8Path::new("src/lib.rs"), Box::new(move || Ok(text)), profile).unwrap()
-}
+use crate::types::{CodeBlock, DiagnosticKind, Language, SymbolKind};
 
 fn analyze_source(text: &str) -> Arc<FileAnalysis> {
-    analyze_with(text, AnalysisProfile::Full)
+    RustAnalyzer::new().analyze(Utf8Path::new("src/lib.rs"), text.to_owned()).unwrap()
 }
 
 /// First line, last line, kind, signature and parent kind and name of a block.
@@ -50,24 +45,11 @@ fn supports_follows_the_extension(#[case] path: &str, #[case] expected: bool) {
     let analyzer = RustAnalyzer::new();
     let path = Utf8Path::new(path);
     assert_eq!(analyzer.supports(path), expected);
-    assert_eq!(analyzer.language_for(path), expected.then_some(LanguageId::Rust));
 }
 
 #[test]
-fn it_reports_its_language_and_capabilities() {
-    let analyzer = RustAnalyzer::new();
-    assert_eq!(analyzer.languages(), [LanguageId::Rust]);
-    assert_eq!(
-        analyzer.capabilities(LanguageId::Rust),
-        AnalyzerCapabilities {
-            blocks: true,
-            classified_imports: false,
-            resolved_import_graph: CapabilityPrecision::Unsupported,
-            refs: CapabilityPrecision::Unsupported,
-            definition: CapabilityPrecision::Unsupported,
-            inspect_detail: CapabilityPrecision::Unsupported,
-        }
-    );
+fn it_reports_its_language() {
+    assert_eq!(RustAnalyzer::new().languages(), [LanguageId::Rust]);
 }
 
 const KINDS: &str = "\
@@ -110,10 +92,8 @@ union Bits {
 #[test]
 fn each_kind_of_item_is_a_block_with_its_header_as_the_signature() {
     let analysis = analyze_source(KINDS);
-    assert_eq!(analysis.language(), "rust");
     assert!(!analysis.had_parse_errors);
     assert_eq!(analysis.degradation, None);
-    assert_eq!(analysis.digest, Digest::blake3(KINDS.as_bytes()));
     assert_eq!(
         rows(&analysis.blocks),
         [
@@ -142,35 +122,6 @@ fn a_block_keeps_its_attributes_and_doc_comments_but_its_signature_leaves_them_o
     assert_eq!(analysis.blocks[1].code, "pub(crate) struct Point<T> {\n    x: T,\n}");
     assert_eq!(analysis.blocks[6].code, "const LIMIT: usize = 8;");
     assert!(analysis.blocks.iter().all(|b| b.file == "src/lib.rs"));
-}
-
-#[test]
-fn symbols_carry_name_kind_line_signature_and_visibility() {
-    let analysis = analyze_source(KINDS);
-    let symbols: Vec<_> = analysis.symbols.iter().map(|s| (s.name.as_str(), s.kind, s.line, s.visibility)).collect();
-    assert_eq!(
-        symbols,
-        [
-            ("add", SymbolKind::Function, 3, Some(Visibility::Public)),
-            ("Point", SymbolKind::Struct, 12, Some(Visibility::Crate)),
-            ("Unit", SymbolKind::Struct, 16, Some(Visibility::Private)),
-            ("Mode", SymbolKind::Enum, 17, Some(Visibility::Public)),
-            ("Shape", SymbolKind::Interface, 21, Some(Visibility::Public)),
-            ("Result", SymbolKind::TypeAlias, 24, Some(Visibility::Public)),
-            ("LIMIT", SymbolKind::Variable, 25, Some(Visibility::Private)),
-            ("COUNT", SymbolKind::Variable, 26, Some(Visibility::Private)),
-            ("twice", SymbolKind::Macro, 27, Some(Visibility::Private)),
-            ("Bits", SymbolKind::Struct, 32, Some(Visibility::Private)),
-        ]
-    );
-    assert_eq!(analysis.symbols[0].signature.as_deref(), Some("pub fn add<T: Add>(a: T, b: T) -> T where T: Copy"));
-}
-
-#[test]
-fn restricted_visibilities_map_to_module() {
-    let analysis = analyze_source("pub(super) fn a() {}\npub(in crate::x) fn b() {}\npub(self) fn c() {}\n");
-    let visibilities: Vec<_> = analysis.symbols.iter().map(|s| s.visibility).collect();
-    assert_eq!(visibilities, [Some(Visibility::Module); 3]);
 }
 
 const IMPLS: &str = "\
@@ -218,27 +169,6 @@ fn impl_blocks_and_their_long_methods_are_blocks_with_the_impl_as_parent() {
             (22, 25, SymbolKind::Impl, "impl Cart", None),
         ]
     );
-    assert_eq!(analysis.blocks[2].parent.as_ref().map(|p| p.line), Some(3));
-    assert_eq!(analysis.blocks[5].parent.as_ref().map(|p| p.line), Some(16));
-}
-
-#[test]
-fn method_symbols_name_the_owning_type_and_the_implemented_trait() {
-    let analysis = analyze_source(IMPLS);
-    let methods: Vec<_> = analysis
-        .symbols
-        .iter()
-        .filter(|s| s.kind == SymbolKind::Method)
-        .map(|s| (s.name.as_str(), s.line, s.owner.as_deref(), s.trait_impl.as_deref(), s.visibility))
-        .collect();
-    assert_eq!(
-        methods,
-        [
-            ("new", 4, Some("Cart"), None, Some(Visibility::Public)),
-            ("total", 10, Some("Cart"), None, Some(Visibility::Public)),
-            ("fmt", 17, Some("Wrapper<T>"), Some("fmt::Display"), None),
-        ]
-    );
 }
 
 #[test]
@@ -261,8 +191,6 @@ fn a_trait_method_with_a_body_is_a_method_of_the_trait_and_one_without_is_not() 
             (4, 7, SymbolKind::Method, "fn greet(&self) -> String", Some((SymbolKind::Interface, "Greet"))),
         ]
     );
-    let method = analysis.symbols.iter().find(|s| s.name == "greet").unwrap();
-    assert_eq!((method.owner.as_deref(), method.trait_impl.as_deref()), (Some("Greet"), None));
 }
 
 #[test]
@@ -301,18 +229,16 @@ mod elsewhere;
 fn a_module_declared_in_another_file_has_no_block() {
     let analysis = analyze_source("mod elsewhere;\npub mod other;\n");
     assert_eq!(rows(&analysis.blocks), []);
-    assert_eq!(analysis.symbols.len(), 0);
 }
 
 #[test]
 fn use_and_extern_crate_declarations_are_not_blocks() {
     let analysis = analyze_source("use std::fmt;\nextern crate core;\n");
     assert_eq!(rows(&analysis.blocks), []);
-    assert_eq!(analysis.symbols.len(), 0);
 }
 
 #[test]
-fn item_macro_calls_and_extern_blocks_are_blocks_without_symbols() {
+fn item_macro_calls_and_extern_blocks_are_blocks() {
     let analysis = analyze_source(
         "thread_local! {\n    static X: u8 = 1;\n}\n\nlazy_static::lazy_static! {\n    static ref Y: u8 = 2;\n}\n\nextern \"C\" {\n    fn ffi(x: u32) -> u32;\n}\n\n#[cfg(test)]\nfixtures! {\n    a\n}\n",
     );
@@ -325,7 +251,6 @@ fn item_macro_calls_and_extern_blocks_are_blocks_without_symbols() {
         ]
     );
     assert_eq!(rows(&analysis.test_blocks), [(13, 16, SymbolKind::Macro, "fixtures!", None)]);
-    assert_eq!(analysis.symbols.len(), 0);
 }
 
 #[test]
@@ -414,13 +339,6 @@ fn code_under_cfg_test_and_test_attributes_is_test_code() {
 }
 
 #[test]
-fn test_code_has_no_symbols() {
-    let analysis = analyze_source(TESTS);
-    let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["live", "only_outside_tests", "maybe_tests", "feature_named_test", "Live"]);
-}
-
-#[test]
 fn an_inner_cfg_test_attribute_makes_the_whole_file_test_code() {
     let analysis = analyze_source("#![cfg(test)]\n\nfn a() {}\nstruct B;\n");
     assert_eq!(rows(&analysis.blocks), []);
@@ -471,21 +389,6 @@ fn a_source_at_the_cap_is_parsed() {
 }
 
 #[test]
-fn profiles_fill_only_what_they_promise() {
-    let dependencies = analyze_with(KINDS, AnalysisProfile::Dependencies);
-    assert_eq!(dependencies.profile, AnalysisProfile::Dependencies);
-    assert_eq!((dependencies.symbols.len(), dependencies.blocks.len(), dependencies.had_parse_errors), (0, 0, false));
-
-    let structural = analyze_with(KINDS, AnalysisProfile::Structural);
-    assert_eq!(structural.profile, AnalysisProfile::Structural);
-    assert_eq!((structural.symbols.len(), structural.blocks.len(), structural.test_blocks.len()), (10, 0, 0));
-
-    let full = analyze_with(KINDS, AnalysisProfile::Full);
-    assert_eq!(full.profile, AnalysisProfile::Full);
-    assert_eq!((full.symbols.len(), full.blocks.len()), (10, 10));
-}
-
-#[test]
 fn multibyte_text_does_not_shift_lines_or_slices() {
     let analysis = analyze_source("// ünïcödé 日本語\nfn naïve() -> &'static str {\n    \"日本語\"\n}\n");
     assert_eq!(rows(&analysis.blocks), [(1, 4, SymbolKind::Function, "fn naïve() -> &'static str", None)]);
@@ -500,8 +403,7 @@ fn analyzing_is_the_same_on_any_thread() {
         .map(|_| {
             let analyzer = Arc::clone(&analyzer);
             std::thread::spawn(move || {
-                let analysis =
-                    analyzer.analyze(Utf8Path::new("src/lib.rs"), Box::new(|| Ok(IMPLS.to_owned()))).unwrap();
+                let analysis = analyzer.analyze(Utf8Path::new("src/lib.rs"), IMPLS.to_owned()).unwrap();
                 format!("{:?}", analysis.blocks)
             })
         })
@@ -645,7 +547,6 @@ fn every_shape_one_past_the_cap_is_degraded_without_being_parsed() {
         );
         // A parse of these files finds the function and its sibling, so none found means no parse.
         assert_eq!(rows(&analysis.blocks), [], "{name}");
-        assert_eq!(analysis.symbols.len(), 0, "{name}");
     }
 }
 

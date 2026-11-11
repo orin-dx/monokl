@@ -1,4 +1,4 @@
-//! Monokl's core data types: symbols, dependencies, per-language data and search results.
+//! Monokl's core data types: code blocks, ranked results and diagnostics.
 use camino::Utf8PathBuf;
 
 /// The classification of a symbol.
@@ -26,126 +26,6 @@ pub enum SymbolKind {
     Other,
 }
 
-/// The visibility of a symbol.
-///
-/// There is no `Super` variant: Rust's `pub(super)` and `pub(in ...)` map to [`Visibility::Module`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Visibility {
-    Public,
-    Crate,
-    Module,
-    Private,
-}
-
-/// A symbol found in a source file.
-#[derive(Debug, Clone)]
-pub struct SymbolEntry {
-    pub name: String,
-    pub kind: SymbolKind,
-    pub line: usize,
-    pub signature: Option<String>,
-    /// The type that owns this symbol, such as the target of the enclosing `impl` block.
-    pub owner: Option<String>,
-    pub trait_impl: Option<String>,
-    pub visibility: Option<Visibility>,
-    pub kind_detail: Option<String>,
-}
-
-/// The kind of a single import binding within a [`DependencyBinding`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BindingKind {
-    Named,
-    Default,
-    Namespace,
-    Glob,
-}
-
-/// The resolved target of a dependency statement.
-///
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum DependencyTarget {
-    File { specifier: String, resolved: Option<Utf8PathBuf>, is_relative: bool },
-}
-
-/// A single binding introduced by a [`DependencyRecord`].
-#[derive(Debug, Clone)]
-pub struct DependencyBinding {
-    pub imported: String,
-    pub local: String,
-    pub kind: BindingKind,
-}
-
-/// A single dependency statement in a source file.
-#[derive(Debug, Clone)]
-pub struct DependencyRecord {
-    pub line: usize,
-    pub bindings: Vec<DependencyBinding>,
-    pub target: DependencyTarget,
-}
-
-/// A single named export statement.
-#[derive(Debug, Clone)]
-pub struct ExportRecord {
-    pub name: String,
-    pub line: usize,
-    pub re_export: bool,
-}
-
-/// A single JSX attribute.
-#[derive(Debug, Clone)]
-pub struct JsxAttribute {
-    pub name: String,
-    pub string_value: Option<String>,
-    pub is_expression: bool,
-    pub is_spread: bool,
-}
-
-/// A single JSX element usage.
-#[derive(Debug, Clone)]
-pub struct JsxElementEntry {
-    pub name: String,
-    pub is_html: bool,
-    pub line: usize,
-    pub attributes: Vec<JsxAttribute>,
-}
-
-/// TypeScript-specific analysis output.
-#[derive(Debug, Clone, Default)]
-pub struct TsData {
-    pub jsx_elements: Vec<JsxElementEntry>,
-    pub type_only_imports: Vec<String>,
-    pub unresolved_aliases: Vec<String>,
-}
-
-/// Per-language analysis output.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum LangData {
-    Ts(TsData),
-    /// Rust files carry nothing beyond what every file has.
-    Rust,
-}
-
-impl LangData {
-    /// Returns the TypeScript data; empty for a file of another language.
-    pub fn ts(&self) -> &TsData {
-        static NONE: TsData =
-            TsData { jsx_elements: Vec::new(), type_only_imports: Vec::new(), unresolved_aliases: Vec::new() };
-        match self {
-            LangData::Ts(ts) => ts,
-            LangData::Rust => &NONE,
-        }
-    }
-
-    /// Returns the JSX elements of the TypeScript data.
-    pub fn jsx_elements(&self) -> &[JsxElementEntry] {
-        &self.ts().jsx_elements
-    }
-}
-
 /// A block of code matched by the search pipeline.
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
@@ -166,7 +46,6 @@ pub struct CodeBlock {
 pub struct ParentContext {
     pub kind: SymbolKind,
     pub name: String,
-    pub line: usize,
 }
 
 /// A [`CodeBlock`] with its ranking scores.

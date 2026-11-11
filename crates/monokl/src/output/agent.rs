@@ -497,7 +497,7 @@ mod projection_tests {
             rank,
             parent_context,
         };
-        let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned(), line: 1 };
+        let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned() };
         let response = SearchResponse {
             results: vec![
                 ranked(3, SymbolKind::Method, Some(class("Foo")), 1),

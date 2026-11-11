@@ -2,7 +2,7 @@
 
 use std::io;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 
 /// A filesystem operation that failed, with the path it was operating on.
 #[derive(Debug, thiserror::Error)]
@@ -24,32 +24,12 @@ impl FileIoError {
         Self::Read { path: path.into(), source }
     }
 
-    /// Returns the path the failed operation was acting on.
-    #[must_use]
-    pub fn path(&self) -> &Utf8Path {
-        match self {
-            Self::Read { path, .. } => path.as_path(),
-        }
-    }
-
-    /// Returns the underlying I/O error.
-    #[must_use]
-    pub fn io_source(&self) -> &io::Error {
-        match self {
-            Self::Read { source, .. } => source,
-        }
-    }
-
     /// Returns the kind of the underlying I/O error.
     #[must_use]
     pub fn io_kind(&self) -> io::ErrorKind {
-        self.io_source().kind()
-    }
-
-    /// Returns whether the operation failed because the path does not exist.
-    #[must_use]
-    pub fn is_not_found(&self) -> bool {
-        self.io_kind() == io::ErrorKind::NotFound
+        match self {
+            Self::Read { source, .. } => source.kind(),
+        }
     }
 }
 
@@ -67,18 +47,15 @@ mod tests {
     fn display_names_the_operation_and_path() {
         let err = FileIoError::read("/a", not_found());
         assert_eq!(err.to_string(), "failed to read /a");
-        assert_eq!(err.path(), Utf8Path::new("/a"));
         assert_eq!(err.source().map(ToString::to_string).as_deref(), Some("gone"));
     }
 
     #[test]
-    fn kind_accessors_read_the_wrapped_io_error() {
+    fn the_kind_is_the_wrapped_io_errors() {
         let missing = FileIoError::read("/a", not_found());
         assert_eq!(missing.io_kind(), io::ErrorKind::NotFound);
-        assert!(missing.is_not_found());
 
         let denied = FileIoError::read("/a", io::Error::new(io::ErrorKind::PermissionDenied, "no"));
         assert_eq!(denied.io_kind(), io::ErrorKind::PermissionDenied);
-        assert!(!denied.is_not_found());
     }
 }

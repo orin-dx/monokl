@@ -7,10 +7,8 @@ use std::sync::Arc;
 use camino::Utf8Path;
 
 use super::file_analysis::FileAnalysis;
-use super::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer, LanguageId};
-use crate::digest::Digest;
+use super::lang::{LanguageAnalyzer, LanguageId};
 use crate::error::Result;
-use crate::types::LangData;
 
 const LANGUAGES: [LanguageId; 1] = [LanguageId::Rust];
 
@@ -58,44 +56,9 @@ impl LanguageAnalyzer for RustAnalyzer {
         path.extension() == Some("rs")
     }
 
-    fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-        self.supports(path).then_some(LanguageId::Rust)
-    }
-
-    fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-        AnalyzerCapabilities {
-            blocks: true,
-            classified_imports: false,
-            resolved_import_graph: CapabilityPrecision::Unsupported,
-            refs: CapabilityPrecision::Unsupported,
-            definition: CapabilityPrecision::Unsupported,
-            inspect_detail: CapabilityPrecision::Unsupported,
-        }
-    }
-
-    fn analyze_with_profile(
-        &self,
-        path: &Utf8Path,
-        source: Box<dyn FnOnce() -> Result<String>>,
-        profile: AnalysisProfile,
-    ) -> Result<Arc<FileAnalysis>> {
-        let source = source()?;
-        let digest = Digest::blake3(source.as_bytes());
-        let parse::Extraction { symbols, blocks, test_blocks, had_parse_errors, degradation } =
-            parse::extract(path, &source, profile);
-        Ok(Arc::new(FileAnalysis {
-            source_path: path.to_owned(),
-            digest,
-            profile,
-            had_parse_errors,
-            degradation,
-            symbols,
-            dependencies: Vec::new(),
-            exports: Vec::new(),
-            blocks,
-            test_blocks,
-            lang: LangData::Rust,
-        }))
+    fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
+        let parse::Extraction { blocks, test_blocks, had_parse_errors, degradation } = parse::extract(path, &source);
+        Ok(Arc::new(FileAnalysis { had_parse_errors, degradation, blocks, test_blocks }))
     }
 }
 

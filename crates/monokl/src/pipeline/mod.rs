@@ -332,7 +332,7 @@ fn retrieve_blocks(
             message: "invalid UTF-8 replaced with U+FFFD".to_owned(),
         });
     }
-    let analysis = match analyzer.analyze(path, Box::new(move || Ok(text))) {
+    let analysis = match analyzer.analyze(path, text) {
         Ok(analysis) => analysis,
         Err(err) => {
             diagnostics.push(skipped(Some(path), format!("could not analyze: {err}")));
@@ -478,9 +478,8 @@ mod tests {
     use super::*;
     use crate::analysis::LanguageId;
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
-    use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer};
-    use crate::digest::Digest;
-    use crate::types::{LangData, ParentContext, SymbolKind, TsData};
+    use crate::analysis::lang::LanguageAnalyzer;
+    use crate::types::{ParentContext, SymbolKind};
 
     type MakeBlocks = dyn Fn(&Utf8Path, &str) -> Result<(Vec<CodeBlock>, bool)> + Send + Sync;
 
@@ -497,39 +496,13 @@ mod tests {
         fn supports(&self, path: &Utf8Path) -> bool {
             matches!(path.extension(), Some("ts" | "js"))
         }
-        fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-            self.supports(path).then_some(LanguageId::TypeScript)
-        }
-        fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-            AnalyzerCapabilities {
-                blocks: true,
-                classified_imports: false,
-                resolved_import_graph: CapabilityPrecision::Unsupported,
-                refs: CapabilityPrecision::Unsupported,
-                definition: CapabilityPrecision::Unsupported,
-                inspect_detail: CapabilityPrecision::Unsupported,
-            }
-        }
-        fn analyze_with_profile(
-            &self,
-            path: &Utf8Path,
-            source: Box<dyn FnOnce() -> Result<String>>,
-            profile: AnalysisProfile,
-        ) -> Result<Arc<FileAnalysis>> {
-            let source = source()?;
+        fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
             let (blocks, had_parse_errors) = (self.make)(path, &source)?;
             Ok(Arc::new(FileAnalysis {
-                source_path: path.to_owned(),
-                digest: Digest::blake3(source.as_bytes()),
-                profile,
                 had_parse_errors,
                 degradation: self.degradation,
-                symbols: Vec::new(),
-                dependencies: Vec::new(),
-                exports: Vec::new(),
                 blocks,
                 test_blocks: Vec::new(),
-                lang: LangData::Ts(TsData::default()),
             }))
         }
     }
@@ -636,32 +609,12 @@ mod tests {
             fn supports(&self, path: &Utf8Path) -> bool {
                 path.extension() == Some("rs")
             }
-            fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-                self.supports(path).then_some(LanguageId::Rust)
-            }
-            fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-                Canned { make: Box::new(|_, _| Ok((Vec::new(), false))), degradation: None }
-                    .capabilities(LanguageId::Rust)
-            }
-            fn analyze_with_profile(
-                &self,
-                path: &Utf8Path,
-                source: Box<dyn FnOnce() -> Result<String>>,
-                profile: AnalysisProfile,
-            ) -> Result<Arc<FileAnalysis>> {
-                let source = source()?;
+            fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
                 Ok(Arc::new(FileAnalysis {
-                    source_path: path.to_owned(),
-                    digest: Digest::blake3(source.as_bytes()),
-                    profile,
                     had_parse_errors: false,
                     degradation: None,
-                    symbols: Vec::new(),
-                    dependencies: Vec::new(),
-                    exports: Vec::new(),
                     blocks: vec![block(path, &source, 1, 1)],
                     test_blocks: Vec::new(),
-                    lang: LangData::Ts(TsData::default()),
                 }))
             }
         }
@@ -995,7 +948,7 @@ class Foo {
     /// The class `Foo` (lines 1-9) with the methods `alpha` (3-5) and `beta` (6-8), as the TypeScript analyzer emits them.
     fn class_registry() -> AnalyzerRegistry {
         registry(|path, source| {
-            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
             let member = |start, end| CodeBlock {
                 node_kind: SymbolKind::Method,
                 parent: Some(parent.clone()),
@@ -1091,8 +1044,8 @@ class Foo {
     fn member_rows_carry_their_parent_into_the_ranked_block() {
         let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
         let result = search(&class_registry(), &request(&root, "alpha")).unwrap();
-        let parent = result.ranked[0].parent_context.as_ref().map(|p| (p.kind, p.name.as_str(), p.line));
-        assert_eq!(parent, Some((SymbolKind::Class, "Foo", 1)));
+        let parent = result.ranked[0].parent_context.as_ref().map(|p| (p.kind, p.name.as_str()));
+        assert_eq!(parent, Some((SymbolKind::Class, "Foo")));
     }
 
     #[test]
