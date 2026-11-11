@@ -407,3 +407,10 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Decision.** The defaults are `--min-recall 0.95`, `--min-question-recall 0.9` and `--min-member-recall 0.9`, against 58 of 59 (98.3%), 17 of 18 (94.4%) and 15 of 16 (93.8%) on main. One more miss in any set fails the run.
 - **Why.** The old floors (0.9, 0.75, 0.125) were set from the first baselines and sat far below what main now scores, so a regression could pass.
 - **Open.** The floors are a ratchet: raise them with the numbers, never lower them to make a change pass.
+
+## 34. A held-out set and a Rust gate join the harness (2026-11-10)
+
+- **Decision.** Three repositories that no ranking change was tuned on (fastify, trpc, date-fns) carry 24 multi-word and 12 member questions, written and checked with `rg` before monokl first ran on them. They score on their own lines (`held-out questions`, `held-out members`) and the Rust rows on the pinned fd checkout pool into one `--min-rust-recall` rate. The three gates default to 0.9.
+- **Why.** The declared-name bonus (§32) was tuned and scored on the same 18 questions, so 17 of 18 was optimistic. The held-out set scored 23 of 24 and 12 of 12 on first run, close to the tuned 17 of 18 and 15 of 16, which is evidence the bonus and member rows generalize. Rust scored 22 of 24 (11 of 13 identifiers, 11 of 11 questions, 11 of 11 members) once the analyzer landed.
+- **Rule.** Ranking changes may be tuned on the tuned sets and must be reported on the held-out set. A held-out miss is never fixed by editing the question.
+- **Open.** The sets are small, so one miss moves a rate by 4 points; read them as a regression guard, not an estimate. The one held-out miss is trpc `create websocket client` (answer file at rank 7).

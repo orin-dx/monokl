@@ -32,8 +32,14 @@ line (optional `pub`, `pub(crate)`), and its members are `fn` and `const` on an 
 script works on whole files and cannot split them, so a `mod tests` is skipped when sampling and test code inside
 source files still counts as source here. monokl runs without `--language`, which searches every registered language,
 so no flag is passed. Rust rows (identifiers, questions and members together) are scored apart from the TypeScript
-gates and gated by `--min-rust-recall`, which stays 0 until the Rust analyzer ships. A Rust repository that monokl
+gates and gated by `--min-rust-recall`, which defaults to 0.9 now that the analyzer ships. A Rust repository that monokl
 cannot search yet scores 0 hits, which the report states.
+
+Held-out rows guard against tuning to the pinned set. A repository whose options include `held-out` in rg-compare.repos is
+never sampled for identifiers, and its questions carry a fifth cell `held_out` in rg-compare.questions. They are scored
+like the tuned questions and members but on their own `held-out questions` and `held-out members` lines, gated by
+`--min-heldout-recall` and `--min-heldout-member-recall`, both 0.9, set from the first measured scores (23/24 and 12/12). Ranking changes may be tuned
+on the other rows and must be reported on these.
 
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
 """
@@ -52,6 +58,7 @@ MANIFEST = ROOT / "scripts" / "rg-compare.repos"
 QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 UNCAPPED ="1000000"
+HELD_OUT = "held-out"
 # One copy of each rule from `is_test_path` in crates/monokl/src/text_search.rs, which applies every rule to every file.
 TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
 TS_TEST_SUFFIXES = tuple(
@@ -109,9 +116,10 @@ def run(args, cwd=None, check=True):
 def repositories(only):
     for line in MANIFEST.read_text().splitlines():
         if line.strip() and not line.startswith("#"):
-            name, url, sha, *language = line.split()
+            name, url, sha, *options = line.split()
             if not only or name in only:
-                yield name, url, sha, LANGS[language[0] if language else "ts"]
+                language = options[0] if options and options[0] != HELD_OUT else "ts"
+                yield name, url, sha, LANGS[language], HELD_OUT in options
 
 
 def checkout(name, url, sha):
@@ -216,18 +224,20 @@ def first_rank(ordered, wanted):
 def question_rows(only):
     for line in QUESTIONS.read_text().splitlines():
         if line.strip() and not line.startswith("#"):
-            repo, words, file, symbol = (cell.strip() for cell in line.split("|"))
+            repo, words, file, symbol, *flags = (cell.strip() for cell in line.split("|"))
             member = symbol.startswith("member:")
             if not only or repo in only:
-                yield repo, words, file, symbol.removeprefix("member:"), member
+                yield repo, words, file, symbol.removeprefix("member:"), member, "held_out" in flags
 
 
 def score_questions(binary, only):
     """Runs every question and returns one row each. Fails if the answer's declaration is not in the pinned checkout."""
-    checkouts = {name: (checkout(name, url, sha), lang) for name, url, sha, lang in repositories(only)}
+    checkouts = {name: (checkout(name, url, sha), lang, held) for name, url, sha, lang, held in repositories(only)}
     rows = []
-    for repo, words, file, symbol, member in question_rows(only):
-        path, lang = checkouts[repo]
+    for repo, words, file, symbol, member, held_out in question_rows(only):
+        path, lang, held_repo = checkouts[repo]
+        if held_out != held_repo:
+            sys.exit(f"{repo}: held_out flags and the held-out repository marker must agree; fix rg-compare.questions")
         if file not in definitions(symbol, path, lang, member):
             kind = "a class member" if member else "declared"
             sys.exit(f"{repo}: `{symbol}` is not {kind} in {file} at the pinned sha; fix rg-compare.questions")
@@ -253,6 +263,7 @@ def score_questions(binary, only):
                 "file": file,
                 "symbol": symbol,
                 "member": member,
+                "held_out": held_out,
                 "rank": non_test.index(file) + 1 if file in non_test else None,
                 "declaration_in_output": bare_declaration[:40].translate(bare) in output.translate(bare),
                 "rg_any_files": len(set.union(*per_word)),
@@ -276,9 +287,14 @@ def main():
     parser.add_argument("--min-member-recall", type=float, default=0.9,
                         help="fail when the share of member questions with the answer file in the top files and the "
                              "member's declaration in the output is lower")
-    parser.add_argument("--min-rust-recall", type=float, default=0.0,
+    parser.add_argument("--min-rust-recall", type=float, default=0.9,
                         help="fail when the share of Rust hits (identifiers, questions and members pooled) is lower; "
-                             "0 until the Rust analyzer ships")
+                             "0.9 by default")
+    parser.add_argument("--min-heldout-recall", type=float, default=0.9,
+                        help="fail when the share of held-out questions with the answer file in the top files is lower; "
+                             "0.9 by default")
+    parser.add_argument("--min-heldout-member-recall", type=float, default=0.9,
+                        help="fail when the share of held-out member questions is lower; 0.9 by default")
     parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
@@ -288,7 +304,9 @@ def main():
         sys.exit(f"{args.binary} not found; run `cargo build --release` or pass --binary")
 
     report = []
-    for name, url, sha, lang in repositories(args.repo):
+    for name, url, sha, lang, held_out in repositories(args.repo):
+        if held_out:
+            continue  # held-out repositories only score their questions
         path = checkout(name, url, sha)
         rows = []
         for term in sample_terms(path, args.terms, lang):
@@ -372,6 +390,8 @@ def main():
         print("declaration in top: no declarations to score, gate skipped")
 
     scored_questions = [] if args.no_questions else score_questions(args.binary, args.repo)
+    held_questions = [q for q in scored_questions if q["held_out"]]
+    scored_questions = [q for q in scored_questions if not q["held_out"]]
     ts_questions = [q for q in scored_questions if q["language"] == "ts"]
     rust_questions = [q for q in scored_questions if q["language"] == "rust"]
     questions = [q for q in ts_questions if not q["member"]]
@@ -433,11 +453,36 @@ def main():
               f"(gate {args.min_rust_recall:.2%})")
     else:
         print("rust hits: no Rust rows to score, gate skipped")
+
+    # Held-out rows are scored like their tuned counterparts but on their own lines and gates.
+    held_pass = True
+    for label, rows, gate in (
+        ("held-out questions", [q for q in held_questions if not q["member"]], args.min_heldout_recall),
+        ("held-out members", [q for q in held_questions if q["member"]], args.min_heldout_member_recall),
+    ):
+        hit_count = 0
+        for q in rows:
+            hit = q["rank"] is not None and q["rank"] <= args.top and (q["declaration_in_output"] or not q["member"])
+            hit_count += hit
+            print(
+                f"  {'ok  ' if hit else 'MISS'} {q['repo']}: {q['words']!r} -> {'member ' if q['member'] else ''}"
+                f"{q['symbol']} file_rank={q['rank'] or 'absent'} "
+                f"declaration_in_output={'yes' if q['declaration_in_output'] else 'no'} "
+                f"rg_files any={q['rg_any_files']} all={q['rg_all_files']} rg_n_bytes={q['rg_n_bytes']} "
+                f"monokl_bytes={q['monokl_bytes']}"
+            )
+        if rows:
+            rate = hit_count / len(rows)
+            held_pass = held_pass and rate >= gate
+            print(f"{label}: {hit_count}/{len(rows)} = {rate:.2%} (gate {gate:.2%})")
+        else:
+            print(f"{label}: none to score, gate skipped")
     if args.json:
         Path(args.json).write_text(json.dumps(
-            {"identifiers": report, "questions": questions, "members": members, "rust_questions": rust_questions},
+            {"identifiers": report, "questions": questions, "members": members, "rust_questions": rust_questions,
+             "held_out": held_questions},
             indent=2))
-    sys.exit(0 if identifiers_pass and questions_pass and members_pass and rust_pass else 1)
+    sys.exit(0 if identifiers_pass and questions_pass and members_pass and rust_pass and held_pass else 1)
 
 
 if __name__ == "__main__":
