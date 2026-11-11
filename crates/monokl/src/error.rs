@@ -1,14 +1,13 @@
 //! The crate-wide [`MonoklError`] type and its [`Result`] alias.
 //!
 //! Every fallible `pub` and `pub(crate)` function returns [`Result`], except the output layer
-//! (`output::agent::render_projection`), which returns michi's `DomainError`.
+//! (`output::agent::render_search`), which returns michi's `DomainError`.
 use camino::Utf8PathBuf;
 
 use crate::file_io::FileIoError;
 
 /// Errors produced by monokl.
 #[derive(Debug, thiserror::Error)]
-#[cfg_attr(feature = "miette", derive(miette::Diagnostic))]
 #[non_exhaustive]
 pub enum MonoklError {
     /// A file read failed.
@@ -85,24 +84,5 @@ mod tests {
     fn too_many_terms_display() {
         let err = MonoklError::TooManyTerms { count: 12, limit: 8 };
         assert_eq!(err.to_string(), "query has too many terms: 12 > 8");
-    }
-
-    #[cfg(feature = "miette")]
-    #[test]
-    fn variants_have_no_diagnostic_metadata() {
-        use miette::Diagnostic;
-        let variants: Vec<MonoklError> = vec![
-            FileIoError::read("/x", std::io::Error::other("boom")).into(),
-            MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: real_ignore_error() },
-            real_grep_regex_error().into(),
-            MonoklError::NonUtf8Path { path: std::path::PathBuf::from("/bad") },
-            MonoklError::TooManyTerms { count: 12, limit: 8 },
-        ];
-        assert_eq!(variants.len(), 5);
-        for v in &variants {
-            assert!(v.code().is_none());
-            assert!(v.help().is_none());
-            assert!(v.url().is_none());
-        }
     }
 }

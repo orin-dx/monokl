@@ -329,15 +329,6 @@ fn a_cut_by_rows_keeps_the_first_rows_and_says_so() {
 }
 
 #[test]
-fn a_cut_by_bytes_counts_the_printed_rows_and_not_the_blocks() {
-    let printed = PRICE_ROW_1.len() + PRICE_ROW_2.len();
-    let at = monokl(&["search", "price", ".", "--max-bytes", &printed.to_string()]);
-    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
-    let under = monokl(&["search", "price", ".", "--max-bytes", &(printed - 1).to_string()]);
-    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1]));
-}
-
-#[test]
 fn a_cut_by_tokens_counts_the_printed_rows_and_not_the_blocks() {
     let printed = monokl::budget::count_tokens(PRICE_ROW_1) + monokl::budget::count_tokens(PRICE_ROW_2);
     let at = monokl(&["search", "price", ".", "--max-tokens", &printed.to_string()]);
@@ -348,7 +339,8 @@ fn a_cut_by_tokens_counts_the_printed_rows_and_not_the_blocks() {
 
 #[test]
 fn a_first_row_larger_than_the_budget_prints_no_rows_and_says_so() {
-    let output = monokl(&["search", "price", ".", "--max-bytes", &(PRICE_ROW_1.len() - 1).to_string()]);
+    let output =
+        monokl(&["search", "price", ".", "--max-tokens", &(monokl::budget::count_tokens(PRICE_ROW_1) - 1).to_string()]);
     assert_eq!(
         stdout(&output),
         "search: []\ntotalCount: 8\nhelp[2]: showing 0 of 8; raise the cap or refine the query with +term or -term,\

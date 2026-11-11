@@ -5,121 +5,13 @@ use camino::Utf8Path;
 use michi::toon::Value;
 
 use crate::error::MonoklError;
-use crate::types::{Diagnostic, DiagnosticKind, SymbolKind};
+use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
-/// Converts a string into a TOON cell value.
-///
-/// The string is passed through unchanged: michi quotes and escapes control characters when it renders the row, so
-/// escaping here as well would double-escape them.
-pub fn cell(s: &str) -> Value {
-    Value::from(s)
+/// Maps `None` to [`Value::Null`], so a reader can tell an absent field from an empty string.
+fn opt_cell(s: Option<&str>) -> Value {
+    s.map_or(Value::Null, Value::from)
 }
 
-/// Like [`cell`], but maps `None` to [`Value::Null`].
-pub fn opt_cell(s: Option<&str>) -> Value {
-    match s {
-        None => Value::Null,
-        Some(s) => cell(s),
-    }
-}
-
-#[cfg(test)]
-mod cell_tests {
-    use super::*;
-
-    #[test]
-    fn cell_plain_string_passes_through() {
-        assert_eq!(cell("hello"), Value::from("hello"));
-    }
-
-    #[test]
-    fn cell_leaves_line_breaks_for_michi_to_escape() {
-        assert_eq!(cell("line1\r\nline2"), Value::from("line1\r\nline2"));
-    }
-
-    #[test]
-    fn opt_cell_none_is_null() {
-        assert_eq!(opt_cell(None), Value::Null);
-    }
-
-    #[test]
-    fn opt_cell_some_empty_is_not_null() {
-        assert_eq!(opt_cell(Some("")), Value::from(""));
-        assert_ne!(opt_cell(Some("")), Value::Null);
-    }
-
-    // `cell` relies on michi escaping line breaks; if michi stops, multi-line code would break TOON rows.
-    #[test]
-    fn michi_escape_value_escapes_line_breaks() {
-        let escaped = michi::toon::escape_value("// comment\r\nfn body() {\n}");
-        assert_eq!(escaped, "\"// comment\\r\\nfn body() {\\n}\"");
-    }
-}
-
-/// Returns the `camelCase` name of a [`SymbolKind`].
-pub fn symbol_kind_str(k: SymbolKind) -> &'static str {
-    match k {
-        SymbolKind::Function => "function",
-        SymbolKind::Method => "method",
-        SymbolKind::Constructor => "constructor",
-        SymbolKind::Class => "class",
-        SymbolKind::Struct => "struct",
-        SymbolKind::Enum => "enum",
-        SymbolKind::Interface => "interface",
-        SymbolKind::TypeAlias => "typeAlias",
-        SymbolKind::Property => "property",
-        SymbolKind::Field => "field",
-        SymbolKind::Variable => "variable",
-        SymbolKind::Module => "module",
-        SymbolKind::Impl => "impl",
-        SymbolKind::Macro => "macro",
-        SymbolKind::Other => "other",
-    }
-}
-
-#[cfg(test)]
-mod kind_str_tests {
-    use super::*;
-
-    #[test]
-    fn symbol_kind_str_is_camel_case() {
-        assert_eq!(symbol_kind_str(SymbolKind::Function), "function");
-        assert_eq!(symbol_kind_str(SymbolKind::Method), "method");
-        assert_eq!(symbol_kind_str(SymbolKind::Constructor), "constructor");
-        assert_eq!(symbol_kind_str(SymbolKind::Class), "class");
-        assert_eq!(symbol_kind_str(SymbolKind::Struct), "struct");
-        assert_eq!(symbol_kind_str(SymbolKind::Enum), "enum");
-        assert_eq!(symbol_kind_str(SymbolKind::Interface), "interface");
-        assert_eq!(symbol_kind_str(SymbolKind::TypeAlias), "typeAlias");
-        assert_eq!(symbol_kind_str(SymbolKind::Property), "property");
-        assert_eq!(symbol_kind_str(SymbolKind::Field), "field");
-        assert_eq!(symbol_kind_str(SymbolKind::Variable), "variable");
-        assert_eq!(symbol_kind_str(SymbolKind::Module), "module");
-        assert_eq!(symbol_kind_str(SymbolKind::Impl), "impl");
-        assert_eq!(symbol_kind_str(SymbolKind::Macro), "macro");
-        assert_eq!(symbol_kind_str(SymbolKind::Other), "other");
-    }
-}
-
-/// A command result that renders as a TOON table with `N` columns.
-///
-/// The column count is a const generic so a row with the wrong arity cannot be constructed.
-pub trait ToonProjection<const N: usize> {
-    /// The table name.
-    const TYPE_NAME: &'static str;
-    /// The column names.
-    const FIELDS: [&'static str; N];
-    /// Returns one row per item.
-    fn toon_rows(&self) -> Vec<[Value; N]>;
-    /// Returns the total item count to report, if any.
-    fn toon_total_count(&self) -> Option<usize> {
-        None
-    }
-    /// Returns hints rendered after the table.
-    fn toon_hints(&self) -> Vec<michi::Hint> {
-        Vec::new()
-    }
-}
 const TRUNCATION_GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
 
 /// The most matching lines a row's snippet shows.
@@ -191,15 +83,15 @@ fn signature_shows(signature: &str, line: &str) -> bool {
 /// The `parent` cell: the kind and name of the block's parent, such as `class Foo` for a method; `null` for a
 /// top-level block.
 fn parent_cell(parent: Option<&crate::types::ParentContext>) -> Value {
-    opt_cell(parent.map(|p| format!("{} {}", symbol_kind_str(p.kind), p.name)).as_deref())
+    opt_cell(parent.map(|p| format!("{} {}", p.kind.as_str(), p.name)).as_deref())
 }
 
 fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
     [
-        cell(block.block.file.as_str()),
+        Value::from(block.block.file.as_str()),
         Value::from(block.block.line_start),
         Value::from(block.block.line_end),
-        cell(symbol_kind_str(block.block.node_kind)),
+        Value::from(block.block.node_kind.as_str()),
         parent_cell(block.parent_context.as_ref()),
         opt_cell(block.block.symbol_signature.as_deref()),
         opt_cell(snippet(&block.block).as_deref()),
@@ -208,40 +100,41 @@ fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
     ]
 }
 
-/// The line `monokl search` prints for `block`, indentation included and the newline left out.
+const SEARCH_FIELDS: [&str; 9] =
+    ["file", "lineStart", "lineEnd", "nodeKind", "parent", "symbolSignature", "snippet", "rank", "finalScore"];
+
+/// The line `monokl search` prints for each of `blocks`, indentation included and the newline left out.
 ///
-/// The search budget measures this text, so a cap counts what the reader receives.
-pub fn search_row_text(block: &crate::types::RankedBlock) -> String {
-    let fields = <crate::types::SearchResponse as ToonProjection<9>>::FIELDS;
-    let row = search_row(block).to_vec();
-    let rendered = michi::AgentResponse::new("search").items(vec![row], fields.as_slice()).render_toon();
-    rendered.lines().nth(1).unwrap_or_default().to_owned()
+/// The search budget measures these lines, so a cap counts what the reader receives. Rendering them in one table keeps
+/// michi's cell quoting and truncation as the only definition of a row.
+pub fn search_row_texts(blocks: &[RankedBlock]) -> Vec<String> {
+    let rows: Vec<Vec<Value>> = blocks.iter().map(|block| search_row(block).to_vec()).collect();
+    let rendered = michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).render_toon();
+    rendered.lines().skip(1).map(str::to_owned).collect()
 }
 
-impl ToonProjection<9> for crate::types::SearchResponse {
-    const TYPE_NAME: &'static str = "search";
-    const FIELDS: [&'static str; 9] =
-        ["file", "lineStart", "lineEnd", "nodeKind", "parent", "symbolSignature", "snippet", "rank", "finalScore"];
-
-    fn toon_rows(&self) -> Vec<[Value; 9]> {
-        self.results.iter().map(search_row).collect()
+/// Renders a search response as a TOON table of its rows, followed by the truncation count and hints.
+pub fn render_search(response: &SearchResponse) -> String {
+    let rows: Vec<Vec<Value>> = response.results.iter().map(|block| search_row(block).to_vec()).collect();
+    let mut rendered =
+        michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).hints(search_hints(response));
+    if response.truncated {
+        rendered = rendered.total_count(response.total_blocks_before_truncation);
     }
+    rendered.render_toon()
+}
 
-    fn toon_total_count(&self) -> Option<usize> {
-        self.truncated.then_some(self.total_blocks_before_truncation)
+fn search_hints(response: &SearchResponse) -> Vec<michi::Hint> {
+    let shown =
+        michi::TruncationOutcome::new(response.results.iter().collect(), response.total_blocks_before_truncation);
+    let mut hints: Vec<michi::Hint> = shown.hint(TRUNCATION_GUIDANCE).into_iter().collect();
+    hints.extend(diagnostic_lines(&response.diagnostics).into_iter().map(michi::Hint::new));
+    if response.results.is_empty() {
+        hints.push(michi::Hint::new(
+            "only declarations and the members of their classes, objects, impls and traits are searched; for text in tests, calls or config try rg",
+        ));
     }
-
-    fn toon_hints(&self) -> Vec<michi::Hint> {
-        let shown = michi::TruncationOutcome::new(self.results.iter().collect(), self.total_blocks_before_truncation);
-        let mut hints: Vec<michi::Hint> = shown.hint(TRUNCATION_GUIDANCE).into_iter().collect();
-        hints.extend(diagnostic_lines(&self.diagnostics).into_iter().map(michi::Hint::new));
-        if self.results.is_empty() {
-            hints.push(michi::Hint::new(
-                "only declarations and the members of their classes, objects, impls and traits are searched; for text in tests, calls or config try rg",
-            ));
-        }
-        hints
-    }
+    hints
 }
 
 /// One line per distinct diagnostic message; a message tied to files is counted, says what happened to them and names
@@ -250,12 +143,7 @@ fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
     const LISTED_FILES: usize = 3;
     let mut groups: BTreeMap<(&str, Option<&'static str>), Vec<&str>> = BTreeMap::new();
     for d in diagnostics {
-        let verb = d.path.as_ref().map(|_| match d.kind {
-            DiagnosticKind::Degraded => "degraded",
-            DiagnosticKind::Skipped => "skipped",
-            DiagnosticKind::Warning => "warned",
-            DiagnosticKind::LossyRead => "read lossily",
-        });
+        let verb = d.path.as_ref().map(|_| d.kind.verb());
         let paths = groups.entry((d.message.as_str(), verb)).or_default();
         paths.extend(d.path.as_deref().map(Utf8Path::as_str));
     }
@@ -272,36 +160,6 @@ fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
             None => message.to_owned(),
         })
         .collect()
-}
-
-/// Converts a TOON validation failure into a [`michi::DomainError`].
-///
-/// It bypasses [`ToDomainError`] because this is not a [`MonoklError`]: it means this module built an invalid row or
-/// field, not that the caller supplied bad input.
-pub fn toon_validation_error(e: &michi::toon::ToonError) -> michi::DomainError {
-    michi::DomainError::new(michi::ErrorCode::ExternalFailure, format!("toon_render_invalid: {e}")).retryable(false)
-}
-
-/// Renders a [`ToonProjection`] as a TOON document.
-///
-/// # Errors
-///
-/// Returns a [`toon_validation_error`] if the projection's table fails michi's validation.
-#[expect(clippy::result_large_err, reason = "the error type is michi's DomainError, which agent output is built from")]
-pub fn render_projection<const N: usize, T: ToonProjection<N>>(value: &T) -> Result<String, michi::DomainError> {
-    let rows: Vec<Vec<Value>> = value.toon_rows().into_iter().map(|row| row.to_vec()).collect();
-    let fields: Vec<String> = T::FIELDS.iter().map(|s| (*s).to_string()).collect();
-
-    let opts = michi::toon::ToonOptions::new(T::TYPE_NAME, fields, rows.clone()).total_count(value.toon_total_count());
-    if let Err(e) = opts.validate() {
-        return Err(toon_validation_error(&e));
-    }
-
-    let mut resp = michi::AgentResponse::new(T::TYPE_NAME).items(rows, T::FIELDS.as_slice()).hints(value.toon_hints());
-    if let Some(n) = value.toon_total_count() {
-        resp = resp.total_count(n);
-    }
-    Ok(resp.render_toon())
 }
 
 #[cfg(test)]
@@ -439,9 +297,10 @@ mod snippet_tests {
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+    use crate::types::DiagnosticKind;
 
     #[test]
-    fn render_projection_search_response_shows_a_bounded_snippet_not_the_block() {
+    fn a_search_row_shows_a_bounded_snippet_not_the_block() {
         use crate::types::{CodeBlock, RankedBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
 
@@ -468,7 +327,7 @@ mod projection_tests {
             diagnostics: Vec::new(),
         };
 
-        let rendered = render_projection(&response).expect("valid projection must render");
+        let rendered = render_search(&response);
         assert_eq!(
             rendered,
             "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
@@ -509,7 +368,7 @@ mod projection_tests {
             diagnostics: Vec::new(),
         };
         assert_eq!(
-            render_projection(&response).expect("valid projection must render"),
+            render_search(&response),
             "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
              src/a.ts,3,5,method,class Foo,null,null,1,0.5\n  \
              src/a.ts,7,9,constructor,class Bar Baz,null,null,2,0.5\n  \
@@ -518,7 +377,7 @@ mod projection_tests {
     }
 
     #[test]
-    fn render_projection_empty_search_response_says_what_went_wrong() {
+    fn an_empty_search_says_what_went_wrong() {
         use crate::types::SearchResponse;
         use camino::Utf8PathBuf;
 
@@ -540,7 +399,7 @@ mod projection_tests {
         };
 
         assert_eq!(
-            render_projection(&response).expect("must render"),
+            render_search(&response),
             "search: []\n\
              help[4]: \"1 file degraded: parse errors: c.ts\",query has no positive terms,\
              \"2 files skipped: unreadable: a.ts, b.ts\",\
@@ -595,7 +454,7 @@ mod projection_tests {
     }
 
     #[test]
-    fn render_projection_budgeted_search_response_reports_the_cut() {
+    fn a_budgeted_search_reports_the_cut() {
         use crate::budget::{Budget, apply_budget};
         use crate::types::{CodeBlock, RankedBlock, SymbolKind};
         use camino::Utf8PathBuf;
@@ -619,9 +478,9 @@ mod projection_tests {
             })
             .collect();
         let budget = Budget { max_results: 2, ..Budget::default() };
+        let texts = search_row_texts(&ranked);
 
-        let rendered =
-            render_projection(&apply_budget(ranked, 3, &budget, search_row_text, Vec::new())).expect("must render");
+        let rendered = render_search(&apply_budget(ranked, 3, &budget, &texts, Vec::new()));
         assert_eq!(
             rendered,
             "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
@@ -630,87 +489,6 @@ mod projection_tests {
              totalCount: 3\n\
              help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
         );
-    }
-
-    // Built by hand because `ToonProjection` cannot express an arity mismatch.
-    #[test]
-    fn toon_validation_error_shape() {
-        let opts = michi::toon::ToonOptions::new(
-            "t".to_string(),
-            vec!["a".to_string()],
-            vec![vec![Value::from("x"), Value::from("y")]],
-        );
-        let err = opts.validate().unwrap_err();
-        let domain_err = toon_validation_error(&err);
-        assert_eq!(domain_err.code, michi::ErrorCode::ExternalFailure);
-        assert!(!domain_err.retryable);
-        assert!(domain_err.message.starts_with("toon_render_invalid: "), "got: {}", domain_err.message);
-    }
-
-    // Drives `render_projection`'s own validation guard end to end. A repeated field name is invalid TOON, so michi
-    // rejects it.
-    struct InvalidFieldNameProjection;
-    impl ToonProjection<2> for InvalidFieldNameProjection {
-        const TYPE_NAME: &'static str = "invalid";
-        const FIELDS: [&'static str; 2] = ["a", "a"];
-        fn toon_rows(&self) -> Vec<[Value; 2]> {
-            vec![[Value::from("x"), Value::from("y")]]
-        }
-    }
-
-    #[test]
-    fn render_projection_reports_validation_error() {
-        let err =
-            render_projection(&InvalidFieldNameProjection).expect_err("invalid FIELDS entry must fail validate()");
-        assert_eq!(err.code, michi::ErrorCode::ExternalFailure);
-        assert!(!err.retryable);
-        assert!(err.message.starts_with("toon_render_invalid: "), "got: {}", err.message);
-    }
-
-    // `opt_cell` maps `None` to `Value::Null` so an agent can tell an absent field from an empty string.
-    #[test]
-    fn null_and_empty_string_render_distinctly() {
-        let opts_null =
-            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![opt_cell(None)]]);
-        let opts_empty =
-            michi::toon::ToonOptions::new("t".to_string(), vec!["a".to_string()], vec![vec![opt_cell(Some(""))]]);
-        assert_eq!(michi::toon::render_toon(&opts_null).unwrap(), "t[1]{a}:\n  null");
-        assert_eq!(michi::toon::render_toon(&opts_empty).unwrap(), "t[1]{a}:\n  \"\"");
-    }
-
-    struct DummyProjection;
-    impl ToonProjection<1> for DummyProjection {
-        const TYPE_NAME: &'static str = "dummy";
-        const FIELDS: [&'static str; 1] = ["x"];
-        fn toon_rows(&self) -> Vec<[Value; 1]> {
-            vec![[Value::from("x")]]
-        }
-    }
-
-    #[test]
-    fn default_toon_total_count_and_hints_are_empty() {
-        let d = DummyProjection;
-        assert_eq!(d.toon_total_count(), None);
-        assert!(d.toon_hints().is_empty());
-    }
-
-    // Every other projection here uses the `None` default, so this is the only coverage of the total-count path.
-    struct DummyProjectionWithTotal;
-    impl ToonProjection<1> for DummyProjectionWithTotal {
-        const TYPE_NAME: &'static str = "dummy";
-        const FIELDS: [&'static str; 1] = ["x"];
-        fn toon_rows(&self) -> Vec<[Value; 1]> {
-            vec![[Value::from("x")]]
-        }
-        fn toon_total_count(&self) -> Option<usize> {
-            Some(42)
-        }
-    }
-
-    #[test]
-    fn render_projection_wires_toon_total_count_into_output() {
-        let rendered = render_projection(&DummyProjectionWithTotal).expect("valid projection must render");
-        assert!(rendered.contains("totalCount: 42"), "got: {rendered}");
     }
 
     // The other projection tests render one row each, which would not catch a projection that drops later rows.
@@ -748,9 +526,7 @@ mod projection_tests {
             diagnostics: Vec::new(),
         };
 
-        assert_eq!(search.toon_rows().len(), 3, "every RankedBlock in `results` must flatten into a row");
-
-        let rendered = render_projection(&search).expect("valid projection must render");
+        let rendered = render_search(&search);
         assert!(
             rendered.starts_with(
                 "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n"
@@ -776,22 +552,12 @@ fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {
     }
 }
 
-/// Classifies a walk error by its innermost cause.
-///
-/// `ignore::Error` does not expose its wrapped error through `source()`, so this unwraps the wrapper variants, and a
-/// `Partial` holding exactly one error, by recursing on them.
+/// Classifies a walk error: an I/O failure by its kind, a bad glob as invalid input, anything else as external.
 fn walk_error_code(source: &ignore::Error) -> michi::ErrorCode {
-    use michi::ErrorCode;
-    match source {
-        ignore::Error::WithLineNumber { err, .. }
-        | ignore::Error::WithPath { err, .. }
-        | ignore::Error::WithDepth { err, .. } => walk_error_code(err),
-        ignore::Error::Partial(errs) if errs.len() == 1 => walk_error_code(&errs[0]),
-        ignore::Error::Io(io_err) => io_error_code(io_err.kind()),
-        ignore::Error::Glob { .. } | ignore::Error::UnrecognizedFileType(_) | ignore::Error::InvalidDefinition => {
-            ErrorCode::InvalidInput
-        }
-        ignore::Error::Loop { .. } | ignore::Error::Partial(_) => ErrorCode::ExternalFailure,
+    match source.io_error() {
+        Some(io_err) => io_error_code(io_err.kind()),
+        None if matches!(source, ignore::Error::Glob { .. }) => michi::ErrorCode::InvalidInput,
+        None => michi::ErrorCode::ExternalFailure,
     }
 }
 
@@ -799,8 +565,12 @@ fn walk_error_code(source: &ignore::Error) -> michi::ErrorCode {
 mod walk_tests {
     use super::*;
 
+    fn io(kind: std::io::ErrorKind) -> ignore::Error {
+        ignore::Error::Io(std::io::Error::new(kind, "x"))
+    }
+
     #[test]
-    fn walk_error_code_direct_glob_and_loop() {
+    fn a_glob_is_invalid_input_and_a_loop_is_an_external_failure() {
         let glob_err = ignore::overrides::OverrideBuilder::new(".").add("[").unwrap_err();
         assert_eq!(walk_error_code(&glob_err), michi::ErrorCode::InvalidInput);
         let loop_err =
@@ -809,64 +579,23 @@ mod walk_tests {
     }
 
     #[test]
-    fn walk_error_code_unwraps_nested_wrappers() {
-        let inner = ignore::Error::InvalidDefinition;
-        let wrapped = ignore::Error::WithDepth {
-            depth: 2,
-            err: Box::new(ignore::Error::WithPath {
-                path: std::path::PathBuf::from("x"),
-                err: Box::new(ignore::Error::WithLineNumber { line: 1, err: Box::new(inner) }),
-            }),
+    fn an_io_error_maps_by_its_kind() {
+        assert_eq!(walk_error_code(&io(std::io::ErrorKind::NotFound)), michi::ErrorCode::NotFound);
+        assert_eq!(walk_error_code(&io(std::io::ErrorKind::PermissionDenied)), michi::ErrorCode::Forbidden);
+        assert_eq!(walk_error_code(&io(std::io::ErrorKind::NotADirectory)), michi::ErrorCode::InvalidInput);
+        assert_eq!(walk_error_code(&io(std::io::ErrorKind::AlreadyExists)), michi::ErrorCode::ExternalFailure);
+    }
+
+    #[test]
+    fn a_wrapped_io_error_maps_by_its_kind() {
+        let wrapped = ignore::Error::WithPath {
+            path: std::path::PathBuf::from("x"),
+            err: Box::new(io(std::io::ErrorKind::NotFound)),
         };
-        assert_eq!(walk_error_code(&wrapped), michi::ErrorCode::InvalidInput);
-    }
-
-    #[test]
-    fn walk_error_code_unrecognized_file_type_maps_to_invalid_input() {
-        let err = ignore::Error::UnrecognizedFileType("bogus".to_string());
-        assert_eq!(walk_error_code(&err), michi::ErrorCode::InvalidInput);
-    }
-
-    #[test]
-    fn walk_error_code_invalid_definition_maps_to_invalid_input() {
-        assert_eq!(walk_error_code(&ignore::Error::InvalidDefinition), michi::ErrorCode::InvalidInput);
-    }
-
-    #[test]
-    fn walk_error_code_partial_non_single_maps_to_external_failure() {
-        assert_eq!(walk_error_code(&ignore::Error::Partial(vec![])), michi::ErrorCode::ExternalFailure);
-        let two = ignore::Error::Partial(vec![ignore::Error::InvalidDefinition, ignore::Error::InvalidDefinition]);
-        assert_eq!(walk_error_code(&two), michi::ErrorCode::ExternalFailure);
-    }
-
-    #[test]
-    fn walk_error_code_io_other_kind_maps_to_external_failure() {
-        let io_err = ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "exists"));
-        assert_eq!(walk_error_code(&io_err), michi::ErrorCode::ExternalFailure);
-    }
-
-    // An unrecursed `Partial` would classify as `ExternalFailure`, so `InvalidInput` proves the recursion.
-    #[test]
-    fn walk_error_code_partial_single_recurses() {
-        let partial = ignore::Error::Partial(vec![ignore::Error::InvalidDefinition]);
-        assert_eq!(walk_error_code(&partial), michi::ErrorCode::InvalidInput);
-    }
-
-    #[test]
-    fn walk_error_code_partial_single_recurses_through_wrappers() {
-        let partial = ignore::Error::Partial(vec![ignore::Error::WithPath {
-            path: std::path::PathBuf::from(".gitignore"),
-            err: Box::new(ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"))),
-        }]);
-        assert_eq!(walk_error_code(&partial), michi::ErrorCode::NotFound);
-    }
-
-    #[test]
-    fn walk_error_code_io_permission_denied_maps_to_forbidden() {
-        let io_err = ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"));
-        assert_eq!(walk_error_code(&io_err), michi::ErrorCode::Forbidden);
+        assert_eq!(walk_error_code(&wrapped), michi::ErrorCode::NotFound);
     }
 }
+
 /// Converts an error into a [`michi::DomainError`] for agent output.
 pub trait ToDomainError {
     /// Returns a short `snake_case` code that is distinct for each error kind.
@@ -1059,20 +788,6 @@ mod error_tests {
         let io_err = ignore::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
         let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: io_err };
         assert_eq!(err.to_domain_error().code, michi::ErrorCode::NotFound);
-    }
-
-    #[test]
-    fn walk_nested_glob_inside_with_path_inside_with_line_number() {
-        // The shape a malformed `.gitignore` line produces.
-        let nested = ignore::Error::WithLineNumber {
-            line: 3,
-            err: Box::new(ignore::Error::WithPath {
-                path: std::path::PathBuf::from(".gitignore"),
-                err: Box::new(ignore::overrides::OverrideBuilder::new(".").add("[").unwrap_err()),
-            }),
-        };
-        let err = MonoklError::Walk { path: Utf8PathBuf::from("/x"), source: nested };
-        assert_eq!(err.to_domain_error().code, michi::ErrorCode::InvalidInput);
     }
 
     #[test]
