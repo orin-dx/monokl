@@ -48,9 +48,9 @@ Search a directory (the default is the current one):
 ```
 $ monokl search "format price" src/ --max-results 3
 search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,3.950647
-  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };",2,3.07557
-  src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,2.345138
+  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,2.950647
+  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };",2,2.07557
+  src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,1.345138
 totalCount: 10
 help[1]: showing 3 of 10; raise the cap or refine the query with +term or -term
 ```
@@ -78,8 +78,8 @@ Matching ignores case. A `-term` removes whole files, not single results. If one
 ```
 $ monokl search "+cart -Button" .
 search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n14: const addItem = (item: CartItem): ValidationResult => {",1,1.453107
-  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,1.30166
+  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n14: const addItem = (item: CartItem): ValidationResult => {",1,0.453107
+  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,0.30166
 ```
 
 ## Options

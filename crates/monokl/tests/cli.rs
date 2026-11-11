@@ -52,11 +52,11 @@ fn a_row_shows_the_matching_lines_inside_its_block_and_nothing_else() {
         rows[1],
         "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\
          \"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n\
-         10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,5.151139"
+         10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,4.151139"
     );
     assert_eq!(
         rows[2],
-        "  src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,2.345138"
+        "  src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,1.345138"
     );
 }
 
@@ -252,8 +252,8 @@ fn a_file_as_the_search_root_is_invalid_input_naming_the_path() {
 }
 
 const PRICE_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:";
-const PRICE_ROW_1: &str = "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,1.49154";
-const PRICE_ROW_2: &str = "  src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,1.346154";
+const PRICE_ROW_1: &str = "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,0.49154";
+const PRICE_ROW_2: &str = "  src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.346154";
 
 /// The expected output for the first `rows` of the `price` query, cut from 8.
 fn price_cut(rows: &[&str]) -> String {
@@ -305,9 +305,9 @@ fn a_result_within_every_cap_is_printed_whole_without_a_cut_marker() {
     assert_eq!(
         stdout(&output),
         "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,2.068251\n\
-         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,1.170466\n\
-         \x20 src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,1.159101\n"
+         \x20 src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,1.068251\n\
+         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,0.170466\n\
+         \x20 src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,0.159101\n"
     );
 }
 
@@ -354,7 +354,7 @@ fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
     assert_eq!(
         stdout(&output),
         format!(
-            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,4.452186\n",
+            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,3.452186\n",
             SEARCH_HEADER.replace("[N]", "[1]")
         )
     );
@@ -364,7 +364,7 @@ fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
     assert_eq!(
         stdout(&output),
         format!(
-            "{}\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),\"15: fn total_price_adds_up() {{\",1,3.344136\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,2,3.18786\n",
+            "{}\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),\"15: fn total_price_adds_up() {{\",1,2.344136\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,2,2.18786\n",
             SEARCH_HEADER.replace("[N]", "[2]")
         )
     );
