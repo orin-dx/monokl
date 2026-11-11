@@ -36,9 +36,9 @@
 //! Nothing but the returned number shows which reading a scan took, so each has a test that a nest hidden behind it is
 //! still counted, and a property test that a string of brackets costs at least what a stack of matching ones reaches.
 //!
-//! What it does not do is price a nest down: `</div>` costs as much as `<div>`, so a file with more than about 1,800
-//! JSX elements in one expression, or about 8,000 operands and operators in one statement, is over the cap whatever
-//! its depth.
+//! What it does not do is price a nest down: `</div>` costs as much as `<div>`, so a file with more than about 4,000
+//! keyed JSX elements (`<li key={i}>text</li>`) or 13,000 empty ones in one expression, or about 32,000 operands and
+//! operators in one statement, is over the cap whatever its depth.
 
 use std::ops::Range;
 

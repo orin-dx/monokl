@@ -36,10 +36,10 @@ pub(super) const MAX_PARSED_SOURCE_LEN: usize = 4 << 20;
 
 /// The deepest nesting parsed, in levels of brackets or the equivalent in other nesting (see [`nesting::peak_cost`]).
 ///
-/// 16,384 units (four per level) is what the fixed parse stack holds with a factor of two and a half to spare in the
+/// 65,536 units (four per level) is what the fixed parse stack holds with a factor of two and a half to spare in the
 /// worst case measured; see [`PARSE_STACK_BYTES`](crate::analysis::parse_stack::PARSE_STACK_BYTES). Ordinary code nests
 /// a few dozen levels. A file over this is reported as too deep instead of parsed.
-pub(super) const MAX_NESTING_LEVELS: usize = 4096;
+pub(super) const MAX_NESTING_LEVELS: usize = 16_384;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]

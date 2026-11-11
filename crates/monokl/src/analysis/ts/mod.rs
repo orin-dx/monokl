@@ -1181,8 +1181,8 @@ export const App = (p) => (
         #[case] open: &str,
         #[case] close: &str,
     ) {
-        let text = format!("{open}{}1{}{close}\n", "(".repeat(10_000), ")".repeat(10_000));
-        let braces = format!("{open}{}1{}{close}\n", "{a:".repeat(10_000), "}".repeat(10_000));
+        let text = format!("{open}{}1{}{close}\n", "(".repeat(20_000), ")".repeat(20_000));
+        let braces = format!("{open}{}1{}{close}\n", "{a:".repeat(20_000), "}".repeat(20_000));
         for text in [text, braces] {
             let analysis = analyze_source(path, &text, AnalysisProfile::Full);
             assert!(
@@ -1198,7 +1198,7 @@ export const App = (p) => (
     #[case::awaits("await ")]
     #[case::casts("as T ")]
     fn nesting_hidden_behind_a_brace_in_a_string_is_counted_in_a_jsx_file(#[case] chain: &str) {
-        let text = format!("export const x = <p>'{{{}a}}'</p>;\n", chain.repeat(50_000));
+        let text = format!("export const x = <p>'{{{}a}}'</p>;\n", chain.repeat(100_000));
         let analysis = analyze_source("a.tsx", &text, AnalysisProfile::Full);
         assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { .. })), "{:?}", analysis.degradation);
     }
@@ -1227,6 +1227,44 @@ export const App = (p) => (
         assert_eq!(analysis.degradation, None);
         assert_eq!(analysis.symbols.len(), count);
         assert_eq!(analysis.symbols[count - 1].name, format!("entry{:06}", count - 1));
+    }
+
+    fn list_of(count: usize, item: impl Fn(usize) -> String) -> String {
+        let items: String = (0..count).map(item).collect();
+        format!("export function List() {{\n  return (\n    <ul>\n{items}    </ul>\n  );\n}}\n")
+    }
+
+    fn keyed_item(index: usize) -> String {
+        format!("      <li key={{{index}}}>item {index} needle</li>\n")
+    }
+
+    #[test]
+    fn three_thousand_sibling_elements_are_not_nested_and_are_parsed() {
+        let analysis = analyze_source("List.tsx", &list_of(3_000, keyed_item), AnalysisProfile::Full);
+        assert_eq!(analysis.degradation, None);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(symbols(&analysis), [("List", SymbolKind::Function, 1, Some("function List()"))]);
+        assert_eq!(analysis.jsx_elements().len(), 3_001);
+    }
+
+    #[test]
+    fn twelve_thousand_self_closing_siblings_are_parsed() {
+        let analysis =
+            analyze_source("List.tsx", &list_of(12_000, |_| "      <li/>\n".to_owned()), AnalysisProfile::Full);
+        assert_eq!(analysis.degradation, None);
+        assert_eq!(symbols(&analysis), [("List", SymbolKind::Function, 1, Some("function List()"))]);
+        assert_eq!(analysis.jsx_elements().len(), 12_001);
+    }
+
+    #[test]
+    fn siblings_past_the_cap_are_degraded_without_being_parsed() {
+        // 5,000 keyed items cost 75,000 units against the cap of 65,536.
+        let analysis = analyze_source("List.tsx", &list_of(5_000, keyed_item), AnalysisProfile::Full);
+        assert_degraded(&analysis);
+        assert_eq!(
+            analysis.degradation,
+            Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS })
+        );
     }
 
     #[test]

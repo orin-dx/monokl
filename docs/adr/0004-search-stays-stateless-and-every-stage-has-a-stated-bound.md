@@ -32,7 +32,7 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 
 ## Consequences
 
-Rule 1 is done. Every parse runs on one 64 MiB stack, and a file whose nesting could pass it is rejected by a linear scan before it is parsed (`TooDeep`). Size is capped by measured parse time and memory (4 MiB), not by the stack.
+Rule 1 is done. Every parse runs on one 256 MiB stack, and a file whose nesting could pass it is rejected by a linear scan before it is parsed (`TooDeep`). Size is capped by measured parse time and memory (4 MiB), not by the stack.
 
 Stages that violate a rule today are follow-up work, not done:
 

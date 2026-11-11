@@ -13,15 +13,15 @@ use super::file_analysis::Degradation;
 ///
 /// Measured in a build without optimizations, which uses the most: the deepest recursion per nesting unit (see
 /// `nesting::FRAME_COST`) is 1.7 KB, from a `new` or a generic argument list in TypeScript, and 1.9 KB from a unary
-/// minus in Rust. The languages' caps are 16,384 and 2,048 units. Every one of the nestings the tests build at the cap,
-/// 38 in TypeScript and 32 in Rust, parses in 24 MiB and the worst overflows 16 MiB, so 64 MiB is at least 2.6 times
+/// minus in Rust. The languages' caps are 65,536 and 2,048 units. Every one of the nestings the tests build at the cap,
+/// 38 in TypeScript and 32 in Rust, parses in 96 MiB and the worst overflows 64 MiB, so 256 MiB is at least 2.6 times
 /// what the worst accepted file needs. Only the pages a parse touches are committed.
-pub(crate) const PARSE_STACK_BYTES: usize = 64 << 20;
+pub(crate) const PARSE_STACK_BYTES: usize = 256 << 20;
 
 /// Runs `run` on a thread with [`PARSE_STACK_BYTES`] of stack. A panic in it, or a thread that cannot be started,
 /// yields the [`Degradation`] that says so.
 ///
-/// A scoped thread per call costs about 30 microseconds (1,000 in 0.03 s, 64 MiB stack each) against the milliseconds a
+/// A scoped thread per call costs about 30 microseconds (1,000 in 0.02 s, 256 MiB stack each) against the milliseconds a
 /// parse takes, and shares nothing, so it keeps the analyzers `Send` and `Sync` without a pool to size.
 pub(crate) fn on_parse_stack<T: Send>(run: impl FnOnce() -> T + Send) -> Result<T, Degradation> {
     thread::scope(|scope| {

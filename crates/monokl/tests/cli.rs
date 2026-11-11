@@ -133,10 +133,47 @@ fn a_file_nested_past_the_cap_is_skipped_and_reported_while_the_others_are_searc
     assert!(text.starts_with("search[1]{"), "got: {text}");
     assert!(text.contains("  normal.ts,1,1,function,null,function needle(),null,1,"), "got: {text}");
     assert!(
-        text.contains("1 file degraded: file nests too deeply to analyze (depth 4097, over the cap of 4096): "),
+        text.contains("1 file degraded: file nests too deeply to analyze (depth 16385, over the cap of 16384): "),
         "got: {text}"
     );
     assert!(text.contains("deep.ts"), "got: {text}");
+}
+
+/// Searches `needle` over one generated file and returns the output, which must name the file and report no degradation.
+fn search_generated(name: &str, text: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(name), text).unwrap();
+    let output = monokl_in(dir.path(), &["search", "needle", "."]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("degraded"), "got: {text}");
+    assert!(text.starts_with("search[1]{"), "got: {text}");
+    text
+}
+
+#[test]
+fn a_component_with_three_thousand_sibling_elements_is_searched() {
+    let items =
+        (0..3_000).map(|i| format!("      <li key={{{i}}}>item {i} needle</li>\n")).collect::<Vec<String>>().concat();
+    let text = search_generated(
+        "List.tsx",
+        &format!("export function List() {{\n  return (\n    <ul>\n{items}    </ul>\n  );\n}}\n"),
+    );
+    assert!(text.contains("  List.tsx,1,3006,function,null,function List(),"), "got: {text}");
+}
+
+#[test]
+fn a_twelve_thousand_term_string_concatenation_is_searched() {
+    let terms = vec!["\"needle\""; 12_000].join(" + ");
+    let text = search_generated("concat.ts", &format!("export const joined = {terms};\n"));
+    assert!(text.contains("  concat.ts,1,1,variable,null,null,"), "got: {text}");
+}
+
+#[test]
+fn a_twenty_thousand_row_array_literal_is_searched() {
+    let rows = (0..20_000).map(|i| format!("  {{ id: {i}, name: 'needle {i}' }},\n")).collect::<Vec<String>>().concat();
+    let text = search_generated("rows.ts", &format!("export const rows = [\n{rows}];\n"));
+    assert!(text.contains("  rows.ts,1,20002,variable,null,null,"), "got: {text}");
 }
 
 #[test]
