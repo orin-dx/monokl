@@ -14,17 +14,7 @@ pub mod file_io;
 #[cfg(feature = "cli")]
 pub mod output;
 pub mod pipeline;
-/// `Lexer` and `Token` are internal to `query::lexer`. These doctests compile as an external crate would, so
-/// they prove the types are unreachable through the public path.
-///
-/// ```compile_fail,E0432
-/// use monokl::query::Token;
-/// ```
-///
-/// ```compile_fail,E0432
-/// use monokl::query::Lexer;
-/// ```
-pub mod query;
+pub(crate) mod query;
 pub mod rank;
 pub mod text_search;
 pub mod tokens;

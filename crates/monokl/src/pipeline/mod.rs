@@ -28,7 +28,7 @@ use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, Language, LineHit, Ran
 pub struct SearchRequest<'a> {
     /// The directory to search; it is canonicalized first.
     pub root: &'a Utf8Path,
-    /// The query text, in the syntax [`parse`] reads, or a literal when `exact` is set.
+    /// The query text, in the syntax `parse` reads, or a literal when `exact` is set.
     pub query: &'a str,
     /// Treats the whole query as one literal term, operators and quotes included.
     pub exact: bool,

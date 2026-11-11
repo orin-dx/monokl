@@ -44,7 +44,6 @@ pub struct QueryPlan { pub terms: Vec<ParsedTerm>, pub required: Vec<usize>,
                         pub excluded: Vec<usize>, pub scored: Vec<usize> /* == Optional */ }
 impl QueryPlan {
     pub fn from_terms(terms: Vec<ParsedTerm>) -> Self;
-    pub fn is_empty(&self) -> bool;               // terms.is_empty()
     pub fn search_patterns(&self) -> Vec<&str>;    // required ++ scored, in that order
 }
 ```
