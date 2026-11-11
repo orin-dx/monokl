@@ -116,7 +116,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::analysis::Degradation;
+    use crate::analysis::{Degradation, nesting};
     use crate::error::MonoklError;
     use crate::types::{BindingKind, DependencyTarget, SymbolKind};
 
@@ -931,8 +931,8 @@ export const App = (p) => (
     #[case::brackets("[", "]")]
     #[case::calls("f(", ")")]
     #[case::object_literals("{a:", "}")]
-    fn brackets_nested_thousands_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
-        let text = nested("import a from './a';\nexport const x = ", open, "1", close, 5000);
+    fn brackets_nested_two_thousand_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
+        let text = nested("import a from './a';\nexport const x = ", open, "1", close, 2000);
         let analysis = analyze_source("deep.ts", &text, AnalysisProfile::Full);
         assert!(!analysis.had_parse_errors);
         assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 2, None)]);
@@ -996,8 +996,8 @@ export const App = (p) => (
         // Brackets in a type cost the most stack per byte.
         let text = format!(
             "export function f() {{ return /'/; }} export type T = {}number{};\n",
-            "[".repeat(20_000),
-            "]".repeat(20_000)
+            "[".repeat(3_000),
+            "]".repeat(3_000)
         );
         let analysis = analyze_source("regex.ts", &text, AnalysisProfile::Full);
         assert!(!analysis.had_parse_errors);
@@ -1015,17 +1015,17 @@ export const App = (p) => (
     #[rstest]
     #[case::generic_types(
         "deep.ts",
-        nested("export type T = ", "Array<", "number", ">", 10_000),
+        nested("export type T = ", "Array<", "number", ">", 4_000),
         ("T", SymbolKind::TypeAlias),
         0
     )]
-    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 12_000), ("f", SymbolKind::Variable), 0)]
-    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 10_000), ("t", SymbolKind::Variable), 0)]
+    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 5_000), ("f", SymbolKind::Variable), 0)]
+    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 3_500), ("t", SymbolKind::Variable), 0)]
     #[case::jsx_elements(
         "deep.tsx",
-        nested("export const j = ", "<div>", "", "</div>", 7_000),
+        nested("export const j = ", "<div>", "", "</div>", 1_500),
         ("j", SymbolKind::Variable),
-        7_000
+        1_500
     )]
     fn deep_nesting_without_brackets_still_parses(
         #[case] path: &str,
@@ -1038,6 +1038,227 @@ export const App = (p) => (
         assert_eq!(symbols(&analysis), [(symbol.0, symbol.1, 1, None)]);
         assert_eq!(blocks(&analysis), [(1, 1, symbol.1, None)]);
         assert_eq!(analysis.jsx_elements().len(), jsx_elements);
+    }
+
+    /// `export const x = <open>^depth <tail> <close>^depth;`
+    fn expr(depth: usize, open: &str, tail: &str, close: &str) -> String {
+        format!("export const x = {}{tail}{};\n", open.repeat(depth), close.repeat(depth))
+    }
+
+    type Shape = (&'static str, &'static str, Box<dyn Fn(usize) -> String>);
+
+    /// The ways TypeScript nests that the parser and the extractor recurse over, each as a path and a function of its
+    /// depth. Every one of these was measured to cost at most 1.7 KB of stack per unit of the nesting estimate in a build
+    /// without optimizations, which is what the fixed stack is sized from.
+    fn shapes() -> Vec<Shape> {
+        let shape = |name, path, text: fn(usize) -> String| -> Shape { (name, path, Box::new(text)) };
+        vec![
+            shape("arrays", "a.ts", |d| expr(d, "[", "1", "]")),
+            shape("parentheses", "a.ts", |d| expr(d, "(", "1", ")")),
+            shape("objects", "a.ts", |d| expr(d, "{a:", "1", "}")),
+            shape("calls", "a.ts", |d| expr(d, "f(", "1", ")")),
+            shape("arrows", "a.ts", |d| expr(d, "() => ", "1", "")),
+            shape("conditionals", "a.ts", |d| expr(d, "a ? b : ", "c", "")),
+            shape("negations", "a.ts", |d| expr(d, "!", "a", "")),
+            shape("assignments", "a.ts", |d| expr(d, "a = ", "1", "")),
+            shape("member chains", "a.ts", |d| format!("export const x = a{};\n", ".b".repeat(d))),
+            shape("sums", "a.ts", |d| format!("export const x = 1{};\n", "+1".repeat(d))),
+            shape("call chains", "a.ts", |d| format!("export const x = a{};\n", "()".repeat(d))),
+            shape("casts", "a.ts", |d| format!("export const x = a{};\n", " as T".repeat(d))),
+            shape("array types", "a.ts", |d| format!("export type T = {}number{};\n", "[".repeat(d), "]".repeat(d))),
+            shape("generic types", "a.ts", |d| format!("export type T = {}number{};\n", "A<".repeat(d), ">".repeat(d))),
+            shape("conditional types", "a.ts", |d| format!("export type T = {}A;\n", "A extends B ? C : ".repeat(d))),
+            shape("generic arguments with commas", "a.ts", |d| {
+                format!("export type T = {}A{};\n", "A<x,".repeat(d), ">".repeat(d))
+            }),
+            shape("function types", "a.ts", |d| format!("export type T = {}A;\n", "() => ".repeat(d))),
+            shape("parenthesized types", "a.ts", |d| format!("export type T = {}A{};\n", "(".repeat(d), ")".repeat(d))),
+            shape("object types", "a.ts", |d| format!("export type T = {}A{};\n", "{a:".repeat(d), "}".repeat(d))),
+            shape("keyof chains", "a.ts", |d| format!("export type T = {}A;\n", "keyof ".repeat(d))),
+            shape("jsx elements", "a.tsx", |d| expr(d, "<div>", "", "</div>")),
+            shape("jsx containers", "a.tsx", |d| expr(d, "<div>{", "1", "}</div>")),
+            shape("jsx attributes", "a.tsx", |d| expr(d, "<div a={", "1", "}/>")),
+            shape("blocks", "a.ts", |d| format!("{}{}\n", "{".repeat(d), "}".repeat(d))),
+            shape("if statements", "a.ts", |d| format!("{}x;\n", "if(1) ".repeat(d))),
+            shape("else if chains", "a.ts", |d| format!("if(1){{}}{}\n", " else if(1){}".repeat(d))),
+            shape("templates", "a.ts", |d| expr(d, "`${", "1", "}`")),
+            shape("class expressions", "a.ts", |d| expr(d, "class{x=", "1", "}")),
+            shape("class heritage", "a.ts", |d| {
+                format!("export const x = {}A{};\n", "class extends ".repeat(d), " {}".repeat(d))
+            }),
+            shape("function expressions", "a.ts", |d| expr(d, "function(){return ", "1", "}")),
+            shape("awaits", "a.ts", |d| expr(d, "await ", "a", "")),
+            shape("news", "a.ts", |d| expr(d, "new ", "a", "")),
+            shape("spreads", "a.ts", |d| expr(d, "[...", "a", "]")),
+            shape("arrow bodies", "a.ts", |d| expr(d, "(a) => (", "1", ")")),
+            shape("namespaces", "a.ts", |d| format!("{}{}\n", "namespace A { ".repeat(d), "}".repeat(d))),
+            shape("labels", "a.ts", |d| format!("{}x;\n", "a: ".repeat(d))),
+            shape("imports", "a.ts", |d| expr(d, "import(", "'a'", ")")),
+            shape("do loops", "a.ts", |d| format!("{}x;{}\n", "do ".repeat(d), " while(1)".repeat(d))),
+        ]
+    }
+
+    /// The deepest `depth` for which `text(depth)` is nested within the cap.
+    fn deepest_accepted(path: &str, text: &dyn Fn(usize) -> String) -> usize {
+        let syntax = nesting::Syntax::TypeScript { jsx: path.ends_with('x') };
+        let accepted = |depth: usize| nesting::check(&text(depth), syntax, parse::MAX_NESTING_LEVELS).is_ok();
+        let (mut accepted_depth, mut rejected_depth) = (1, 16 * parse::MAX_NESTING_LEVELS);
+        assert!(accepted(accepted_depth) && !accepted(rejected_depth));
+        while rejected_depth - accepted_depth > 1 {
+            let middle = usize::midpoint(accepted_depth, rejected_depth);
+            if accepted(middle) {
+                accepted_depth = middle;
+            } else {
+                rejected_depth = middle;
+            }
+        }
+        accepted_depth
+    }
+
+    /// Every shape at the deepest depth the estimate accepts runs through the real parser and extractor on the fixed
+    /// stack. A stack that is too small aborts the test process, so this passing is the safety factor holding in an
+    /// unoptimized build, which uses the most stack per level.
+    #[test]
+    fn every_shape_at_the_cap_is_parsed_on_the_fixed_stack() {
+        for (name, path, text) in shapes() {
+            let depth = deepest_accepted(path, &*text);
+            let analysis = analyze_source(path, &text(depth), AnalysisProfile::Full);
+            assert_eq!(analysis.degradation, None, "{name} at depth {depth}");
+            assert!(!analysis.had_parse_errors, "{name} at depth {depth}");
+        }
+    }
+
+    #[test]
+    fn every_shape_one_past_the_cap_is_degraded_without_being_parsed() {
+        for (name, path, text) in shapes() {
+            let depth = deepest_accepted(path, &*text) + 1;
+            let analysis = analyze_source(path, &text(depth), AnalysisProfile::Full);
+            assert_degraded(&analysis);
+            assert_eq!(
+                analysis.degradation,
+                Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS }),
+                "{name} at depth {depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_at_the_cap_keeps_its_rows_and_one_above_it_has_none() {
+        let build =
+            |depth: usize| format!("export const before = 1;\n{}export const after = 2;\n", expr(depth, "[", "1", "]"));
+        let depth = deepest_accepted("a.ts", &build);
+        let at = analyze_source("a.ts", &build(depth), AnalysisProfile::Full);
+        let names: Vec<_> = at.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["before", "x", "after"]);
+        let above = analyze_source("a.ts", &build(depth + 1), AnalysisProfile::Full);
+        assert_degraded(&above);
+        assert_eq!(
+            above.degradation,
+            Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS })
+        );
+    }
+
+    #[rstest]
+    #[case::arrays("a.ts", "[", "]")]
+    #[case::object_types("a.ts", "{a:", "}")]
+    #[case::jsx_containers("a.tsx", "<a>{", "}</a>")]
+    fn a_hundred_thousand_levels_are_degraded_at_once(#[case] path: &str, #[case] open: &str, #[case] close: &str) {
+        let text = expr(100_000, open, "1", close);
+        let started = std::time::Instant::now();
+        let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert_degraded(&analysis);
+        assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { cap: parse::MAX_NESTING_LEVELS, .. })));
+    }
+
+    #[rstest]
+    #[case::a_string_in_jsx_text("a.tsx", "export const x = <p>'{", "}'</p>;")]
+    #[case::a_comment_in_jsx_text("a.jsx", "export const x = <p>//{", "}\n</p>;")]
+    #[case::a_regex_in_jsx_text("a.js", "export const x = <p>/{", "}/</p>;")]
+    #[case::a_double_quote_in_jsx_text("a.tsx", "export const x = <p>\"{", "}\"</p>;")]
+    fn nesting_hidden_in_jsx_text_that_looks_like_a_string_or_comment_is_still_counted(
+        #[case] path: &str,
+        #[case] open: &str,
+        #[case] close: &str,
+    ) {
+        let text = format!("{open}{}1{}{close}\n", "(".repeat(10_000), ")".repeat(10_000));
+        let braces = format!("{open}{}1{}{close}\n", "{a:".repeat(10_000), "}".repeat(10_000));
+        for text in [text, braces] {
+            let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+            assert!(
+                matches!(analysis.degradation, Some(Degradation::TooDeep { .. })),
+                "{path}: {:?}",
+                analysis.degradation
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::operators("!")]
+    #[case::awaits("await ")]
+    #[case::casts("as T ")]
+    fn nesting_hidden_behind_a_brace_in_a_string_is_counted_in_a_jsx_file(#[case] chain: &str) {
+        let text = format!("export const x = <p>'{{{}a}}'</p>;\n", chain.repeat(50_000));
+        let analysis = analyze_source("a.tsx", &text, AnalysisProfile::Full);
+        assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { .. })), "{:?}", analysis.degradation);
+    }
+
+    #[test]
+    fn a_closing_bracket_in_a_string_does_not_end_the_nesting_before_it() {
+        let text = format!(
+            "export const x = {}1{};\nexport const y = ')))))))))))))';\n",
+            "[".repeat(3_000),
+            "]".repeat(3_000)
+        );
+        let analysis = analyze_source("a.tsx", &text, AnalysisProfile::Full);
+        assert_eq!(analysis.degradation, None);
+        let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["x", "y"]);
+    }
+
+    #[test]
+    fn a_generated_file_of_three_and_a_half_megabytes_yields_its_rows() {
+        let entry =
+            "export const entry000000 = { id: 0, name: 'entry', tags: ['a', 'b'], nested: { x: 1, y: [1, 2, 3] } };\n";
+        let count = 3_400_000 / entry.len();
+        let text: String = (0..count).map(|index| entry.replace("000000", &format!("{index:06}"))).collect();
+        assert!(text.len() > 3_300_000 && text.len() < parse::MAX_PARSED_SOURCE_LEN);
+        let analysis = analyze_source("generated.ts", &text, AnalysisProfile::Structural);
+        assert_eq!(analysis.degradation, None);
+        assert_eq!(analysis.symbols.len(), count);
+        assert_eq!(analysis.symbols[count - 1].name, format!("entry{:06}", count - 1));
+    }
+
+    #[test]
+    fn a_long_chain_of_additions_is_parsed_up_to_the_cap() {
+        let text = format!("export const x = 1{};\n", "+1".repeat(4_000));
+        let analysis = analyze_source("sum.ts", &text, AnalysisProfile::Full);
+        assert_eq!(analysis.degradation, None);
+        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
+    }
+
+    #[test]
+    fn code_without_semicolons_is_not_charged_for_the_lines_before() {
+        let text = "const a = f(1)\n".repeat(20_000);
+        let analysis = analyze_source("nosemi.ts", &text, AnalysisProfile::Structural);
+        assert_eq!(analysis.degradation, None);
+        assert_eq!(analysis.symbols.len(), 20_000);
+    }
+
+    #[test]
+    fn a_long_string_a_long_comment_and_a_long_template_cost_nothing() {
+        let text = format!(
+            "export const a = '{}';\n/* {} */\nexport const b = `{}`;\n// {}\nexport const c = /{}/;\n",
+            "(".repeat(100_000),
+            "[".repeat(100_000),
+            "{".repeat(100_000),
+            "(".repeat(100_000),
+            "(".repeat(100_000),
+        );
+        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Structural);
+        assert_eq!(analysis.degradation, None);
+        let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["a", "b", "c"]);
     }
 
     #[test]

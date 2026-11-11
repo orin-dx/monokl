@@ -32,9 +32,10 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 
 ## Consequences
 
+Rule 1 is done. Every parse runs on one 64 MiB stack, and a file whose nesting could pass it is rejected by a linear scan before it is parsed (`TooDeep`). Size is capped by measured parse time and memory (4 MiB), not by the stack.
+
 Stages that violate a rule today are follow-up work, not done:
 
-- Rule 1: the TypeScript and Rust parse threads still size their stack by input, and no nesting pre-scan exists.
 - Rule 2: size is not checked before reading, so memory still grows with bytes.
 - Rule 3: there is no `--timeout`, so no deadline.
 - Rule 4: the per-file dedup fix removed the known quadratic step, but the CI scaling test is follow-up work.

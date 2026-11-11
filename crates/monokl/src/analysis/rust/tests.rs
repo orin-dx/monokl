@@ -5,6 +5,8 @@ use rstest::rstest;
 
 use super::*;
 use crate::analysis::Degradation;
+use crate::analysis::nesting;
+use crate::analysis::parse_stack::on_parse_stack;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::pipeline::{SearchRequest, SearchResult, search};
 use crate::types::{CodeBlock, DiagnosticKind, Language, SymbolKind, Visibility};
@@ -509,29 +511,139 @@ fn analyzing_is_the_same_on_any_thread() {
     }
 }
 
-fn nested(open: &str, close: &str, depth: usize) -> String {
-    format!("pub fn deep() {{ let x = {}1{}; }}\npub fn after() {{}}\n", open.repeat(depth), close.repeat(depth))
+/// The text of a function whose body is `let x = <open>^depth <tail> <close>^depth;`.
+fn expr(depth: usize, open: &str, tail: &str, close: &str) -> String {
+    format!("pub fn deep() {{ let x = {}{tail}{}; }}\npub fn after() {{}}\n", open.repeat(depth), close.repeat(depth))
 }
 
 fn signatures(analysis: &FileAnalysis) -> Vec<&str> {
     analysis.blocks.iter().map(|b| b.symbol_signature.as_deref().unwrap()).collect()
 }
 
-/// `ra_ap_syntax` drops a finished tree on a shared thread with the default 2 MiB stack, where a tree too deep for that
-/// stack aborts the process at some later moment. Dropping a tree of the deepest kept depth on such a stack and joining
-/// makes that overflow fail here, on the test's own thread, instead of after the test has returned.
+/// The ways Rust nests that the parse and the tree drop recurse over, each as a function of its depth.
+#[allow(clippy::type_complexity)]
+fn shapes() -> Vec<(&'static str, Box<dyn Fn(usize) -> String>)> {
+    let shape =
+        |name, text: fn(usize) -> String| -> (&'static str, Box<dyn Fn(usize) -> String>) { (name, Box::new(text)) };
+    vec![
+        shape("parentheses", |d| expr(d, "(", "1", ")")),
+        shape("arrays", |d| expr(d, "[", "1", "]")),
+        shape("blocks", |d| expr(d, "{", "1", "}")),
+        shape("closures", |d| expr(d, "|a| ", "1", "")),
+        shape("negations", |d| expr(d, "- ", "1", "")),
+        shape("nots", |d| expr(d, "!", "1", "")),
+        shape("references", |d| expr(d, "&", "1", "")),
+        shape("dereferences", |d| expr(d, "*", "1", "")),
+        shape("tuples", |d| expr(d, "(1, ", "1", ")")),
+        shape("calls", |d| expr(d, "f(", "1", ")")),
+        shape("macros", |d| expr(d, "m!(", "1", ")")),
+        shape("conditionals", |d| expr(d, "if a { 1 } else ", "{ 1 }", "")),
+        shape("matches", |d| expr(d, "match a { _ => ", "1", "}")),
+        shape("loops", |d| expr(d, "loop { ", "1", "}")),
+        shape("unsafe blocks", |d| expr(d, "unsafe { ", "1", "}")),
+        shape("returns", |d| expr(d, "return ", "1", "")),
+        shape("assignments", |d| expr(d, "x = ", "1", "")),
+        shape("sums", |d| expr(d, "1+", "1", "")),
+        shape("method calls", |d| expr(0, "", "1", "").replace("1;", &format!("a{};", ".b()".repeat(d)))),
+        shape("field accesses", |d| expr(0, "", "1", "").replace("1;", &format!("a{};", ".b".repeat(d)))),
+        shape("casts", |d| expr(0, "", "1", "").replace("1;", &format!("a{};", " as u8".repeat(d)))),
+        shape("generic types", |d| format!("pub type T = {}u8{};\n", "A<".repeat(d), ">".repeat(d))),
+        shape("generic arguments with commas", |d| format!("pub type T = {}u8{};\n", "A<u8,".repeat(d), ">".repeat(d))),
+        shape("reference types", |d| format!("pub type T = {}u8;\n", "&".repeat(d))),
+        shape("tuple types", |d| format!("pub type T = {}u8{};\n", "(".repeat(d), ",)".repeat(d))),
+        shape("function types", |d| format!("pub type T = {}u8;\n", "fn() -> ".repeat(d))),
+        shape("modules", |d| format!("{}pub fn leaf() {{}}\n{}", "mod m { ".repeat(d), "}".repeat(d))),
+        shape("functions", |d| format!("{}{}\n", "fn a() { ".repeat(d), "}".repeat(d))),
+        shape("impls", |d| format!("{}{}\n", "impl A { fn b() { ".repeat(d), "} }".repeat(d))),
+        shape("patterns", |d| format!("fn a() {{ let {}x{} = 1; }}\n", "Some(".repeat(d), ")".repeat(d))),
+        shape("attributes", |d| format!("#[a{}{}]\nfn a() {{}}\n", "(b".repeat(d), ")".repeat(d))),
+        shape("macro token trees", |d| format!("m!{}{};\n", "(".repeat(d), ")".repeat(d))),
+    ]
+}
+
+/// The deepest `depth` for which `text(depth)` is nested within the cap.
+fn deepest_accepted(text: &dyn Fn(usize) -> String) -> usize {
+    let accepted =
+        |depth: usize| nesting::check(&text(depth), nesting::Syntax::Rust, parse::MAX_NESTING_LEVELS).is_ok();
+    let (mut accepted_depth, mut rejected_depth) = (1, 4 * parse::MAX_NESTING_LEVELS);
+    assert!(accepted(accepted_depth) && !accepted(rejected_depth));
+    while rejected_depth - accepted_depth > 1 {
+        let middle = usize::midpoint(accepted_depth, rejected_depth);
+        if accepted(middle) {
+            accepted_depth = middle;
+        } else {
+            rejected_depth = middle;
+        }
+    }
+    accepted_depth
+}
+
+/// The number of levels of `root`'s tree, the root being the first.
+fn tree_depth(root: &ra_ap_syntax::SyntaxNode) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    for event in root.preorder() {
+        match event {
+            ra_ap_syntax::WalkEvent::Enter(_) => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ra_ap_syntax::WalkEvent::Leave(_) => depth = depth.saturating_sub(1),
+        }
+    }
+    deepest
+}
+
+/// The deepest tree an accepted file can have, checked below for every shape at the cap. `ra_ap_syntax` drops a finished
+/// tree on a shared thread with the default 2 MiB stack, where a tree too deep for that stack aborts the process at some
+/// later moment. Optimized, that stack holds 26,240 levels; unoptimized, 4,320.
+const MAX_TREE_DEPTH: usize = 2_150;
+
 #[test]
-fn a_tree_of_the_deepest_kept_depth_drops_within_the_default_thread_stack() {
+fn a_tree_of_the_deepest_accepted_depth_drops_within_the_default_thread_stack() {
     const DEFAULT_THREAD_STACK: usize = 2 * 1024 * 1024;
+    // Dropping on such a stack and joining makes an overflow fail here, on the test's own thread, instead of after the
+    // test has returned. The tree is twice as deep as any accepted file's, so this also proves the margin.
     let dropped = std::thread::Builder::new().stack_size(DEFAULT_THREAD_STACK).spawn(|| {
         let kind = ra_ap_syntax::SourceFile::parse("", ra_ap_syntax::Edition::CURRENT).syntax_node().green().kind();
         let mut tree = ra_ap_syntax::GreenNode::new(kind, []);
-        for _ in 1..parse::MAX_TREE_DEPTH {
+        for _ in 1..MAX_TREE_DEPTH {
             tree = ra_ap_syntax::GreenNode::new(kind, [ra_ap_syntax::NodeOrToken::Node(tree)]);
         }
         drop(tree);
     });
     assert!(dropped.unwrap().join().is_ok());
+}
+
+#[test]
+fn every_shape_at_the_cap_parses_and_has_a_tree_the_drop_thread_holds() {
+    for (name, text) in shapes() {
+        let depth = deepest_accepted(&*text);
+        let source = text(depth);
+        let analysis = analyze_source(&source);
+        assert_eq!(analysis.degradation, None, "{name} at depth {depth}");
+        // On the parse thread, whose stack is big enough to parse and to drop what the test measures.
+        let levels = on_parse_stack(|| {
+            tree_depth(&ra_ap_syntax::SourceFile::parse(&source, ra_ap_syntax::Edition::CURRENT).syntax_node())
+        });
+        assert!(levels.is_ok_and(|levels| levels <= MAX_TREE_DEPTH), "{name} at depth {depth}: {levels:?} levels deep");
+    }
+}
+
+#[test]
+fn every_shape_one_past_the_cap_is_degraded_without_being_parsed() {
+    for (name, text) in shapes() {
+        let depth = deepest_accepted(&*text) + 1;
+        let analysis = analyze_source(&text(depth));
+        assert!(analysis.had_parse_errors, "{name}");
+        assert_eq!(
+            analysis.degradation,
+            Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS }),
+            "{name} at depth {depth}"
+        );
+        // A parse of these files finds the function and its sibling, so none found means no parse.
+        assert_eq!(rows(&analysis.blocks), [], "{name}");
+        assert_eq!(analysis.symbols.len(), 0, "{name}");
+    }
 }
 
 #[rstest]
@@ -544,29 +656,15 @@ fn a_tree_of_the_deepest_kept_depth_drops_within_the_default_thread_stack() {
 #[case::tuples("(1, ", ")")]
 #[case::calls("f(", ")")]
 fn expressions_nested_hundreds_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
-    let analysis = analyze_source(&nested(open, close, 500));
+    let analysis = analyze_source(&expr(300, open, "1", close));
     assert_eq!(analysis.degradation, None);
     assert_eq!(signatures(&analysis), ["pub fn deep()", "pub fn after()"]);
 }
 
-#[rstest]
-#[case::parentheses("(", ")")]
-#[case::blocks("{", "}")]
-#[case::negations("- ", "")]
-#[case::calls("f(", ")")]
-fn expressions_nested_past_the_tree_cap_are_degraded_not_dropped_on_the_wrong_stack(
-    #[case] open: &str,
-    #[case] close: &str,
-) {
-    let analysis = analyze_source(&nested(open, close, parse::MAX_TREE_DEPTH + 1));
-    assert!(analysis.had_parse_errors);
-    assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { cap: parse::MAX_TREE_DEPTH, .. })));
-    assert_eq!(rows(&analysis.blocks), []);
-}
-
 #[test]
-fn modules_nested_just_under_the_tree_cap_are_parsed() {
-    let depth = parse::MAX_TREE_DEPTH / 2 - 10;
+fn modules_nested_at_the_cap_keep_every_level() {
+    let depth =
+        deepest_accepted(&|depth| format!("{}pub fn leaf() {{}}\n{}", "mod m { ".repeat(depth), "}".repeat(depth)));
     let text = format!("{}pub fn leaf() {{}}\n{}", "mod m { ".repeat(depth), "}".repeat(depth));
     let analysis = analyze_source(&text);
     assert_eq!(analysis.degradation, None);
@@ -575,15 +673,14 @@ fn modules_nested_just_under_the_tree_cap_are_parsed() {
 }
 
 #[test]
-fn the_tree_cap_degradation_names_the_depth_and_the_cap() {
-    let depth = parse::MAX_TREE_DEPTH;
-    let text = format!("{}pub fn leaf() {{}}\n{}", "mod m { ".repeat(depth), "}".repeat(depth));
-    let analysis = analyze_source(&text);
-    let Some(Degradation::TooDeep { depth: found, cap }) = analysis.degradation else {
-        panic!("expected a depth degradation, got {:?}", analysis.degradation);
-    };
-    assert_eq!(cap, parse::MAX_TREE_DEPTH);
-    assert_eq!(found, 2 * depth + 4);
+fn fifty_thousand_nested_parentheses_are_degraded_at_once() {
+    let started = std::time::Instant::now();
+    let analysis = analyze_source(&expr(50_000, "(", "1", ")"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert_eq!(
+        analysis.degradation,
+        Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS })
+    );
 }
 
 #[test]
