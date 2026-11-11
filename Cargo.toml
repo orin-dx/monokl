@@ -56,20 +56,14 @@ strip = false
 thiserror = "2"
 miette = { version = "7.6", features = ["fancy"] }
 
-# Serde
-serde = "1.0"
-serde_json = { version = "1.0", features = ["preserve_order"] }
-
 # Core data
 camino = "1.2"
 rustc-hash = "2.1"
 dashmap = "6.1"
-blake3 = "1"
 
 # OXC (released in lockstep; bump together)
 oxc_parser = "0.152"
 oxc_ast = "0.152"
-oxc_ast_visit = "0.152"
 oxc_span = "0.152"
 oxc_allocator = "0.152"
 oxc_resolver = "11"

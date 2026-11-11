@@ -180,7 +180,7 @@ impl Extractor<'_> {
         if let Some(class) = statement_class(statement) {
             self.class_member_blocks(class);
         }
-        for (parent, object) in self.statement_objects(statement) {
+        for (parent, object) in Self::statement_objects(statement) {
             for property in &object.properties {
                 match property {
                     ObjectPropertyKind::ObjectProperty(property) => self.object_property_block(property, &parent),
@@ -192,10 +192,7 @@ impl Extractor<'_> {
 
     /// The object literals a top-level or exported statement binds to a name, each with the parent its members get: the
     /// declarator's name for `const api = { ... }`, `default` for `export default { ... }`.
-    fn statement_objects<'a, 'b>(
-        &self,
-        statement: &'b Statement<'a>,
-    ) -> Vec<(ParentContext, &'b ObjectExpression<'a>)> {
+    fn statement_objects<'a, 'b>(statement: &'b Statement<'a>) -> Vec<(ParentContext, &'b ObjectExpression<'a>)> {
         let declaration = match statement {
             Statement::VariableDeclaration(declaration) => Some(&**declaration),
             Statement::ExportDeclaration(export) => match &export.declaration {
