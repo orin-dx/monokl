@@ -165,7 +165,7 @@ fn diagnostic_lines(diagnostics: &[Diagnostic]) -> Vec<String> {
 #[cfg(test)]
 mod snippet_tests {
     use super::*;
-    use crate::types::CodeBlock;
+    use crate::types::{CodeBlock, SymbolKind};
     use camino::Utf8PathBuf;
 
     fn block(line_start: usize, code: &str, matched_lines: &[usize]) -> CodeBlock {
@@ -494,7 +494,7 @@ mod projection_tests {
     // The other projection tests render one row each, which would not catch a projection that drops later rows.
     #[test]
     fn multi_row_flattening_search() {
-        use crate::types::{CodeBlock, RankedBlock, SearchResponse};
+        use crate::types::{CodeBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
         fn block(file: &str, line_start: usize, line_end: usize, rank: usize, final_score: f64) -> RankedBlock {
             RankedBlock {
