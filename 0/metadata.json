@@ -1,0 +1,202 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M75WNK0SEWCSKA48AFS84274",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-11T18:07:26.83562Z",
+  "branch": "chore/query-tests-that-test-the-compiler",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "714401a18368",
+  "checkpoint_transcript_start": 24059,
+  "transcript_lines_at_start": 24059,
+  "compact_transcript_start": 1683,
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 830067,
+    "cache_read_tokens": 13064515,
+    "output_tokens": 26195,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 226,
+      "cache_creation_tokens": 353007,
+      "cache_read_tokens": 27747796,
+      "output_tokens": 61424,
+      "api_call_count": 112
+    }
+  },
+  "redaction": {
+    "replacements": 102,
+    "layers": {
+      "betterleaks": 14,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 123
+  },
+  "summary": {
+    "intent": "Harden monokl's bounded-work handling (PR #83 fixed parse stack and nesting cap), then learn which error patterns should shape the architecture, and audit monokl for over-engineering and non-idiomatic Rust using a pasted Callisto audit prompt.",
+    "outcome": "PR #83 had a JSX regression (a 3,000-sibling file was rejected). It was fixed by raising the TS cap to 16,384 and the stack to 256 MiB, and verified on six shapes, with CI partly pending. A read-only audit found large dead code and test bloat, and two safe deletion agents were started while larger removals were held for user decision.",
+    "learnings": {
+      "repo": [
+        "Monokl is pre-1.0, so public surface (flags, pub items, error variants) can be deleted cheaply. AGENTS.md tags rules [lint], [type] or [convention], and [convention] rules are enforced by nothing.",
+        "Language facts (the 8-extension TS family, test-path rules) are duplicated in about 6 places: is_test_path, has_language_extension, TsAnalyzer::supports, rust/mod.rs, boost.rs, and rg-compare.py/bench.py. The Python harness mirrors the product predicate by hand.",
+        "The search pipeline reads only `blocks` and `test_blocks` from FileAnalysis. symbols, dependencies, exports, jsx_elements, Digest (blake3), AnalysisProfile and capabilities are never read in production, but they are groundwork for unbuilt `symbols`/`refs` commands.",
+        "coverage_boost is always 1.0 in production, so every printed finalScore is 1.0 too high. Removing it leaves order unchanged but needs a minor changeset and README updates.",
+        "The nesting scan over-approximates because closers do not lower the estimate. This caused the JSX regression and is the origin of the TS/Rust caps (16,384 / 512).",
+        "The 256 MiB parse stack is virtual, not resident: an ordinary zod search peaks at 21 MB RSS. It could fail under strict ulimit -v or no-overcommit containers, which is reported as a degraded file.",
+        "Recurring error classes: line-based identity instead of byte spans, facts owned in several places, stages without explicit bounds, text heuristics where AST fields exist, eval harness not mirroring the product, and tests pinning composite floats."
+      ],
+      "code": [
+        {
+          "path": "crates/monokl/src/analysis/parse_stack.rs",
+          "finding": "Runs one fixed parse stack per file in a scoped thread (~30us), replacing input-sized stacks. Now 256 MiB for TS."
+        },
+        {
+          "path": "crates/monokl/src/analysis/nesting.rs",
+          "finding": "O(n) nesting-cost scan that prices words and operators and resolves doubts to the higher cost. Over the cap returns TooDeep and the parser is never called."
+        },
+        {
+          "path": "crates/monokl/src/rank/mod.rs",
+          "line": 116,
+          "end_line": 132,
+          "finding": "kind_order is a hand-written 17-line mirror of SymbolKind declaration order. It could be replaced by derive(PartialOrd, Ord)."
+        },
+        {
+          "path": "crates/monokl/src/analysis/boost.rs",
+          "line": 69,
+          "end_line": 100,
+          "finding": "name_match_boost cuts the name out of the signature string at (<{=: with a pub(crate) special case. CodeBlock should carry a name field."
+        },
+        {
+          "path": "crates/monokl/src/pipeline/mod.rs",
+          "line": 333,
+          "end_line": 380,
+          "finding": "owned_hits decides ownership by line numbers and by outer.code.contains(inner.code). Byte spans would remove the mid-line cases."
+        },
+        {
+          "path": "crates/monokl/src/text_search.rs",
+          "line": 511,
+          "end_line": 535,
+          "finding": "is_test_path has 20 ends_with calls duplicating the TS extension family. A single Language::of or is_test_file is proposed."
+        },
+        {
+          "path": "crates/monokl/src/output/agent.rs",
+          "line": 640,
+          "end_line": 660,
+          "finding": "walk_error_code (11 tests) reimplements ignore::Error::io_error recursion, which already exists in the ignore crate."
+        },
+        {
+          "path": "crates/monokl/src/analysis/dedup.rs",
+          "line": 96,
+          "end_line": 165,
+          "finding": "Hand-rolled max-segment-tree of about 70 lines with 178 proptest lines. No crate is available, and it is low confidence to remove."
+        }
+      ],
+      "workflow": [
+        "Verify subagent claims independently. Testing realistic stress shapes (big JSX, long concat, big arrays) caught a regression the harness and the agent's own report missed.",
+        "Agents' disclosed known limits are where bugs live, so test them before accepting.",
+        "Prefer invariant and component assertions over pinned composite floats, and use ratio-based scaling tests instead of absolute timings.",
+        "Adapting an audit prompt with a 'not a finding' section, required counts and callers, and ranking by value of removal produced evidence-backed results.",
+        "Sequence deletion PRs after in-flight PRs (#79, #83) to avoid conflicts in shared files."
+      ]
+    },
+    "friction": [
+      "The eval harness repos contained no large sibling-JSX file, so the #83 regression passed `just ci` and rg-compare undetected.",
+      "The agent edited crates/monokl/tests/cli.rs outside its allowed file list, because the 5,000-deep test was now over the cap.",
+      "#83 CI at commit 4836a19 was only partly done (4 passed, 4 pending), and Linux was untested.",
+      "Four exact-score tests in #68 broke when #69 landed, although each PR passed alone.",
+      "The audit's first claims needed manual checking, and the analyzer-extras line count was not independently counted."
+    ],
+    "open_items": [
+      "Merge #83 once CI finishes, then #79 and #81.",
+      "Build size-before-read with the hit-text cap, then `--timeout`, then CI scaling tests, after #79.",
+      "Wait for the two started deletion agents (query probe/source-scan tests, constant coverage_boost and unread ranking fields) and verify them before merging. This needs a minor changeset, README updates, and proof of identical order on 60+ queries.",
+      "Decide on deleting unread analyzer output, Digest, capabilities and LanguageId (audit #1). Planned as one deletion PR after #83/#79.",
+      "Decide on the single Language::of/is_test_file change (audit #4), which makes --language python a usage error with exit 2.",
+      "Decide on dropping --max-bytes, the miette feature and ToonProjection<N> (audit #5, #7).",
+      "Write an ADR for the span-based hits and block-tree model before building it, and ask the user first because it conflicts with the bounded-work PRs.",
+      "Unify the language definition so the harness and benchmark read the product's predicate, and add a hostile-shape corpus and scaling tests in CI.",
+      "Linux CI run for #83 is the first evidence on virtual stack reservation under constrained address space.",
+      "Clean up the scratch checkout and builds of PR 83 on the next cleanup pass.",
+      "Leave dedup.rs's segment tree until the model change lands."
+    ]
+  }
+}

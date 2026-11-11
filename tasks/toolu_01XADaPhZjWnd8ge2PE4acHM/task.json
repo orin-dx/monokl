@@ -1,0 +1,19 @@
+{
+  "tool_use_id": "toolu_01XADaPhZjWnd8ge2PE4acHM",
+  "agent_id": "ae68a5da58e663f1b",
+  "subagent_type": "general-purpose",
+  "task_description": "Fixed parse stack with a nesting pre-scan",
+  "files": [
+    "crates/monokl/src/analysis/rust/parse_probe.rs",
+    "crates/monokl/src/analysis/ts/parse_probe.rs"
+  ],
+  "token_usage": {
+    "input_tokens": 374,
+    "cache_creation_tokens": 403052,
+    "cache_read_tokens": 54839731,
+    "output_tokens": 238510,
+    "api_call_count": 186
+  },
+  "started_at": "2026-11-10T20:49:56.462409-08:00",
+  "completed_at": "2026-11-10T21:39:08.220713-08:00"
+}
