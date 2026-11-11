@@ -18,7 +18,6 @@ use crate::types::CodeBlock;
 ///     code: "return userName;".to_string(),
 ///     symbol_signature: Some("fn userName()".to_string()),
 ///     matched_lines: Vec::new(),
-///     matched_keywords: Vec::new(),
 ///     parent: None,
 /// };
 /// assert_eq!(tokenize_block(&block), ["user", "name", "user", "name"]);
@@ -47,7 +46,6 @@ mod tests {
             code: code.to_string(),
             symbol_signature: symbol_signature.map(ToString::to_string),
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }

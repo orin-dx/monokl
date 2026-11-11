@@ -17,12 +17,10 @@ fn block_strategy() -> impl Strategy<Value = RankedBlock> {
                 code: String::new(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             },
             final_score: 0.0,
             rank,
-            parent_context: None,
         },
     )
 }
@@ -76,12 +74,10 @@ fn ranked(line_start: usize, line_end: usize, parent: Option<ParentContext>) -> 
             code: String::new(),
             symbol_signature: None,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent,
         },
         final_score: 0.0,
         rank: 0,
-        parent_context: None,
     }
 }
 

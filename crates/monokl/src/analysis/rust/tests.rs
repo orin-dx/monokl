@@ -638,7 +638,7 @@ fn found(result: &SearchResult, root: &Utf8Path) -> Vec<Found> {
                 b.line_start,
                 b.line_end,
                 b.node_kind,
-                r.parent_context.as_ref().map(|p| p.name.clone()),
+                r.block.parent.as_ref().map(|p| p.name.clone()),
                 b.matched_lines.clone(),
             )
         })

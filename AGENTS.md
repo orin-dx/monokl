@@ -31,7 +31,7 @@ One crate, `crates/monokl`, with the error types, core data types, query languag
 Each rule ends with what holds it: `[lint]` the workspace lint table or CI, `[type]` the shape of the types, `[convention]` review only. Treat a `[convention]` rule as the most likely to have drifted and check it when you touch the area.
 
 - No `unwrap()`/`expect()`/`panic!()`/`unreachable!()`/`unimplemented!()` outside `#[cfg(test)]`. `[lint]`
-- One `thiserror` error enum, `MonoklError`. Compose failure modes with `#[from]`/`#[source]`; no `String`-message variant when a structured one is possible. File I/O failures are `FileIoError` ([ADR 0001](docs/adr/0001-file-io-error-lives-in-monokl.md)), and a value type may own its parse error (`DigestParseError`). `[convention]`
+- One `thiserror` error enum, `MonoklError`. Compose failure modes with `#[from]`/`#[source]`; no `String`-message variant when a structured one is possible. File I/O failures are `FileIoError` ([ADR 0001](docs/adr/0001-file-io-error-lives-in-monokl.md)), and a value type may own its parse error. `[convention]`
 - `LanguageAnalyzer` implementations return fully owned data. No arena-borrowed AST node or parser-allocator lifetime in any field of `FileAnalysis`. `[type]`
 - `camino::Utf8Path`/`Utf8PathBuf` wherever a path appears, except where the path may not be UTF-8 (`MonoklError::NonUtf8Path` holds a `PathBuf`). `[convention]`
 - `FxHashMap`/`FxHashSet` for internal hot-path maps; `BTreeMap` for anything serialized, because output order must be deterministic. `[convention]`

@@ -36,7 +36,6 @@ pub struct CodeBlock {
     pub code: String,
     pub symbol_signature: Option<String>,
     pub matched_lines: Vec<usize>,
-    pub matched_keywords: Vec<String>,
     /// The block this one is a member of, such as the class of a method; `None` for a top-level block.
     pub parent: Option<ParentContext>,
 }
@@ -54,7 +53,6 @@ pub struct RankedBlock {
     pub block: CodeBlock,
     pub final_score: f64,
     pub rank: usize,
-    pub parent_context: Option<ParentContext>,
 }
 
 /// The kind of a [`Diagnostic`].

@@ -18,8 +18,7 @@ use crate::types::{CodeBlock, RankedBlock};
 ///
 /// Each block comes with its document tokens, usually from [`tokenize_block`]. The corpus for BM25 is `blocks`
 /// itself: its size and average token count feed [`score`], and `df` gives each term's document frequency. A block's
-/// `final_score` is `round6(bm25 * name_match_boost * node_type_boost)`, and its `parent` becomes the ranked block's
-/// `parent_context`.
+/// `final_score` is `round6(bm25 * name_match_boost * node_type_boost)`.
 ///
 /// The order is `final_score` descending (with `-0.0` equal to `0.0`), then ascending `file` by path components,
 /// `line_start`, `line_end`, `node_kind` in `SymbolKind` declaration order, and `code` by bytes. Reordering the input
@@ -42,7 +41,6 @@ use crate::types::{CodeBlock, RankedBlock};
 ///     code: code.to_string(),
 ///     symbol_signature: None,
 ///     matched_lines: Vec::new(),
-///     matched_keywords: Vec::new(),
 ///     parent: None,
 /// };
 /// let blocks: Vec<_> = [block("b.ts", "parseConfig()"), block("a.ts", "readFile()")]
@@ -76,8 +74,7 @@ pub fn rank_blocks<S: BuildHasher>(
             let bm25_score = score(&doc_tokens, query_terms, avg_doc_len, corpus_size, df);
             let final_score =
                 round6(bm25_score * name_match_boost(&block, query_terms) * node_type_boost(block.node_kind));
-            let parent_context = block.parent.clone();
-            RankedBlock { block, final_score, rank: 0, parent_context }
+            RankedBlock { block, final_score, rank: 0 }
         })
         .collect();
     ranked.sort_by(best_first);
@@ -113,7 +110,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::types::{ParentContext, SymbolKind};
+    use crate::types::SymbolKind;
 
     fn block(
         file: &str,
@@ -130,7 +127,6 @@ mod tests {
             code: String::new(),
             symbol_signature: None,
             matched_lines,
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }
@@ -188,12 +184,7 @@ mod tests {
     }
 
     fn with_final_score(file: &str, final_score: f64) -> RankedBlock {
-        RankedBlock {
-            block: block(file, 1, 1, SymbolKind::Function, vec![]),
-            final_score,
-            rank: 0,
-            parent_context: None,
-        }
+        RankedBlock { block: block(file, 1, 1, SymbolKind::Function, vec![]), final_score, rank: 0 }
     }
 
     fn scored_corpus() -> Vec<(CodeBlock, Vec<String>)> {
@@ -257,18 +248,6 @@ mod tests {
             Other,
         ];
         assert!(declared.is_sorted_by(|a, b| a < b), "{declared:?}");
-    }
-
-    #[test]
-    fn a_ranked_block_carries_the_parent_of_its_block() {
-        let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
-        let mut member = block("a.ts", 3, 5, SymbolKind::Method, vec![4]);
-        member.parent = Some(parent.clone());
-        let blocks =
-            vec![(member, tokens(&["foo"])), (block("a.ts", 1, 9, SymbolKind::Class, vec![1]), tokens(&["foo"]))];
-        let ranked = rank_blocks(blocks, &["foo"], &HashMap::from([("foo".to_owned(), 2)]));
-        let parents: Vec<_> = ranked.iter().map(|r| (r.block.line_start, r.parent_context.clone())).collect();
-        assert_eq!(parents, [(1, None), (3, Some(parent))]);
     }
 
     #[test]

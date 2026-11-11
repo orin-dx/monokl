@@ -73,7 +73,7 @@ impl SearchResult {
 /// dropped when it has none. Files no analyzer supports, or that `language` excludes, are never opened, counted or reported.
 ///
 /// BM25 query terms are the lowercase [`tokenize`] output of each non-excluded literal term. Regex terms select
-/// lines and appear in `matched_keywords` but add no BM25 terms. A query with only excluded terms has nothing to
+/// lines but add no BM25 terms. A query with only excluded terms has nothing to
 /// search for and returns an empty result with one `Skipped` diagnostic.
 ///
 /// # Errors
@@ -363,20 +363,8 @@ fn retrieve_blocks(
         if inside.is_empty() {
             continue;
         }
-        let matched_keywords = ctx
-            .plan
-            .terms
-            .iter()
-            .zip(ctx.matchers)
-            .filter(|(term, _)| term.modifier != Modifier::Excluded)
-            .filter(|(_, matcher)| inside.iter().any(|hit| matches_text(matcher, &hit.text)))
-            .map(|(term, _)| keyword(term))
-            .collect();
-        let annotated = CodeBlock {
-            matched_lines: inside.iter().map(|hit| hit.line_number).collect(),
-            matched_keywords,
-            ..(*block).clone()
-        };
+        let annotated =
+            CodeBlock { matched_lines: inside.iter().map(|hit| hit.line_number).collect(), ..(*block).clone() };
         let tokens = tokenize_block(&annotated);
         out.push((annotated, tokens));
     }
@@ -524,7 +512,6 @@ mod tests {
             code: code.join("\n"),
             symbol_signature: None,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }
@@ -800,7 +787,6 @@ mod tests {
         let exact = SearchRequest { exact: true, ..request(&root, "a.b -x") };
         let result = search(&whole_file_registry(), &exact).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.matched_keywords, ["a.b -x"]);
     }
 
     #[test]
@@ -808,7 +794,6 @@ mod tests {
         let (_dir, root) = tree(&[("a.ts", "boooo\n"), ("b.ts", "bravo\n")]);
         let result = search(&whole_file_registry(), &request(&root, "regex:BO+")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.matched_keywords, ["BO+"]);
     }
 
     #[test]
@@ -849,22 +834,9 @@ mod tests {
             Ok((vec![block(path, source, 1, 3), block(path, source, 4, 4), block(path, source, 5, 8)], false))
         });
         let result = search(&registry, &request(&root, "alpha beta")).unwrap();
-        let blocks: Vec<_> = result
-            .ranked
-            .iter()
-            .map(|r| (r.block.line_start, r.block.matched_lines.clone(), r.block.matched_keywords.clone()))
-            .collect();
-        assert_eq!(
-            blocks,
-            [(5, vec![6, 7], vec!["alpha".to_owned(), "beta".to_owned()]), (1, vec![2], vec!["alpha".to_owned()]),]
-        );
-    }
-
-    #[test]
-    fn matched_keywords_follow_query_order_not_text_order() {
-        let (_dir, root) = tree(&[("a.ts", "beta alpha\n")]);
-        let result = search(&whole_file_registry(), &request(&root, "alpha beta")).unwrap();
-        assert_eq!(result.ranked[0].block.matched_keywords, ["alpha", "beta"]);
+        let blocks: Vec<_> =
+            result.ranked.iter().map(|r| (r.block.line_start, r.block.matched_lines.clone())).collect();
+        assert_eq!(blocks, [(5, vec![6, 7]), (1, vec![2])]);
     }
 
     #[test]
@@ -908,7 +880,6 @@ mod tests {
                 code: code.to_owned(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             };
             let tokens = tokenize_block(&block);
@@ -1044,7 +1015,7 @@ class Foo {
     fn member_rows_carry_their_parent_into_the_ranked_block() {
         let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
         let result = search(&class_registry(), &request(&root, "alpha")).unwrap();
-        let parent = result.ranked[0].parent_context.as_ref().map(|p| (p.kind, p.name.as_str()));
+        let parent = result.ranked[0].block.parent.as_ref().map(|p| (p.kind, p.name.as_str()));
         assert_eq!(parent, Some((SymbolKind::Class, "Foo")));
     }
 
@@ -1297,7 +1268,6 @@ class Foo {
         let ranks: Vec<usize> = result.ranked.iter().map(|r| r.rank).collect();
         assert_eq!(ranks, [1, 2]);
         assert_eq!(result.ranked[1].block.matched_lines, [1]);
-        assert_eq!(result.ranked[1].block.matched_keywords, ["login"]);
 
         let everything = SearchRequest { allow_tests: true, respect_ignore_files: false, ..request(&root, query) };
         let result = search(&whole_file_registry(), &everything).unwrap();

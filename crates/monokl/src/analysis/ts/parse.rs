@@ -168,7 +168,6 @@ impl Extractor<'_> {
             code: code.to_owned(),
             symbol_signature,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent,
         };
         self.out.blocks.push(block);

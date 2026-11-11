@@ -18,7 +18,6 @@ fn block(line_start: usize, marks: &[bool]) -> CodeBlock {
         code: code.join("\n"),
         symbol_signature: None,
         matched_lines: Vec::new(),
-        matched_keywords: Vec::new(),
         parent: None,
     }
 }

@@ -235,7 +235,7 @@ export class Foo {
     let mut rows: Vec<_> = result
         .ranked
         .iter()
-        .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone(), r.parent_context.is_some()))
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone(), r.block.parent.is_some()))
         .collect();
     rows.sort();
     assert_eq!(rows, [(1, 9, vec![2], false), (3, 5, vec![4], true)]);
@@ -251,7 +251,7 @@ fn a_member_row_is_ranked_with_the_kind_boost_of_its_own_kind() {
             ranked.block.node_kind,
             monokl::rank::node_type_boost(ranked.block.node_kind),
             ranked.rank,
-            ranked.parent_context.as_ref().map(|p| p.name.as_str())
+            ranked.block.parent.as_ref().map(|p| p.name.as_str())
         ),
         (monokl::types::SymbolKind::Method, 1.4, 1, Some("Foo"))
     );
@@ -359,7 +359,7 @@ export const config = {
     let mut rows: Vec<_> = result
         .ranked
         .iter()
-        .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone(), r.parent_context.is_some()))
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone(), r.block.parent.is_some()))
         .collect();
     rows.sort();
     assert_eq!(rows, [(1, 9, vec![2], false), (3, 5, vec![4], true)]);

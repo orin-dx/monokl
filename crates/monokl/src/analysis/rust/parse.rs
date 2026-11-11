@@ -202,7 +202,6 @@ impl Walker<'_> {
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent: holder.cloned(),
         };
         if in_test {
