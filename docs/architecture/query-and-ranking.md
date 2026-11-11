@@ -68,10 +68,10 @@ pub fn rank_blocks(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], 
     -> Vec<RankedBlock>
 ```
 
-Per block: `bm25 = bm25::score(...)`, `cov = boost::coverage_boost(&block)`,
+Per block: `bm25 = bm25::score(...)`,
 `ntype = boost::node_type_boost(block.node_kind)`, `name = boost::name_match_boost(&block, query_terms)`
 (1 + 2 * share of query terms in the block's declared name, so 1.0 to 3.0),
-**`final_score = round6(bm25 * name * ntype + cov)`**.
+**`final_score = round6(bm25 * name * ntype)`**.
 Sorted descending by `final_score` only; 1-based `rank` assigned post-sort.
 
 BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` to 6dp for
@@ -79,7 +79,6 @@ cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
 
 `node_type_boost` (`rank/boost.rs`): Function 1.5; Class/Method/Constructor 1.4; Interface/Struct
 1.3; TypeAlias/Enum 1.2; Variable/Impl 1.1; Property/Field/Macro 1.0; Module 0.9; Other 0.7.
-`coverage_boost` = `matched_in_block / len(matched_lines)`, 6dp, 0 if `matched_lines` empty.
 
 **Tie-break claim vs. reality (finding #9).** Tenet #4 (§29 L3093) states: **"tie-break on
 `(file, line_start)`."** The actual sort:
@@ -89,7 +88,7 @@ ranked.sort_by(|a, b| b.final_score.partial_cmp(&a.final_score).unwrap_or(Orderi
 ```
 
 is single-key on `final_score` — no secondary comparator. Ties are plausible (`node_type_boost`
-and `coverage_boost` both take small discrete value sets); their order then falls out of Rust's
+takes a small discrete value set); their order then falls out of Rust's
 stable-sort preserving whatever pre-sort order the candidate walk produced — itself
 non-deterministic per finding #10. **The architecture doc's determinism claim is not backed by the
 ranking code as specified.** spec@1 must either implement `(file, line_start)` as an explicit

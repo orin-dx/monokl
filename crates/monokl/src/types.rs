@@ -3,8 +3,10 @@ use camino::Utf8PathBuf;
 
 /// The classification of a symbol.
 ///
+/// Ordering is declaration order: ranking breaks ties by it, so reordering the variants reorders equal-score results.
+///
 /// Most variants apply to every language analyzer; `Impl` and `Macro` are Rust-specific, and `Other` is the catch-all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum SymbolKind {
     Function,
@@ -171,9 +173,6 @@ pub struct ParentContext {
 #[derive(Debug, Clone)]
 pub struct RankedBlock {
     pub block: CodeBlock,
-    pub bm25_score: f64,
-    pub coverage_boost: f64,
-    pub node_type_boost: f64,
     pub final_score: f64,
     pub rank: usize,
     pub parent_context: Option<ParentContext>,
@@ -227,7 +226,5 @@ pub struct SearchResponse {
     pub results: Vec<RankedBlock>,
     pub total_blocks_before_truncation: usize,
     pub truncated: bool,
-    pub total_bytes: usize,
-    pub total_tokens: usize,
     pub diagnostics: Vec<Diagnostic>,
 }

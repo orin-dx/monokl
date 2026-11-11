@@ -1,5 +1,4 @@
-//! Ranks code blocks by BM25 relevance, boosted by symbol kind, by query terms in the declared name and by how many
-//! matched lines each block covers.
+//! Ranks code blocks by BM25 relevance, boosted by symbol kind and by query terms in the declared name.
 
 mod bm25;
 mod boost;
@@ -10,16 +9,16 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 pub use bm25::{round6, score};
-pub use boost::{coverage_boost, name_match_boost, node_type_boost};
+pub use boost::{name_match_boost, node_type_boost};
 pub use tokenize_doc::tokenize_block;
 
-use crate::types::{CodeBlock, RankedBlock, SymbolKind};
+use crate::types::{CodeBlock, RankedBlock};
 
 /// Scores each block against `query_terms` and returns them best first, with 1-based ranks.
 ///
 /// Each block comes with its document tokens, usually from [`tokenize_block`]. The corpus for BM25 is `blocks`
 /// itself: its size and average token count feed [`score`], and `df` gives each term's document frequency. A block's
-/// `final_score` is `round6(bm25 * node_type_boost + coverage_boost)`, and its `parent` becomes the ranked block's
+/// `final_score` is `round6(bm25 * name_match_boost * node_type_boost)`, and its `parent` becomes the ranked block's
 /// `parent_context`.
 ///
 /// The order is `final_score` descending (with `-0.0` equal to `0.0`), then ascending `file` by path components,
@@ -75,19 +74,10 @@ pub fn rank_blocks<S: BuildHasher>(
         .into_iter()
         .map(|(block, doc_tokens)| {
             let bm25_score = score(&doc_tokens, query_terms, avg_doc_len, corpus_size, df);
-            let coverage_boost = coverage_boost(&block);
-            let node_type_boost = node_type_boost(block.node_kind);
-            let name_boost = name_match_boost(&block, query_terms);
+            let final_score =
+                round6(bm25_score * name_match_boost(&block, query_terms) * node_type_boost(block.node_kind));
             let parent_context = block.parent.clone();
-            RankedBlock {
-                block,
-                bm25_score,
-                coverage_boost,
-                node_type_boost,
-                final_score: round6(bm25_score * name_boost * node_type_boost + coverage_boost),
-                rank: 0,
-                parent_context,
-            }
+            RankedBlock { block, final_score, rank: 0, parent_context }
         })
         .collect();
     ranked.sort_by(best_first);
@@ -108,7 +98,7 @@ fn best_first(a: &RankedBlock, b: &RankedBlock) -> Ordering {
         .then_with(|| a.block.file.cmp(&b.block.file))
         .then_with(|| a.block.line_start.cmp(&b.block.line_start))
         .then_with(|| a.block.line_end.cmp(&b.block.line_end))
-        .then_with(|| kind_order(a.block.node_kind).cmp(&kind_order(b.block.node_kind)))
+        .then_with(|| a.block.node_kind.cmp(&b.block.node_kind))
         .then_with(|| a.block.code.cmp(&b.block.code))
 }
 
@@ -117,34 +107,13 @@ fn score_order(score: f64) -> f64 {
     if score == 0.0 { 0.0 } else { score }
 }
 
-/// Returns the position of `kind` in `SymbolKind`'s declaration order.
-fn kind_order(kind: SymbolKind) -> u8 {
-    match kind {
-        SymbolKind::Function => 0,
-        SymbolKind::Method => 1,
-        SymbolKind::Constructor => 2,
-        SymbolKind::Class => 3,
-        SymbolKind::Struct => 4,
-        SymbolKind::Enum => 5,
-        SymbolKind::Interface => 6,
-        SymbolKind::TypeAlias => 7,
-        SymbolKind::Property => 8,
-        SymbolKind::Field => 9,
-        SymbolKind::Variable => 10,
-        SymbolKind::Module => 11,
-        SymbolKind::Impl => 12,
-        SymbolKind::Macro => 13,
-        SymbolKind::Other => 14,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use camino::Utf8PathBuf;
     use rstest::rstest;
 
     use super::*;
-    use crate::types::ParentContext;
+    use crate::types::{ParentContext, SymbolKind};
 
     fn block(
         file: &str,
@@ -221,9 +190,6 @@ mod tests {
     fn with_final_score(file: &str, final_score: f64) -> RankedBlock {
         RankedBlock {
             block: block(file, 1, 1, SymbolKind::Function, vec![]),
-            bm25_score: 0.0,
-            coverage_boost: 0.0,
-            node_type_boost: 1.5,
             final_score,
             rank: 0,
             parent_context: None,
@@ -248,21 +214,49 @@ mod tests {
     }
 
     #[test]
-    fn rank_blocks_sets_every_score_component() {
+    fn rank_blocks_orders_by_score_and_a_block_matching_no_term_scores_zero() {
         let ranked = rank_blocks(scored_corpus(), &["user", "name"], &scored_df());
-        let scores: Vec<_> = ranked
-            .iter()
-            .map(|r| (r.block.file.as_str(), r.bm25_score, r.node_type_boost, r.coverage_boost, r.final_score, r.rank))
-            .collect();
-        assert_eq!(
-            scores,
-            [
-                ("a.ts", 1.459_351, 1.5, 0.5, 2.689_027, 1),
-                ("c.ts", 0.0, 0.7, 1.0, 1.0, 2),
-                ("b.ts", 0.552_945, 1.4, 0.0, 0.774_123, 3),
-            ]
-        );
-        assert_eq!(ranked.iter().filter(|r| r.parent_context.is_some()).count(), 0);
+        let order: Vec<_> = ranked.iter().map(|r| (r.block.file.as_str(), r.rank)).collect();
+        assert_eq!(order, [("a.ts", 1), ("b.ts", 2), ("c.ts", 3)]);
+        let scores: Vec<_> = ranked.iter().map(|r| r.final_score).collect();
+        assert!(scores[0] > scores[1] && scores[1] > scores[2], "{scores:?}");
+        assert!(scores[2].abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_node_type_multiplier_applies_over_the_kind_tie_break() {
+        // Module sorts before Impl on a tie, but Impl's multiplier (1.1) beats Module's (0.9), so Impl ranks first.
+        let blocks = vec![
+            (block("a.ts", 1, 5, SymbolKind::Module, vec![]), tokens(&["user"])),
+            (block("a.ts", 1, 5, SymbolKind::Impl, vec![]), tokens(&["user"])),
+        ];
+        let ranked = rank_blocks(blocks, &["user"], &scored_df());
+        let kinds: Vec<_> = ranked.iter().map(|r| r.block.node_kind).collect();
+        assert_eq!(kinds, [SymbolKind::Impl, SymbolKind::Module]);
+        assert!(ranked[0].final_score > ranked[1].final_score);
+    }
+
+    #[test]
+    fn symbol_kind_order_is_declaration_order() {
+        use SymbolKind::*;
+        let declared = [
+            Function,
+            Method,
+            Constructor,
+            Class,
+            Struct,
+            Enum,
+            Interface,
+            TypeAlias,
+            Property,
+            Field,
+            Variable,
+            Module,
+            Impl,
+            Macro,
+            Other,
+        ];
+        assert!(declared.is_sorted_by(|a, b| a < b), "{declared:?}");
     }
 
     #[test]
@@ -281,7 +275,7 @@ mod tests {
     fn rank_blocks_keeps_each_block_with_its_own_tokens() {
         let ranked = rank_blocks(scored_corpus(), &["user", "name"], &scored_df());
         let kinds: Vec<_> = ranked.iter().map(|r| (r.block.file.as_str(), r.block.node_kind)).collect();
-        assert_eq!(kinds, [("a.ts", SymbolKind::Function), ("c.ts", SymbolKind::Other), ("b.ts", SymbolKind::Class)]);
+        assert_eq!(kinds, [("a.ts", SymbolKind::Function), ("b.ts", SymbolKind::Class), ("c.ts", SymbolKind::Other)]);
     }
 
     #[test]
@@ -415,20 +409,19 @@ mod tests {
     #[test]
     fn rank_blocks_uses_the_input_as_its_corpus() {
         // One block: corpus size 1, average length 4. ln((1 - 1 + 0.5) / (1 + 0.5) + 1) * (2 * 2.5) / (2 + 1.5) = 0.410974,
-        // and the final score is round6(0.410974 * 1.5 + 0.0).
+        // and the final score is round6(0.410974 * 1.0 * 1.5), the one place the composite float is the contract.
         let blocks = vec![(block("a.ts", 1, 1, SymbolKind::Function, vec![]), tokens(&["foo", "foo", "bar", "baz"]))];
         let df = HashMap::from([("foo".to_string(), 1)]);
         let ranked = rank_blocks(blocks, &["foo"], &df);
-        let scores: Vec<_> = ranked.iter().map(|r| (r.bm25_score, r.coverage_boost, r.final_score, r.rank)).collect();
-        assert_eq!(scores, [(0.410_974, 0.0, 0.616_461, 1)]);
+        let scores: Vec<_> = ranked.iter().map(|r| (r.final_score, r.rank)).collect();
+        assert_eq!(scores, [(0.616_461, 1)]);
     }
 
     #[test]
     fn rank_blocks_lifts_a_block_whose_name_holds_the_query_terms_over_one_that_only_repeats_them() {
-        // Both terms have document frequency 2 in a corpus of 2, and the average length is (2 + 7) / 2 = 4.5.
-        // bm25: the named block 0.437572, the repeating block 0.556235, so without the name multiplier the
-        // repeating block wins. The name holds both terms, so the multiplier is 3.0 and the named block scores
-        // round6(0.437572 * 3.0 * 1.5) = 1.969074 against round6(0.556235 * 1.0 * 1.5) = 0.834353.
+        // Both terms have document frequency 2 in a corpus of 2, and the average length is (2 + 7) / 2 = 4.5. The
+        // repeating block has the higher bm25 (0.556235 against 0.437572), so it would win without the name multiplier.
+        // The name holds both terms, so its multiplier is 3.0.
         let function = |file: &str, code: &str| {
             let mut b = block(file, 1, 3, SymbolKind::Function, vec![]);
             b.code = code.to_string();
@@ -443,9 +436,9 @@ mod tests {
         ];
         let df = HashMap::from([("parse".to_string(), 2), ("config".to_string(), 2)]);
         let ranked = rank_blocks(blocks, &["parse", "config"], &df);
-        let scores: Vec<_> =
-            ranked.iter().map(|r| (r.block.file.as_str(), r.bm25_score, r.final_score, r.rank)).collect();
-        assert_eq!(scores, [("b.ts", 0.437_572, 1.969_074, 1), ("a.ts", 0.556_235, 0.834_353, 2)]);
+        let order: Vec<_> = ranked.iter().map(|r| (r.block.file.as_str(), r.rank)).collect();
+        assert_eq!(order, [("b.ts", 1), ("a.ts", 2)]);
+        assert!(ranked[0].final_score > ranked[1].final_score);
     }
 
     /// Calls `visit` once per ordering of `items[k..]`.
@@ -470,8 +463,9 @@ mod tests {
         ];
         let df = HashMap::from([("common".to_string(), 9)]);
         let ranked = rank_blocks(blocks, &["common"], &df);
-        let scores: Vec<_> = ranked.iter().map(|r| (r.block.file.as_str(), r.bm25_score, r.final_score)).collect();
-        assert_eq!(scores, [("b.ts", 0.0, 0.0), ("a.ts", -1.15268, -1.72902)]);
+        let scores: Vec<_> = ranked.iter().map(|r| (r.block.file.as_str(), r.final_score < 0.0)).collect();
+        assert_eq!(scores, [("b.ts", false), ("a.ts", true)]);
+        assert!(ranked[0].final_score.abs() < f64::EPSILON);
     }
 }
 

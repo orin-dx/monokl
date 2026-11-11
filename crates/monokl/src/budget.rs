@@ -59,8 +59,7 @@ pub fn count_tokens(text: &str) -> usize {
 /// code. Blocks are never split or reordered. The cut falls at the first block that would break any of the three caps,
 /// so a row larger than the whole byte budget leaves no results. `total_before` is the count the caller had before any
 /// cap, which may exceed `ranked.len()` when an earlier stage already dropped candidates; the response is truncated
-/// whenever fewer blocks are kept than that. `total_bytes` sums the kept rows' text length and `total_tokens` its
-/// [`count_tokens`] count. `diagnostics` pass through untouched.
+/// whenever fewer blocks are kept than that. `diagnostics` pass through untouched.
 ///
 /// # Examples
 ///
@@ -101,8 +100,6 @@ pub fn apply_budget(
         total_blocks_before_truncation: outcome.total_before,
         truncated: outcome.truncated(),
         results: outcome.kept,
-        total_bytes,
-        total_tokens,
         diagnostics,
     }
 }
@@ -127,9 +124,6 @@ mod tests {
                 matched_keywords: Vec::new(),
                 parent: None,
             },
-            bm25_score: 1.0,
-            coverage_boost: 0.0,
-            node_type_boost: 0.0,
             final_score: 1.0,
             rank,
             parent_context: None,
@@ -169,7 +163,6 @@ mod tests {
         assert_eq!(response.results.len(), 0);
         assert_eq!(response.total_blocks_before_truncation, 0);
         assert!(!response.truncated);
-        assert_eq!((response.total_bytes, response.total_tokens), (0, 0));
         assert_eq!(response.diagnostics.len(), 1);
         assert_eq!(response.diagnostics[0].kind, DiagnosticKind::Skipped);
         assert_eq!(response.diagnostics[0].path.as_deref().map(camino::Utf8Path::as_str), Some("a.ts"));
@@ -192,12 +185,10 @@ mod tests {
     fn exactly_max_bytes_is_kept_and_one_over_is_cut() {
         let at = apply(blocks("abcd", 3), 3, &caps(10, 1000, 12));
         assert_eq!(ranks(&at), [1, 2, 3]);
-        assert_eq!(at.total_bytes, 12);
         assert!(!at.truncated);
 
         let over = apply(blocks("abcd", 3), 3, &caps(10, 1000, 11));
         assert_eq!(ranks(&over), [1, 2]);
-        assert_eq!(over.total_bytes, 8);
         assert!(over.truncated);
     }
 
@@ -207,12 +198,10 @@ mod tests {
         assert_eq!(per_block, 3);
         let at = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3, 1000));
         assert_eq!(ranks(&at), [1, 2, 3]);
-        assert_eq!(at.total_tokens, 9);
         assert!(!at.truncated);
 
         let over = apply(blocks("fn a() {}", 3), 3, &caps(10, per_block * 3 - 1, 1000));
         assert_eq!(ranks(&over), [1, 2]);
-        assert_eq!(over.total_tokens, 6);
         assert!(over.truncated);
     }
 
@@ -241,7 +230,6 @@ mod tests {
         assert_eq!(response.results.len(), 0);
         assert!(response.truncated);
         assert_eq!(response.total_blocks_before_truncation, 2);
-        assert_eq!((response.total_bytes, response.total_tokens), (0, 0));
     }
 
     #[test]
@@ -249,11 +237,11 @@ mod tests {
         // The code is 100 bytes, the printed row 4: only the row counts.
         let input = || vec![block(&"x".repeat(100), 1), block(&"x".repeat(100), 2)];
         let response = apply_budget(input(), 2, &caps(10, 1000, 8), |_| "row1".to_owned(), Vec::new());
-        assert_eq!((ranks(&response), response.total_bytes, response.total_tokens), (vec![1, 2], 8, 4));
+        assert_eq!(ranks(&response), [1, 2]);
         assert!(!response.truncated);
 
         let response = apply_budget(input(), 2, &caps(10, 1000, 7), |_| "row1".to_owned(), Vec::new());
-        assert_eq!((ranks(&response), response.total_bytes), (vec![1], 4));
+        assert_eq!(ranks(&response), [1]);
         assert!(response.truncated);
     }
 
@@ -285,21 +273,10 @@ mod tests {
     }
 
     #[test]
-    fn totals_do_not_depend_on_how_tight_the_token_cap_is() {
-        // The reported total is the same whether or not the cap is near.
-        let input = || vec![block("fn a() {}", 1), block("let x = 1;\n", 2)];
-        let loose = apply(input(), 2, &caps(10, 1_000_000, 1_000_000));
-        let tight = apply(input(), 2, &caps(10, 7, 1_000_000));
-        assert_eq!((loose.total_tokens, tight.total_tokens), (7, 7));
-        assert_eq!((loose.total_bytes, tight.total_bytes), (20, 20));
-        assert!(!tight.truncated);
-    }
-
-    #[test]
     fn apply_budget_is_deterministic() {
         let run = || {
             let r = apply(blocks("fn a() {}", 6), 6, &caps(4, 1000, 1000));
-            (ranks(&r), r.total_bytes, r.total_tokens, r.truncated)
+            (ranks(&r), r.truncated)
         };
         assert_eq!(run(), run());
     }

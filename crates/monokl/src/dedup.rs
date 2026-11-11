@@ -35,9 +35,6 @@ use crate::types::{CodeBlock, RankedBlock};
 ///         matched_keywords: Vec::new(),
 ///         parent: None,
 ///     },
-///     bm25_score: 0.0,
-///     coverage_boost: 0.0,
-///     node_type_boost: 1.5,
 ///     final_score: 0.0,
 ///     rank,
 ///     parent_context: None,
@@ -216,9 +213,6 @@ mod tests {
                 matched_keywords: Vec::new(),
                 parent: None,
             },
-            bm25_score: 0.0,
-            coverage_boost: 0.0,
-            node_type_boost: 1.5,
             final_score: 0.0,
             rank,
             parent_context: None,
@@ -233,9 +227,6 @@ mod tests {
         first.block.symbol_signature = Some("class A".to_string());
         first.block.matched_lines = vec![11, 12];
         first.block.matched_keywords = vec!["a".to_string()];
-        first.bm25_score = 1.25;
-        first.coverage_boost = 0.5;
-        first.node_type_boost = 1.4;
         first.final_score = 2.25;
         first.parent_context =
             Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string(), line: 1 });
@@ -251,15 +242,7 @@ mod tests {
             // Two tuples: std implements PartialEq and Debug for tuples of at most 12 elements.
             (
                 (b.file.clone(), b.line_start, b.line_end, b.node_kind, b.code.clone(), b.symbol_signature.clone()),
-                (
-                    b.matched_lines.clone(),
-                    b.matched_keywords.clone(),
-                    r.bm25_score.to_bits(),
-                    r.coverage_boost.to_bits(),
-                    r.node_type_boost.to_bits(),
-                    r.final_score.to_bits(),
-                    parent,
-                ),
+                (b.matched_lines.clone(), b.matched_keywords.clone(), r.final_score.to_bits(), parent),
             )
         };
         assert_eq!(out.iter().map(|r| r.rank).collect::<Vec<_>>(), [1, 2]);

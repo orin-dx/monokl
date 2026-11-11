@@ -925,9 +925,9 @@ mod tests {
         assert_eq!(files(&result, &root), ["strong.ts", "weak.ts", "none.ts"]);
         let ranks: Vec<usize> = result.ranked.iter().map(|r| r.rank).collect();
         assert_eq!(ranks, [1, 2, 3]);
-        assert!(result.ranked[0].bm25_score > result.ranked[1].bm25_score);
-        assert!(result.ranked[1].bm25_score > result.ranked[2].bm25_score);
-        assert!(result.ranked[2].bm25_score.abs() < f64::EPSILON);
+        assert!(result.ranked[0].final_score > result.ranked[1].final_score);
+        assert!(result.ranked[1].final_score > result.ranked[2].final_score);
+        assert!(result.ranked[2].final_score.abs() < f64::EPSILON);
     }
 
     #[test]
@@ -935,7 +935,7 @@ mod tests {
         let (_dir, root) = tree(&[("a.ts", "getUserName()\n")]);
         let result = search(&whole_file_registry(), &request(&root, "regex:getUser")).unwrap();
         assert_eq!(result.ranked.len(), 1);
-        assert!(result.ranked[0].bm25_score.abs() < f64::EPSILON);
+        assert!(result.ranked[0].final_score.abs() < f64::EPSILON);
     }
 
     #[test]
