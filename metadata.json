@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f",
+  "checkpoint_id": "01M75WTV5GHGX9XVAF9S6JNJKM",
+  "strategy": "manual-commit",
+  "branch": "chore/ranking-fields-nothing-reads",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 6441,
+    "cache_read_tokens": 1609378,
+    "output_tokens": 866,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 128,
+      "cache_creation_tokens": 97954,
+      "cache_read_tokens": 6442879,
+      "output_tokens": 31230,
+      "api_call_count": 64
+    }
+  },
+  "redaction": {
+    "replacements": 102,
+    "layers": {
+      "betterleaks": 14,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
