@@ -101,7 +101,7 @@ fn an_invalid_regex_fails_with_a_structured_error() {
 #[test]
 fn a_deeply_nested_file_is_searched_like_any_other() {
     let dir = tempfile::tempdir().unwrap();
-    let nested = format!("export const needle = /'/;\nexport const x = {}1{};\n", "(".repeat(5000), ")".repeat(5000));
+    let nested = format!("export const needle = /'/;\nexport const x = {}1{};\n", "(".repeat(1000), ")".repeat(1000));
     std::fs::write(dir.path().join("nested.ts"), nested).unwrap();
     std::fs::write(dir.path().join("normal.ts"), "export function needle() {}\n").unwrap();
 
@@ -117,6 +117,63 @@ fn a_deeply_nested_file_is_searched_like_any_other() {
         lines[2].starts_with("  nested.ts,1,1,variable,null,null,\"1: export const needle = /'/;\",2,"),
         "got: {text}"
     );
+}
+
+#[test]
+fn a_file_nested_past_the_cap_is_skipped_and_reported_while_the_others_are_searched() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = format!("export const needle = {}1{};\n", "[".repeat(100_000), "]".repeat(100_000));
+    std::fs::write(dir.path().join("deep.ts"), nested).unwrap();
+    std::fs::write(dir.path().join("normal.ts"), "export function needle() {}\n").unwrap();
+
+    let output = monokl_in(dir.path(), &["search", "needle", "."]);
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.starts_with("search[1]{"), "got: {text}");
+    assert!(text.contains("  normal.ts,1,1,function,null,function needle(),null,1,"), "got: {text}");
+    assert!(
+        text.contains("1 file degraded: file nests too deeply to analyze (depth 16385, over the cap of 16384): "),
+        "got: {text}"
+    );
+    assert!(text.contains("deep.ts"), "got: {text}");
+}
+
+/// Searches `needle` over one generated file and returns the output, which must name the file and report no degradation.
+fn search_generated(name: &str, text: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(name), text).unwrap();
+    let output = monokl_in(dir.path(), &["search", "needle", "."]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("degraded"), "got: {text}");
+    assert!(text.starts_with("search[1]{"), "got: {text}");
+    text
+}
+
+#[test]
+fn a_component_with_three_thousand_sibling_elements_is_searched() {
+    let items =
+        (0..3_000).map(|i| format!("      <li key={{{i}}}>item {i} needle</li>\n")).collect::<Vec<String>>().concat();
+    let text = search_generated(
+        "List.tsx",
+        &format!("export function List() {{\n  return (\n    <ul>\n{items}    </ul>\n  );\n}}\n"),
+    );
+    assert!(text.contains("  List.tsx,1,3006,function,null,function List(),"), "got: {text}");
+}
+
+#[test]
+fn a_twelve_thousand_term_string_concatenation_is_searched() {
+    let terms = vec!["\"needle\""; 12_000].join(" + ");
+    let text = search_generated("concat.ts", &format!("export const joined = {terms};\n"));
+    assert!(text.contains("  concat.ts,1,1,variable,null,null,"), "got: {text}");
+}
+
+#[test]
+fn a_twenty_thousand_row_array_literal_is_searched() {
+    let rows = (0..20_000).map(|i| format!("  {{ id: {i}, name: 'needle {i}' }},\n")).collect::<Vec<String>>().concat();
+    let text = search_generated("rows.ts", &format!("export const rows = [\n{rows}];\n"));
+    assert!(text.contains("  rows.ts,1,20002,variable,null,null,"), "got: {text}");
 }
 
 #[test]

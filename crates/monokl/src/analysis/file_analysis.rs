@@ -26,11 +26,11 @@ pub enum Degradation {
     Panicked,
     /// The analyzer could not start the thread the parse runs on.
     ThreadUnavailable,
-    /// The syntax tree nests deeper than the analyzer can drop safely.
+    /// The source nests deeper than the analyzer parses. A scan before the parse found it, so the parser never ran.
     TooDeep {
-        /// The depth of the tree.
+        /// How deep the scan estimates the source nests, in levels of brackets or the equivalent in other nesting.
         depth: usize,
-        /// The deepest tree the analyzer keeps.
+        /// The deepest nesting the analyzer parses.
         cap: usize,
     },
 }

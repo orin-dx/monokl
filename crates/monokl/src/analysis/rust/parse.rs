@@ -2,12 +2,12 @@
 //!
 //! The parse owns its syntax tree. Everything leaving this module is owned data, so no tree node escapes.
 
-use std::thread;
-
 use camino::Utf8Path;
 use ra_ap_syntax::ast::{self, AstNode, HasAttrs, HasModuleItem, HasName, HasVisibility};
-use ra_ap_syntax::{Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange, WalkEvent};
+use ra_ap_syntax::{Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange};
 
+use crate::analysis::nesting::{self, Syntax};
+use crate::analysis::parse_stack::on_parse_stack;
 use crate::analysis::{AnalysisProfile, Degradation};
 use crate::types::{CodeBlock, ParentContext, SymbolEntry, SymbolKind, Visibility};
 
@@ -15,30 +15,21 @@ use crate::types::{CodeBlock, ParentContext, SymbolEntry, SymbolKind, Visibility
 /// that the block holding it already shows whole.
 const MIN_MEMBER_LINES: usize = 3;
 
-/// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
-/// parse starts. Each level of the parser's recursion consumes at least one byte of source, and the costliest level
-/// measured (a nested `(`, `{` or unary `-`) uses under 1.6 KB of stack optimized and under 4 KB unoptimized.
+/// The longest source that is parsed. Parse time and memory grow with the length, not with the stack, so this is chosen
+/// from measurements of a whole `monokl search` over one generated file: at 4 MB it takes 181 ms and peaks at 151 MB of
+/// resident memory, about 37 bytes per source byte.
+pub(super) const MAX_PARSED_SOURCE_LEN: usize = 4 << 20;
+
+/// The deepest nesting parsed, in levels of brackets or the equivalent in other nesting (see [`nesting::peak_cost`]).
 ///
-/// The parser's time grows with the square of the nesting depth (20,000 nested parentheses take a second), so a file of
-/// the longest parsed length made only of them takes minutes. Only a pathological file reaches that.
-///
-/// `debug_assertions` stands in for "unoptimized", which `cfg!` cannot ask for directly.
-const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
-
-/// Stack for what does not grow with the source.
-const BASE_STACK: usize = 8 << 20;
-
-/// The most stack one parse reserves. Only touched pages are committed; a parse whose stack cannot be reserved is
-/// reported as degraded.
-const MAX_STACK: usize = 4 << 30;
-
-/// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
-pub(super) const MAX_PARSED_SOURCE_LEN: usize = (MAX_STACK - BASE_STACK) / STACK_PER_SOURCE_BYTE;
-
-/// The deepest syntax tree that is kept. `ra_ap_syntax` hands a finished tree to a shared background thread to drop, one
-/// with the default 2 MiB stack, and a drop recurses once per level of the tree: about 350 bytes a level unoptimized
-/// and 130 optimized. Overflowing that stack aborts the process, so this stays at half of what fits.
-pub(super) const MAX_TREE_DEPTH: usize = if cfg!(debug_assertions) { 2_000 } else { 8_000 };
+/// `ra_ap_syntax` hands a finished tree to a shared background thread to drop, one with the default 2 MiB stack, and a
+/// drop recurses once per level of the tree. That overflows at 4,320 levels in a build without optimizations (485 bytes
+/// a level) and 26,240 optimized, and overflowing aborts the process. A level of the tree costs at least one unit, and
+/// a unit is a quarter of a level here, so the 1,024 units of the cap bound the tree. Generic arguments are the deepest
+/// per unit, at 1.3 tree levels; the tests build 32 nestings at the cap and a fuzzer builds thousands more, and none is
+/// over 2,150 levels, half of what the unoptimized drop holds. The parser's time is quadratic in
+/// the depth, so the cap also bounds a worst-case parse to milliseconds.
+pub(crate) const MAX_NESTING_LEVELS: usize = 256;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
@@ -59,8 +50,9 @@ impl Extraction {
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// Rust files have no dependency records, so the dependencies profile reads nothing. A file too long to be sure of its
-/// stack, or one whose parse or extraction panics, yields [`Extraction::degraded`] with the reason.
+/// Rust files have no dependency records, so the dependencies profile reads nothing. A file too long or nested too
+/// deeply for the parse stack and the tree drop is [`Extraction::degraded`] without being parsed, and so is one whose
+/// parse or extraction panics.
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
     if profile == AnalysisProfile::Dependencies {
         return Extraction::default();
@@ -68,31 +60,14 @@ pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -
     if source.len() > MAX_PARSED_SOURCE_LEN {
         return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
-    let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
-    guarded(stack_size, || parse_and_extract(path, source, profile))
-}
-
-/// Runs `run` on its own thread with `stack_size` bytes of stack. A panic, or a thread that cannot be started, yields
-/// [`Extraction::degraded`] with the reason.
-fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extraction {
-    thread::scope(|scope| {
-        let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(stack_size);
-        let Ok(handle) = builder.spawn_scoped(scope, run) else {
-            return Extraction::degraded(Degradation::ThreadUnavailable);
-        };
-        // The closure's output is discarded on a panic, so no torn state is observable afterwards.
-        handle.join().unwrap_or_else(|_| Extraction::degraded(Degradation::Panicked))
-    })
+    if let Err(degradation) = nesting::check(source, Syntax::Rust, MAX_NESTING_LEVELS) {
+        return Extraction::degraded(degradation);
+    }
+    on_parse_stack(|| parse_and_extract(path, source, profile)).unwrap_or_else(Extraction::degraded)
 }
 
 fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
     let parse = SourceFile::parse(source, Edition::CURRENT);
-    let depth = tree_depth(&parse.syntax_node());
-    if depth > MAX_TREE_DEPTH {
-        // The tree is leaked rather than dropped: its drop would run on the shared thread, where it would overflow.
-        std::mem::forget(parse);
-        return Extraction::degraded(Degradation::TooDeep { depth, cap: MAX_TREE_DEPTH });
-    }
     let had_parse_errors = !parse.errors().is_empty();
     // The root of a parse is always a source file, so the cast cannot fail; the let-else keeps that out of a panic.
     let Some(file) = SourceFile::cast(parse.syntax_node()) else {
@@ -104,19 +79,10 @@ fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) ->
     Extraction { had_parse_errors, ..walker.out }
 }
 
-/// The number of levels of `root`'s tree, the root being the first.
-fn tree_depth(root: &SyntaxNode) -> usize {
-    let (mut depth, mut deepest) = (0usize, 0usize);
-    for event in root.preorder() {
-        match event {
-            WalkEvent::Enter(_) => {
-                depth += 1;
-                deepest = deepest.max(depth);
-            }
-            WalkEvent::Leave(_) => depth = depth.saturating_sub(1),
-        }
-    }
-    deepest
+/// Parses and extracts on the calling thread, for a test that supplies its own stack.
+#[cfg(all(test, feature = "lang-ts"))]
+pub(super) fn parse_here(source: &str) {
+    drop(parse_and_extract(Utf8Path::new("a.rs"), source, AnalysisProfile::Full));
 }
 
 /// Maps byte offsets to 1-based line numbers.
@@ -461,23 +427,6 @@ fn implies_test(predicate: &ast::CfgPredicate) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_panic_becomes_the_degraded_extraction() {
-        let extraction = guarded(BASE_STACK, || panic!("boom"));
-        assert!(extraction.had_parse_errors);
-        assert_eq!(extraction.degradation, Some(Degradation::Panicked));
-        assert!(extraction.symbols.is_empty());
-        assert!(extraction.blocks.is_empty());
-        assert!(extraction.test_blocks.is_empty());
-    }
-
-    #[test]
-    fn a_run_that_does_not_panic_is_returned_untouched() {
-        let extraction = guarded(BASE_STACK, || Extraction { had_parse_errors: true, ..Extraction::default() });
-        assert!(extraction.had_parse_errors);
-        assert_eq!(extraction.degradation, None);
-    }
 
     #[test]
     fn line_numbers_are_one_based_and_count_preceding_newlines() {

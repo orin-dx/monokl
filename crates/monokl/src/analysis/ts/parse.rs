@@ -2,8 +2,6 @@
 //!
 //! The parse owns its arena. Everything leaving this module is owned data, so no arena-borrowed node escapes.
 
-use std::thread;
-
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -18,6 +16,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
 
+use crate::analysis::nesting::{self, Syntax};
+use crate::analysis::parse_stack::on_parse_stack;
 use crate::analysis::{AnalysisProfile, Degradation};
 use crate::types::{
     BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord, JsxAttribute,
@@ -28,24 +28,18 @@ use crate::types::{
 /// the block holding it already shows whole.
 const MIN_MEMBER_LINES: usize = 3;
 
-/// Stack reserved per byte of source. A stack overflow aborts the process, so the stack must be big enough before the
-/// parse starts. Each level of the parser's or the extractor's recursion consumes at least one byte, and the costliest
-/// level measured, a `[` in a type, uses 1.7 KB of stack optimized and 4.6 KB unoptimized: this is over twice that.
+/// The longest source that is parsed. Parse time and memory grow with the length, not with the stack, so this is chosen
+/// from measurements of a whole `monokl search` over one generated file: at 3.4 MB it takes 40 ms and peaks at 94 MB of
+/// resident memory, about 28 bytes per source byte. A file twice that long is generated data, not code a search is for,
+/// and what it would cost is no longer small.
+pub(super) const MAX_PARSED_SOURCE_LEN: usize = 4 << 20;
+
+/// The deepest nesting parsed, in levels of brackets or the equivalent in other nesting (see [`nesting::peak_cost`]).
 ///
-/// `debug_assertions` stands in for "unoptimized", which `cfg!` cannot ask for directly. A release profile with debug
-/// assertions pays the larger budget and the smaller length cap for nothing; a profile that disables optimizations
-/// without them gets the smaller budget and could overflow. Change the constant if the workspace adds such a profile.
-const STACK_PER_SOURCE_BYTE: usize = if cfg!(debug_assertions) { 12 << 10 } else { 4 << 10 };
-
-/// Stack for what does not grow with the source.
-const BASE_STACK: usize = 8 << 20;
-
-/// The most stack one parse reserves. Only touched pages are committed, but a hostile file of the longest parsed length
-/// can touch about half of it (460 MiB measured), so this also bounds a parse's memory.
-const MAX_STACK: usize = 1 << 30;
-
-/// The longest source that is parsed; a longer one could need more than [`MAX_STACK`].
-pub(super) const MAX_PARSED_SOURCE_LEN: usize = (MAX_STACK - BASE_STACK) / STACK_PER_SOURCE_BYTE;
+/// 65,536 units (four per level) is what the fixed parse stack holds with a factor of two and a half to spare in the
+/// worst case measured; see [`PARSE_STACK_BYTES`](crate::analysis::parse_stack::PARSE_STACK_BYTES). Ordinary code nests
+/// a few dozen levels. A file over this is reported as too deep instead of parsed.
+pub(super) const MAX_NESTING_LEVELS: usize = 16_384;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
@@ -69,27 +63,24 @@ impl Extraction {
 
 /// Extracts what `profile` asks for from `source`.
 ///
-/// A file too long to be sure of its stack, or one whose parse or extraction panics, yields [`Extraction::degraded`]
-/// with the reason.
+/// A file too long or nested too deeply for the parse stack is [`Extraction::degraded`] without being parsed, and so is
+/// one whose parse or extraction panics. The scan that rejects the nesting is linear in the length, and the parse runs
+/// on a stack of one fixed size, so what a file can cost is bounded by these two limits and not by its contents.
 pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
     if source.len() > MAX_PARSED_SOURCE_LEN {
         return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
-    let stack_size = BASE_STACK + source.len() * STACK_PER_SOURCE_BYTE;
-    guarded(stack_size, || parse_and_extract(path, source, profile))
+    let syntax = Syntax::TypeScript { jsx: source_type_for(path).is_jsx() };
+    if let Err(degradation) = nesting::check(source, syntax, MAX_NESTING_LEVELS) {
+        return Extraction::degraded(degradation);
+    }
+    on_parse_stack(|| parse_and_extract(path, source, profile)).unwrap_or_else(Extraction::degraded)
 }
 
-/// Runs `run` on its own thread with `stack_size` bytes of stack. A panic, or a thread that cannot be started, yields
-/// [`Extraction::degraded`] with the reason.
-fn guarded(stack_size: usize, run: impl FnOnce() -> Extraction + Send) -> Extraction {
-    thread::scope(|scope| {
-        let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(stack_size);
-        let Ok(handle) = builder.spawn_scoped(scope, run) else {
-            return Extraction::degraded(Degradation::ThreadUnavailable);
-        };
-        // The closure's output is discarded on a panic, so no torn state is observable afterwards.
-        handle.join().unwrap_or_else(|_| Extraction::degraded(Degradation::Panicked))
-    })
+/// Parses and extracts on the calling thread, for a test that supplies its own stack.
+#[cfg(all(test, feature = "lang-rust"))]
+pub(super) fn parse_here(path: &Utf8Path, source: &str) {
+    drop(parse_and_extract(path, source, AnalysisProfile::Full));
 }
 
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
@@ -703,47 +694,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[test]
-    fn a_panic_becomes_the_degraded_extraction() {
-        let extraction = guarded(BASE_STACK, || panic!("boom"));
-        assert!(extraction.had_parse_errors);
-        assert_eq!(extraction.degradation, Some(Degradation::Panicked));
-        assert!(extraction.symbols.is_empty());
-        assert!(extraction.dependencies.is_empty());
-        assert!(extraction.exports.is_empty());
-        assert!(extraction.blocks.is_empty());
-        assert!(extraction.jsx_elements.is_empty());
-        assert!(extraction.type_only_imports.is_empty());
-    }
-
-    #[test]
-    fn a_run_that_does_not_panic_is_returned_untouched() {
-        let extraction =
-            guarded(BASE_STACK, || Extraction { type_only_imports: vec!["x".to_owned()], ..Extraction::default() });
-        assert!(!extraction.had_parse_errors);
-        assert_eq!(extraction.degradation, None);
-        assert_eq!(extraction.type_only_imports, ["x"]);
-    }
-
-    /// Recurses `depth` times with a 1 KiB frame and returns how many frames it went through.
-    fn recurse(depth: usize) -> usize {
-        let frame = std::hint::black_box([1u8; 1024]);
-        if depth == 0 {
-            return 0;
-        }
-        recurse(depth - 1) + usize::from(std::hint::black_box(frame)[0])
-    }
-
-    #[test]
-    fn the_run_gets_the_stack_it_asks_for() {
-        // 32 MiB of frames would overflow both the 8 MiB main thread and the 2 MiB a test thread gets.
-        let extraction = guarded(256 << 20, || Extraction {
-            type_only_imports: vec![recurse(32 << 10).to_string()],
-            ..Extraction::default()
-        });
-        assert_eq!(extraction.type_only_imports, ["32768"]);
-    }
 
     #[test]
     fn a_parenthesized_default_export_is_exported_without_a_symbol_or_a_function_block() {
