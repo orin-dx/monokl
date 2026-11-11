@@ -156,7 +156,11 @@ fn crashing(inputs: &[(Kind, String)]) -> Vec<usize> {
 }
 
 fn crashing_on(inputs: &[(Kind, String)], stack: usize) -> Vec<usize> {
-    let dir = std::env::temp_dir().join(format!("monokl-soundness-{}", std::process::id()));
+    // Under `cargo test` every test shares one process, so the process id alone would let concurrent calls overwrite
+    // each other's batch file and remove each other's directory.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("monokl-soundness-{}-{call}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut crashed = Vec::new();
     let mut start = 0;
