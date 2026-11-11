@@ -77,6 +77,12 @@ pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -
     on_parse_stack(|| parse_and_extract(path, source, profile)).unwrap_or_else(Extraction::degraded)
 }
 
+/// Parses and extracts on the calling thread, for a test that supplies its own stack.
+#[cfg(all(test, feature = "lang-rust"))]
+pub(super) fn parse_here(path: &Utf8Path, source: &str) {
+    drop(parse_and_extract(path, source, AnalysisProfile::Full));
+}
+
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
 /// elsewhere.
 fn source_type_for(path: &Utf8Path) -> SourceType {

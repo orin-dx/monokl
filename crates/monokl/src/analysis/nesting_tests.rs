@@ -53,6 +53,9 @@ fn rust(source: &str) -> usize {
 #[case::a_line_separator_ends_a_line_comment("// x\u{2028}(((", 13)]
 #[case::a_slash_after_a_contextual_word_may_divide("of / (((( / x", 20)]
 #[case::a_slash_after_await_may_start_a_regex_that_hides_closers("await /)))))/ (((", 20)]
+#[case::for_await_keeps_the_loop_head("for await (const x of xs)\nfor await (const x of xs)\nx", 13)]
+#[case::an_unterminated_template_is_scanned_as_code("`(((", 13)]
+#[case::an_unterminated_block_comment_is_scanned_as_code("/* (((", 14)]
 fn typescript_costs(#[case] source: &str, #[case] expected: usize) {
     assert_eq!(ts(source), expected);
 }
@@ -64,6 +67,8 @@ fn typescript_costs(#[case] source: &str, #[case] expected: usize) {
 #[case::closers_in_a_string_pop_nothing("((( ')' ')' ')' ", 12, 12)]
 #[case::a_regex_with_braces_is_code("x = /{{{{/", 18, 2)]
 #[case::template_text_with_braces_is_code("x = `{{{{`", 18, 2)]
+#[case::a_semicolon_in_jsx_text_keeps_what_the_elements_charged("x = <a>;<a>;<a>;x</a>;</a>;</a>;", 15, 6)]
+#[case::a_closer_in_jsx_text_pops_nothing("f(<a>)</a>)", 16, 9)]
 #[case::a_closing_brace_does_not_end_the_statement_in_jsx("function a(){}function b(){}", 11, 7)]
 fn jsx_text_can_hide_what_a_string_or_comment_cannot(#[case] source: &str, #[case] jsx: usize, #[case] plain: usize) {
     assert_eq!((tsx(source), ts(source)), (jsx, plain));
@@ -84,7 +89,7 @@ fn jsx_text_can_hide_what_a_string_or_comment_cannot(#[case] source: &str, #[cas
 #[case::a_byte_char("b'(' x", 2)]
 #[case::a_block_comment_nests("/* /* ( */ ( */ x", 1)]
 #[case::a_line_comment_hides_brackets("// ((((\nx", 1)]
-#[case::an_unterminated_string_hides_the_rest("\"(((", 0)]
+#[case::an_unterminated_string_is_scanned_as_code("\"(((", 13)]
 #[case::a_closing_brace_ends_the_statement("fn a() {} fn b() {}", 7)]
 #[case::match_arms("match x { A => { 1 } B => { 2 } }", 14)]
 fn rust_costs(#[case] source: &str, #[case] expected: usize) {
@@ -128,6 +133,37 @@ fn matched_depth(source: &str) -> usize {
         }
     }
     deepest
+}
+
+/// Prints how long the scan takes on 4 MiB of ordinary and of hostile source. Run with `--release --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement"]
+fn scan_time_on_four_mebibytes() {
+    use std::io::Write;
+
+    let size = 4 << 20;
+    let ts_entry =
+        "export const entry000000 = { id: 0, name: 'entry', tags: ['a', 'b'], nested: { x: 1, y: [1, 2, 3] } };\n";
+    let rust_fn = "pub fn handler(request: &Request) -> Result<Response, Error> {\n    let body = request.body();\n    Ok(Response::new(body, 1))\n}\n\n";
+    let jsx_item = "      <li key={0}>item 0 needle</li>\n";
+    let inputs: Vec<(&str, Syntax, String)> = vec![
+        ("generated TypeScript", Syntax::TypeScript { jsx: false }, ts_entry.repeat(size / ts_entry.len())),
+        ("generated TSX", Syntax::TypeScript { jsx: true }, jsx_item.repeat(size / jsx_item.len())),
+        ("generated Rust", Syntax::Rust, rust_fn.repeat(size / rust_fn.len())),
+        ("slashes after words", Syntax::TypeScript { jsx: false }, "of / [".repeat(size / 6)),
+        ("slashes after braces", Syntax::TypeScript { jsx: true }, "{} /".repeat(size / 4)),
+        ("unterminated block comments", Syntax::TypeScript { jsx: false }, "/*".repeat(size / 2)),
+        ("unterminated templates", Syntax::TypeScript { jsx: false }, "` ${".repeat(size / 4)),
+        ("unmatched closers", Syntax::TypeScript { jsx: true }, "}".repeat(size)),
+        ("JSX tags", Syntax::TypeScript { jsx: true }, "<a>;".repeat(size / 4)),
+        ("raw string openers", Syntax::Rust, "r#\"".repeat(size / 3)),
+        ("quotes", Syntax::Rust, "\"".repeat(size)),
+    ];
+    for (name, syntax, source) in inputs {
+        let started = std::time::Instant::now();
+        let cost = peak_cost(&source, syntax, 65_536);
+        writeln!(std::io::stderr(), "{name}: {} bytes, cost {cost}, {:?}", source.len(), started.elapsed()).ok();
+    }
 }
 
 proptest! {

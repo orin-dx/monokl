@@ -549,6 +549,9 @@ fn shapes() -> Vec<(&'static str, Box<dyn Fn(usize) -> String>)> {
         shape("casts", |d| expr(0, "", "1", "").replace("1;", &format!("a{};", " as u8".repeat(d)))),
         shape("generic types", |d| format!("pub type T = {}u8{};\n", "A<".repeat(d), ">".repeat(d))),
         shape("generic arguments with commas", |d| format!("pub type T = {}u8{};\n", "A<u8,".repeat(d), ">".repeat(d))),
+        shape("dyn generic arguments", |d| format!("pub type T = {}u8{};\n", "Box<dyn ".repeat(d), ">".repeat(d))),
+        shape("closure parameter lists", |d| expr(d, "|a, b| ", "1", "")),
+        shape("trait methods", |d| format!("{}{}\n", "trait T { fn b() { ".repeat(d), "} }".repeat(d))),
         shape("reference types", |d| format!("pub type T = {}u8;\n", "&".repeat(d))),
         shape("tuple types", |d| format!("pub type T = {}u8{};\n", "(".repeat(d), ",)".repeat(d))),
         shape("function types", |d| format!("pub type T = {}u8;\n", "fn() -> ".repeat(d))),
@@ -656,7 +659,7 @@ fn every_shape_one_past_the_cap_is_degraded_without_being_parsed() {
 #[case::tuples("(1, ", ")")]
 #[case::calls("f(", ")")]
 fn expressions_nested_hundreds_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
-    let analysis = analyze_source(&expr(300, open, "1", close));
+    let analysis = analyze_source(&expr(150, open, "1", close));
     assert_eq!(analysis.degradation, None);
     assert_eq!(signatures(&analysis), ["pub fn deep()", "pub fn after()"]);
 }

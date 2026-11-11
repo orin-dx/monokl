@@ -25,10 +25,11 @@ pub(super) const MAX_PARSED_SOURCE_LEN: usize = 4 << 20;
 /// `ra_ap_syntax` hands a finished tree to a shared background thread to drop, one with the default 2 MiB stack, and a
 /// drop recurses once per level of the tree. That overflows at 4,320 levels in a build without optimizations (485 bytes
 /// a level) and 26,240 optimized, and overflowing aborts the process. A level of the tree costs at least one unit, and
-/// a unit is a quarter of a level here, so the 2,048 units of the cap bound the tree: the tests build 32 nestings at
-/// the cap and none is over 2,150 levels, half of what the unoptimized drop holds. The parser's time is quadratic in
+/// a unit is a quarter of a level here, so the 1,024 units of the cap bound the tree. Generic arguments are the deepest
+/// per unit, at 1.3 tree levels; the tests build 32 nestings at the cap and a fuzzer builds thousands more, and none is
+/// over 2,150 levels, half of what the unoptimized drop holds. The parser's time is quadratic in
 /// the depth, so the cap also bounds a worst-case parse to milliseconds.
-pub(super) const MAX_NESTING_LEVELS: usize = 512;
+pub(crate) const MAX_NESTING_LEVELS: usize = 256;
 
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
@@ -76,6 +77,12 @@ fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) ->
     let file_is_test = file.attrs().any(|attr| attr.excl_token().is_some() && is_test_attr(&attr));
     walker.items(file.items(), None, file_is_test);
     Extraction { had_parse_errors, ..walker.out }
+}
+
+/// Parses and extracts on the calling thread, for a test that supplies its own stack.
+#[cfg(all(test, feature = "lang-ts"))]
+pub(super) fn parse_here(source: &str) {
+    drop(parse_and_extract(Utf8Path::new("a.rs"), source, AnalysisProfile::Full));
 }
 
 /// Maps byte offsets to 1-based line numbers.

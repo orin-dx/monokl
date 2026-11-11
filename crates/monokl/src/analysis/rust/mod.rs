@@ -99,5 +99,14 @@ impl LanguageAnalyzer for RustAnalyzer {
     }
 }
 
+#[cfg(all(test, feature = "lang-ts"))]
+pub(crate) use parse::MAX_NESTING_LEVELS;
+
+/// Parses and extracts `source` on the calling thread, skipping the cap, for a soundness test that sets its own stack.
+#[cfg(all(test, feature = "lang-ts"))]
+pub(crate) fn parse_on_stack(source: &str) {
+    parse::parse_here(source);
+}
+
 #[cfg(test)]
 mod tests;

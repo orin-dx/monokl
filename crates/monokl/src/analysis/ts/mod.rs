@@ -108,6 +108,12 @@ impl LanguageAnalyzer for TsAnalyzer {
     }
 }
 
+/// Parses and extracts `source` on the calling thread, skipping the cap, for a soundness test that sets its own stack.
+#[cfg(all(test, feature = "lang-rust"))]
+pub(crate) fn parse_on_stack(path: &Utf8Path, source: &str) {
+    parse::parse_here(path, source);
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;

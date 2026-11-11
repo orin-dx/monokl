@@ -13,7 +13,7 @@ use super::file_analysis::Degradation;
 ///
 /// Measured in a build without optimizations, which uses the most: the deepest recursion per nesting unit (see
 /// `nesting::FRAME_COST`) is 1.7 KB, from a `new` or a generic argument list in TypeScript, and 1.9 KB from a unary
-/// minus in Rust. The languages' caps are 65,536 and 2,048 units. Every one of the nestings the tests build at the cap,
+/// minus in Rust. The languages' caps are 65,536 and 1,024 units. Every one of the nestings the tests build at the cap,
 /// 38 in TypeScript and 32 in Rust, parses in 96 MiB and the worst overflows 64 MiB, so 256 MiB is at least 2.6 times
 /// what the worst accepted file needs. Only the pages a parse touches are committed.
 pub(crate) const PARSE_STACK_BYTES: usize = 256 << 20;
