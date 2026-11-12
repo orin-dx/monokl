@@ -26,6 +26,30 @@ pub enum SymbolKind {
     Other,
 }
 
+impl SymbolKind {
+    /// The `camelCase` name agent output prints for this kind.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Method => "method",
+            Self::Constructor => "constructor",
+            Self::Class => "class",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Interface => "interface",
+            Self::TypeAlias => "typeAlias",
+            Self::Property => "property",
+            Self::Field => "field",
+            Self::Variable => "variable",
+            Self::Module => "module",
+            Self::Impl => "impl",
+            Self::Macro => "macro",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// The visibility of a symbol.
 ///
 /// There is no `Super` variant: Rust's `pub(super)` and `pub(in ...)` map to [`Visibility::Module`].
@@ -188,6 +212,19 @@ pub enum DiagnosticKind {
     /// The file held bytes that are not UTF-8, so it was searched and extracted with each invalid sequence replaced by
     /// U+FFFD.
     LossyRead,
+}
+
+impl DiagnosticKind {
+    /// What happened to a file this kind of diagnostic names, as a verb phrase for output.
+    #[must_use]
+    pub fn verb(self) -> &'static str {
+        match self {
+            Self::Degraded => "degraded",
+            Self::Skipped => "skipped",
+            Self::Warning => "warned",
+            Self::LossyRead => "read lossily",
+        }
+    }
 }
 
 /// A non-fatal problem reported alongside a command's results.
