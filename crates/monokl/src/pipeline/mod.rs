@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::time::{Duration, Instant};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use grep_matcher::Matcher;
@@ -19,7 +20,10 @@ use crate::error::{MonoklError, Result};
 use crate::file_io::FileIoError;
 use crate::query::{Modifier, ParsedTerm, QueryPlan, parse};
 use crate::rank::{rank_blocks, tokenize_block};
-use crate::text_search::{DEFAULT_MAX_FILES, TextSearchOptions, TextSearchResult, search_files_where};
+use crate::text_search::{
+    DEFAULT_MAX_FILES, Incomplete, MAX_FILE_BYTES, MAX_LINE_BYTES, TextSearchOptions, TextSearchResult,
+    search_files_where,
+};
 use crate::tokens::tokenize;
 use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, Language, LineHit, RankedBlock};
 
@@ -109,18 +113,48 @@ impl SearchResult {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn search(registry: &AnalyzerRegistry, request: &SearchRequest<'_>) -> Result<SearchResult> {
-    search_with_ceiling(registry, request, DEFAULT_MAX_FILES)
+    search_with_timeout(registry, request, None)
+}
+
+/// [`search`] that stops after `timeout` and returns what it has, or runs to completion when `timeout` is `None`.
+///
+/// The clock starts when the call does. It is checked between files while text search runs and between batches of files
+/// while the matching files are analyzed. Both stages always finish their first batch, so even a zero timeout returns
+/// the best blocks of the first files reached. A search that stopped early carries one `Warning` diagnostic with no path
+/// saying how many of how many files were reached, so a partial result is never mistaken for a complete one. Partial
+/// results are the only output that can differ between runs: which files are reached depends on speed. A `-term`
+/// exclusion applies only to files text search reached.
+///
+/// Bounds: text search reads at most [`MAX_FILE_BYTES`] per file, and analysis reads no file larger than that either;
+/// an oversize file is not read and is reported as one grouped `Skipped` diagnostic. The walk that lists the files is
+/// not interrupted, and a batch in progress finishes.
+///
+/// # Errors
+///
+/// Those of [`search`].
+pub fn search_with_timeout(
+    registry: &AnalyzerRegistry,
+    request: &SearchRequest<'_>,
+    timeout: Option<Duration>,
+) -> Result<SearchResult> {
+    search_with_ceiling(registry, request, DEFAULT_MAX_FILES, timeout)
 }
 
 /// A block annotated with its matches, and its tokens.
 type Candidate = (CodeBlock, Vec<String>);
 
-/// [`search`] with the file ceiling as a parameter, so tests can reach it without 100,000 files.
+/// How many files each thread analyzes per batch. The deadline is checked between batches, and a batch ends in a wait
+/// for its slowest file.
+const ANALYSIS_FILES_PER_THREAD: usize = 8;
+
+/// [`search_with_timeout`] with the file ceiling as a parameter, so tests can reach it without 100,000 files.
 fn search_with_ceiling(
     registry: &AnalyzerRegistry,
     request: &SearchRequest<'_>,
     max_files: usize,
+    timeout: Option<Duration>,
 ) -> Result<SearchResult> {
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let SearchRequest { root, query, exact, allow_tests, respect_ignore_files, language } = *request;
     if let Some(language) = language {
         match analyzer_language(language) {
@@ -161,10 +195,11 @@ fn search_with_ceiling(
     let found = search_files_where(
         &root,
         &patterns,
-        &TextSearchOptions { allow_tests, respect_ignore_files, max_files },
+        &TextSearchOptions { allow_tests, respect_ignore_files, max_files, deadline, ..TextSearchOptions::default() },
         &wanted,
     )?;
     let mut diagnostics = text_search_diagnostics(&found);
+    let mut partial = found.incomplete.map(|reached| incomplete_diagnostic(timeout, "searching", reached, ""));
 
     // The ceiling must not apply here: an excluded file past it would wrongly survive.
     let excluded_files = if found.hits.is_empty() || plan.excluded.is_empty() {
@@ -174,14 +209,30 @@ fn search_with_ceiling(
         let excluded = search_files_where(
             &root,
             &excluded_patterns,
-            &TextSearchOptions { allow_tests, respect_ignore_files, max_files: usize::MAX },
+            &TextSearchOptions {
+                allow_tests,
+                respect_ignore_files,
+                max_files: usize::MAX,
+                deadline,
+                ..TextSearchOptions::default()
+            },
             &wanted,
         )?;
-        // The walk is the same, so only a file unreadable for the excluded patterns alone is new.
+        // The walk is the same, so only a file unreadable or oversize for the excluded patterns alone is new.
         for path in &excluded.unreadable {
             if !found.unreadable.contains(path) {
                 diagnostics.push(unreadable_diagnostic(path));
             }
+        }
+        for path in &excluded.oversize {
+            if !found.oversize.contains(path) {
+                diagnostics.push(oversize_diagnostic(path, MAX_FILE_BYTES));
+            }
+        }
+        if partial.is_none() {
+            partial = excluded
+                .incomplete
+                .map(|reached| incomplete_diagnostic(timeout, "searching", reached, " for excluded terms"));
         }
         excluded.hits.into_keys().collect()
     };
@@ -192,22 +243,40 @@ fn search_with_ceiling(
         .filter(|(path, _)| !excluded_files.contains(*path))
         .filter(|(_, hits)| plan.required.iter().all(|&i| hits.iter().any(|hit| matches_text(&matchers[i], &hit.text))))
         .collect();
-    // Files are analyzed on separate threads, but each result is kept in path order, so the output never depends on
-    // which thread finished first.
-    let ctx = FileContext { registry, plan: &plan, matchers: &matchers, language, allow_tests };
-    let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = survivors
-        .into_par_iter()
-        .map(|(path, hits)| {
-            let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
-            retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
-            (blocks, file_diagnostics)
-        })
-        .collect();
+    // Files are analyzed on separate threads a batch at a time, but each result is kept in path order, so the output
+    // never depends on which thread finished first. The deadline is checked between batches, never before the first.
+    let ctx = FileContext {
+        registry,
+        plan: &plan,
+        matchers: &matchers,
+        language,
+        allow_tests,
+        max_file_bytes: MAX_FILE_BYTES,
+    };
+    let batch_size = rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD;
     let mut candidates: Vec<Candidate> = Vec::new();
-    for (blocks, file_diagnostics) in per_file {
-        candidates.extend(blocks);
-        diagnostics.extend(file_diagnostics);
+    let mut analyzed = 0_usize;
+    for batch in survivors.chunks(batch_size.max(1)) {
+        if analyzed > 0 && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let reached = Incomplete { reached: analyzed as u64, total: survivors.len() as u64 };
+            partial = partial.or_else(|| Some(incomplete_diagnostic(timeout, "analyzing", reached, "")));
+            break;
+        }
+        let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = batch
+            .par_iter()
+            .map(|&(path, hits)| {
+                let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
+                retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
+                (blocks, file_diagnostics)
+            })
+            .collect();
+        for (blocks, file_diagnostics) in per_file {
+            candidates.extend(blocks);
+            diagnostics.extend(file_diagnostics);
+        }
+        analyzed += batch.len();
     }
+    diagnostics.extend(partial);
 
     let bm25_terms = bm25_terms(&plan);
     let df = document_frequencies(&candidates, &bm25_terms);
@@ -264,9 +333,46 @@ fn unreadable_diagnostic(path: &Utf8Path) -> Diagnostic {
     skipped(Some(path), "file could not be read")
 }
 
+/// `4 MiB` for a whole number of mebibytes, bytes otherwise.
+fn size_label(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if bytes.is_multiple_of(MIB) { format!("{} MiB", bytes / MIB) } else { format!("{bytes} bytes") }
+}
+
+/// One per oversize file; the output layer groups them into one line naming the limit.
+fn oversize_diagnostic(path: &Utf8Path, max_file_bytes: u64) -> Diagnostic {
+    skipped(Some(path), format!("over {}", size_label(max_file_bytes)))
+}
+
+/// The one diagnostic of a search that hit its deadline: `doing` is what the stage was doing to its files, and `what`
+/// qualifies it.
+fn incomplete_diagnostic(timeout: Option<Duration>, doing: &str, reached: Incomplete, what: &str) -> Diagnostic {
+    let limit = timeout.map_or_else(String::new, |timeout| format!("{} s ", timeout.as_secs_f64()));
+    Diagnostic {
+        kind: DiagnosticKind::Warning,
+        path: None,
+        message: format!(
+            "partial result: {limit}timeout expired after {doing} {} of {} files{what}",
+            reached.reached, reached.total
+        ),
+    }
+}
+
 /// Turns what text search could not read into diagnostics: one per unreadable path, then one per non-zero count.
 fn text_search_diagnostics(found: &TextSearchResult) -> Vec<Diagnostic> {
     let mut diagnostics: Vec<Diagnostic> = found.unreadable.iter().map(|path| unreadable_diagnostic(path)).collect();
+    diagnostics.extend(found.oversize.iter().map(|path| oversize_diagnostic(path, MAX_FILE_BYTES)));
+    if found.truncated_lines > 0 {
+        let n = found.truncated_lines;
+        let (lines, were) = if n == 1 { ("line", "was") } else { ("lines", "were") };
+        diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::Warning,
+            path: None,
+            message: format!(
+                "{n} matching {lines} {were} cut to {MAX_LINE_BYTES} bytes; a term that matches only past the cut is not seen"
+            ),
+        });
+    }
     if found.non_utf8_paths > 0 {
         diagnostics.push(skipped(None, format!("{} files skipped: path is not valid UTF-8", found.non_utf8_paths)));
     }
@@ -286,6 +392,8 @@ struct FileContext<'a> {
     matchers: &'a [RegexMatcher],
     language: Option<Language>,
     allow_tests: bool,
+    /// The largest source file that is read.
+    max_file_bytes: u64,
 }
 
 /// One analyzer can own several languages (TypeScript's owns JavaScript too), so the `--language` filter goes by
@@ -316,6 +424,11 @@ fn retrieve_blocks(
 ) {
     let Some(analyzer) = ctx.registry.analyzer_for(path) else { return };
     if ctx.language.is_some_and(|language| !has_language_extension(language, path)) {
+        return;
+    }
+    // Text search checked the size too, but the file can have grown since, and a caller can hand this any path.
+    if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > ctx.max_file_bytes) {
+        diagnostics.push(oversize_diagnostic(path, ctx.max_file_bytes));
         return;
     }
     let Source { text, lossy } = match read(path) {
@@ -748,7 +861,7 @@ mod tests {
         // With a ceiling of 2 on the excluded pass, `a.ts` and `b.ts` would use it up and `c.ts` would survive.
         let (_dir, root) =
             tree(&[("a.ts", "gamma\n"), ("b.ts", "gamma\n"), ("c.ts", "alpha gamma\n"), ("d.ts", "alpha\n")]);
-        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha -gamma"), 2).unwrap();
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha -gamma"), 2, None).unwrap();
         assert_eq!(files(&result, &root), ["d.ts"]);
         assert!(!result.ceiling_hit);
     }
@@ -756,7 +869,7 @@ mod tests {
     #[test]
     fn file_ceiling_and_total_pass_through_from_text_search() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.ts", "alpha\n"), ("c.ts", "alpha\n")]);
-        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha"), 2).unwrap();
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha"), 2, None).unwrap();
         assert_eq!(files(&result, &root), ["a.ts", "b.ts"]);
         assert_eq!(result.files_total, 3);
         assert!(result.ceiling_hit);
@@ -771,7 +884,7 @@ mod tests {
             ("d.ts", "alpha\n"),
             ("e.ts", "alpha\n"),
         ]);
-        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha"), 2).unwrap();
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha"), 2, None).unwrap();
         assert_eq!(files(&result, &root), ["d.ts", "e.ts"]);
         assert_eq!(result.files_total, 2);
         assert!(!result.ceiling_hit);
@@ -786,7 +899,7 @@ mod tests {
         assert_eq!(files(&result, &root), ["b.js"]);
         assert_eq!(result.files_total, 1);
         // The ceiling counts only the files the filter keeps.
-        let result = search_with_ceiling(&whole_file_registry(), &request, 1).unwrap();
+        let result = search_with_ceiling(&whole_file_registry(), &request, 1, None).unwrap();
         assert_eq!((result.files_total, result.ceiling_hit), (1, false));
     }
 
@@ -1163,8 +1276,14 @@ class Foo {
         let registry = whole_file_registry();
         let plan = QueryPlan::from_terms(parse("alpha").unwrap());
         let matchers = vec![compile("alpha").unwrap()];
-        let ctx =
-            FileContext { registry: &registry, plan: &plan, matchers: &matchers, language: None, allow_tests: false };
+        let ctx = FileContext {
+            registry: &registry,
+            plan: &plan,
+            matchers: &matchers,
+            language: None,
+            allow_tests: false,
+            max_file_bytes: MAX_FILE_BYTES,
+        };
         let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
         let failing = |_: &Utf8Path| -> io::Result<Source> { Err(io::Error::from(io::ErrorKind::PermissionDenied)) };
@@ -1275,7 +1394,7 @@ class Foo {
     #[test]
     fn an_excluded_term_drops_its_files_when_the_ceiling_is_below_the_file_count() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.ts", "alpha gamma\n"), ("c.ts", "alpha\n")]);
-        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha -gamma"), 1).unwrap();
+        let result = search_with_ceiling(&whole_file_registry(), &request(&root, "alpha -gamma"), 1, None).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
         assert_eq!(result.files_total, 3);
         assert!(result.ceiling_hit);
@@ -1351,6 +1470,151 @@ class Foo {
         let mut found = files(&result, &root);
         found.sort();
         assert_eq!(found, ["ignored.ts", "src/auth.ts", "src/session.ts", "tests/auth.test.ts"]);
+    }
+
+    /// Runs `f` on a pool of two threads, so a text search batch is 32 files and an analysis batch is 16.
+    fn on_two_threads<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+        rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap().install(f)
+    }
+
+    fn numbered_files(count: usize) -> Vec<(String, &'static str)> {
+        (0..count).map(|i| (format!("f{i:03}.ts"), "alpha\n")).collect()
+    }
+
+    fn tree_of(files: &[(String, &'static str)]) -> (tempfile::TempDir, Utf8PathBuf) {
+        let borrowed: Vec<(&str, &str)> = files.iter().map(|(name, text)| (name.as_str(), *text)).collect();
+        tree(&borrowed)
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_skipped_with_one_grouped_line_and_everything_else_is_found() {
+        let (_dir, root) = tree(&[("small.ts", "alpha\n")]);
+        let mut big = b"alpha\n".to_vec();
+        big.resize(usize::try_from(MAX_FILE_BYTES).unwrap() + 1, b'x');
+        std::fs::write(root.join("big.ts"), &big).unwrap();
+        let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
+        assert_eq!(files(&result, &root), ["small.ts"]);
+        assert_eq!(result.files_total, 1);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Skipped, Some(root.join("big.ts").as_str()), "over 4 MiB")]
+        );
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_not_read_by_block_retrieval_and_one_at_the_limit_is() {
+        let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
+        let path = root.join("a.ts");
+        let registry = whole_file_registry();
+        let plan = QueryPlan::from_terms(parse("alpha").unwrap());
+        let matchers = vec![compile("alpha").unwrap()];
+        let ctx = |max_file_bytes| FileContext {
+            registry: &registry,
+            plan: &plan,
+            matchers: &matchers,
+            language: None,
+            allow_tests: false,
+            max_file_bytes,
+        };
+        let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
+        let never_read = |_: &Utf8Path| -> io::Result<Source> { panic!("an oversize file must not be read") };
+
+        let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
+        retrieve_blocks(&ctx(5), &path, &hits, &never_read, &mut out, &mut diagnostics);
+        assert!(out.is_empty());
+        assert_eq!(summary(&diagnostics), [(DiagnosticKind::Skipped, Some(path.as_str()), "over 5 bytes")]);
+
+        let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
+        retrieve_blocks(&ctx(6), &path, &hits, &read_source, &mut out, &mut diagnostics);
+        assert_eq!(out.len(), 1);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn cut_hit_lines_are_counted_in_one_warning_and_normal_lines_report_nothing() {
+        let long = format!("alpha {}\n", "x".repeat(5000));
+        let (_dir, root) = tree(&[("long.ts", &long), ("normal.ts", "alpha\n")]);
+        let result = search(&whole_file_registry(), &request(&root, "alpha")).unwrap();
+        assert_eq!(files(&result, &root).len(), 2);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(
+                DiagnosticKind::Warning,
+                None,
+                "1 matching line was cut to 4096 bytes; a term that matches only past the cut is not seen"
+            )]
+        );
+    }
+
+    #[test]
+    fn size_labels_use_whole_mebibytes_or_bytes() {
+        assert_eq!(
+            (size_label(4 * 1024 * 1024), size_label(1024 * 1024 + 1), size_label(5)),
+            ("4 MiB".to_owned(), "1048577 bytes".to_owned(), "5 bytes".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_expired_timeout_stops_text_search_after_its_first_batch_and_says_so() {
+        let (_dir, root) = tree_of(&numbered_files(100));
+        let result = on_two_threads(|| {
+            search_with_ceiling(
+                &whole_file_registry(),
+                &request(&root, "alpha"),
+                DEFAULT_MAX_FILES,
+                Some(Duration::ZERO),
+            )
+        })
+        .unwrap();
+        // 32 files were searched; the first analysis batch of 16 of them was analyzed.
+        assert_eq!(result.files_total, 32);
+        assert_eq!(result.ranked.len(), 16);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Warning, None, "partial result: 0 s timeout expired after searching 32 of 100 files")]
+        );
+    }
+
+    #[test]
+    fn an_expired_timeout_stops_analysis_between_batches_and_says_so() {
+        let (_dir, root) = tree_of(&numbered_files(20));
+        let result = on_two_threads(|| {
+            search_with_ceiling(
+                &whole_file_registry(),
+                &request(&root, "alpha"),
+                DEFAULT_MAX_FILES,
+                Some(Duration::ZERO),
+            )
+        })
+        .unwrap();
+        assert_eq!(result.files_total, 20);
+        assert_eq!(result.ranked.len(), 16);
+        assert_eq!(
+            summary(&result.diagnostics),
+            [(DiagnosticKind::Warning, None, "partial result: 0 s timeout expired after analyzing 16 of 20 files")]
+        );
+    }
+
+    #[test]
+    fn a_timeout_that_is_not_reached_changes_nothing() {
+        let (_dir, root) = tree_of(&numbered_files(100));
+        let (timed, untimed) = on_two_threads(|| {
+            let timed =
+                search_with_timeout(&whole_file_registry(), &request(&root, "alpha"), Some(Duration::from_secs(3600)));
+            (timed.unwrap(), search(&whole_file_registry(), &request(&root, "alpha")).unwrap())
+        });
+        assert_eq!(files(&timed, &root), files(&untimed, &root));
+        assert_eq!(files(&timed, &root).len(), 100);
+        assert!(timed.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn a_fractional_timeout_is_named_as_given() {
+        let reached = Incomplete { reached: 1, total: 2 };
+        assert_eq!(
+            incomplete_diagnostic(Some(Duration::from_millis(1500)), "searching", reached, "").message,
+            "partial result: 1.5 s timeout expired after searching 1 of 2 files"
+        );
     }
 }
 
