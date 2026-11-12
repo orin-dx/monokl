@@ -23,7 +23,7 @@ Grep finds text. Embeddings find _vibes_. monokl parses your code with a compile
 - **Your project's rules apply.** Files that `.gitignore` or `.ignore` exclude, hidden files, test files, Rust items under `#[cfg(test)]` or `#[test]` and binary files are skipped by default, and each has a flag to include it.
 - **Output sized for an agent's context.** Results are a compact table with paths relative to where you ran it, capped by default at the limits in [Options](#options). When something is cut, the output says how many more matched and suggests raising the cap or narrowing the query.
 - **Predictable.** The same search on the same files gives the same output, in the same order, every time. A bad pattern fails the whole search with a clear error instead of being quietly dropped.
-- **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is skipped instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
+- **Hard to break.** A file with syntax errors is searched for whatever parsed. A pathologically deep file is reported as degraded instead of crashing the search. An unreadable directory doesn't stop the rest of the search.
 
 ## Install
 
@@ -48,8 +48,8 @@ Search a directory (the default is the current one):
 ```
 $ monokl search "format price" src/ --max-results 3
 search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,2.950647
-  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };",2,2.07557
+  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,5.901294
+  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };",2,4.151139
   src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,1.345138
 totalCount: 10
 help[1]: showing 3 of 10; raise the cap or refine the query with +term or -term
@@ -59,7 +59,7 @@ Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is 
 
 A method, a constructor, or a class property holding an arrow function or a function expression gets a row of its own when it spans three lines or more and its class is declared at the top level of the file or exported. So does a method, getter, setter, or a property holding an arrow function or a function expression, of an object literal that is assigned to a top-level `const`, `let` or `var`, or is the `export default` value, also through `as`, `satisfies` or parentheses. Its `parent` is `class Foo` for a class member and `variable api` for the members of `const api = { ... }` (`other default` for `export default { ... }`), and `nodeKind` is `method`, `constructor` or `property`; `parent` is `null` on every other row. A line that matched inside a member is shown on the member's row only, and the class's or object's row appears when it has a match outside its members, such as its name. Shorter members, members of an anonymous class, of an interface, of an object literal anywhere else (inside a function, a call or `module.exports = { ... }`) and functions nested inside a member are still reached through the row that holds them.
 
-The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows up to three, then counts the rest (`...and 2 more matching lines`). A block's first line is left out when the signature already shows all of it, so the snippet is `null` when that line is the only match. A first line that says more than the signature stays in, such as a decorator or the start of an arrow function's body. To read the whole block, open the file at `lineStart`–`lineEnd`. Skipped or unreadable files, files read lossily because they are not valid UTF-8, syntax errors and an empty query are reported as `help` lines under the table.
+The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows up to three, then counts the rest (`...and 2 more matching lines`). A block's first line is left out when the signature already shows all of it, so the snippet is `null` when that line is the only match. A first line that says more than the signature stays in, such as a decorator or the start of an arrow function's body. To read the whole block, open the file at `lineStart`–`lineEnd`. Under the table, `help` lines report files that were skipped, degraded (syntax errors, too deep to parse) or read lossily (invalid UTF-8), a partial result, hit lines that were cut, and a query with no positive terms.
 
 ## Writing a query
 
@@ -78,8 +78,8 @@ Matching ignores case. A `-term` removes whole files, not single results. If one
 ```
 $ monokl search "+cart -Button" .
 search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n14: const addItem = (item: CartItem): ValidationResult => {",1,0.453107
-  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,0.30166
+  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n14: const addItem = (item: CartItem): ValidationResult => {",1,1.359319
+  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,0.904979
 ```
 
 ## Options
@@ -88,15 +88,18 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | --- | --- | --- |
 | `--max-results N` | 50 | Most results to print |
 | `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
+| `--exact` | off | Treat the whole query as one literal term, operators and quotes included |
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust files named `tests.rs`, `test.rs`, `*_tests.rs` or `*_test.rs` (the usual out-of-line `mod tests;`) and Rust items under `#[cfg(test)]` or `#[test]` |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
-| `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted but matches nothing yet) |
+| `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted, searches nothing and prints a `not supported` help line) |
 | `--timeout SECONDS` | 30 | Stop after this many seconds and print what was found so far. `0` means no limit. Fractions are accepted (`0.5`) |
 
 ## Limits
 
 - **Time.** When `--timeout` expires the output says `partial result: 30 s timeout expired after analyzing 120 of 900 files` (or `searching`, when the text search itself ran out of time). The exit code is still 0. A partial result is the only output that can differ between runs, because which files are reached depends on how fast the machine is. At least one batch of files is always processed, so a very small timeout still returns something. A `-term` exclusion applies only to the files that were reached. The directory walk that lists the files is not interrupted.
 - **File size.** A file over 4 MiB is not read. The output says `2 files skipped: over 4 MiB: a.ts, b.ts`. Source that large is generated or bundled; reading it costs about 2.5 times its size in memory.
+- **Nesting.** A file nested deeper than 16,384 levels (TypeScript, JavaScript) or 256 (Rust) is not parsed. The output reports it as degraded.
+- **Files.** At most 100,000 matching files are examined. The output says how many matched and suggests narrowing the query or path.
 - **Line length.** Only the first 4,096 bytes of a matching line are kept for matching terms against the line. A longer line still matches as a whole, and the output counts the lines it cut. A required term (`+term`) that appears only past that point in a line is not seen.
 
 ## Errors and exit codes

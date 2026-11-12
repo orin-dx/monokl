@@ -45,7 +45,7 @@ impl AnalyzerRegistry {
 
 ## Diagnostic-signal gaps — must be resolved, not ported as-is
 
-Open questions for spec@1 (edge-case audit Part 3, findings #6/#10/#14), not resolved designs.
+Open questions for spec@1 (edge-case audit Part 3, findings #6/#10/#14), not resolved designs. Planned: `AnalyzerCapabilities`, `pick_main_struct` and `add_missing_analyzer_diagnostic` are not in the code.
 
 1. **#6 — macro-generated code and inactive `#[cfg(...)]` branches are invisible, zero
    capability/precision signal**, unlike every other Rust precision limitation in the spec. The

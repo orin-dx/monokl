@@ -4,7 +4,7 @@ Source: `docs/spec/01-core-architecture.md` §12 (`analysis/content_hash.rs`), �
 §16 (`analysis/persist.rs`); `docs/spec/03-multi-language-platform.md` §2a (`analysis/cache_tiers.rs`,
 the 0.5.0+ extraction of the lookup logic shared across analyzers). Cross-referenced against
 `docs/spec/07-edge-cases-and-failure-modes.md` Part 1 #4/#5/#18, Part 3 #1.
-No cache code exists yet: `crates/monokl` has no cache or persist module. Re-point at source once it does; sync via `canon/drift`.
+**Planned, not built.** `crates/monokl` has no cache or persist module, no `blake3` or `dashmap` dependency, and `monokl search` keeps no state between runs ([ADR 0004](../adr/0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md)). Everything below is the design to weigh against that ADR, not a description of the code. Re-point at source once it exists.
 
 ## Two-Layer Storage
 
