@@ -54,7 +54,6 @@ strip = false
 [workspace.dependencies]
 # Errors
 thiserror = "2"
-miette = { version = "7.6", features = ["fancy"] }
 
 # Serde
 serde = "1.0"

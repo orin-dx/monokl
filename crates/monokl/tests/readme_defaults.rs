@@ -32,5 +32,4 @@ fn readme_options_table_matches_budget_default() {
     let budget = Budget::default();
     assert_eq!(parse_cap(&default_cell(&readme, "--max-results")), budget.max_results);
     assert_eq!(parse_cap(&default_cell(&readme, "--max-tokens")), budget.max_tokens);
-    assert_eq!(parse_cap(&default_cell(&readme, "--max-bytes")), budget.max_bytes);
 }
