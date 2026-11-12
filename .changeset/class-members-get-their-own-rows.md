@@ -10,3 +10,5 @@ monokl: minor
 - **Deduplication.** A member is no longer dropped because the class around it overlaps it; two members, or two blocks without a parent, still dedupe by overlap.
 - **Empty results.** The note now says that top-level declarations and class members are searched.
 - **Library.** `CodeBlock` has a new `parent` field, and `RankedBlock::parent_context` is filled from it.
+
+Action: a script that reads `monokl search` rows by position must account for the new `parent` column after `nodeKind`.
