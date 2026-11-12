@@ -9,7 +9,7 @@ use crate::analysis::nesting;
 use crate::analysis::parse_stack::on_parse_stack;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::pipeline::{SearchRequest, SearchResult, search};
-use crate::types::{CodeBlock, DiagnosticKind, Language, SymbolKind};
+use crate::types::{CodeBlock, DiagnosticKind, SymbolKind};
 
 fn analyze_source(text: &str) -> Arc<FileAnalysis> {
     RustAnalyzer::new().analyze(Utf8Path::new("src/lib.rs"), text.to_owned()).unwrap()
@@ -49,7 +49,7 @@ fn supports_follows_the_extension(#[case] path: &str, #[case] expected: bool) {
 
 #[test]
 fn it_reports_its_language() {
-    assert_eq!(RustAnalyzer::new().languages(), [LanguageId::Rust]);
+    assert_eq!(RustAnalyzer::new().languages(), [Language::Rust]);
 }
 
 const KINDS: &str = "\

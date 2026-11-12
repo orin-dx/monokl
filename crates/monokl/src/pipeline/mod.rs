@@ -13,7 +13,7 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::LanguageId;
+use crate::analysis::Language;
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::dedup::dedup_blocks;
 use crate::error::{MonoklError, Result};
@@ -25,7 +25,7 @@ use crate::text_search::{
     search_files_where,
 };
 use crate::tokens::tokenize;
-use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, Language, LineHit, RankedBlock};
+use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, LineHit, RankedBlock};
 
 /// What to search for and where.
 #[derive(Clone, Copy, Debug)]
@@ -156,18 +156,10 @@ fn search_with_ceiling(
 ) -> Result<SearchResult> {
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let SearchRequest { root, query, exact, allow_tests, respect_ignore_files, language } = *request;
-    if let Some(language) = language {
-        match analyzer_language(language) {
-            None => {
-                return Ok(SearchResult::skipped(format!(
-                    "language {language:?} not supported in v1; only TypeScript, JavaScript and Rust"
-                )));
-            }
-            Some(id) if !registry.handles(id) => {
-                return Ok(SearchResult::skipped(format!("language {language:?} has no analyzer in this build")));
-            }
-            Some(_) => {}
-        }
+    if let Some(language) = language
+        && !registry.handles(language)
+    {
+        return Ok(SearchResult::skipped(format!("language {language:?} has no analyzer in this build")));
     }
 
     let terms = if exact {
@@ -286,15 +278,6 @@ fn search_with_ceiling(
     Ok(SearchResult { ranked, files_total: found.files_total, ceiling_hit: found.ceiling_hit, diagnostics })
 }
 
-/// The analyzer language that serves `language` in v1, or `None` when no analyzer path exists for it.
-fn analyzer_language(language: Language) -> Option<LanguageId> {
-    match language {
-        Language::TypeScript | Language::JavaScript => Some(LanguageId::TypeScript),
-        Language::Rust => Some(LanguageId::Rust),
-        Language::Python => None,
-    }
-}
-
 /// Compiles one term the way text search does, case-insensitively, so a term can never match differently here.
 fn compile(pattern: &str) -> Result<RegexMatcher> {
     Ok(RegexMatcherBuilder::new().case_insensitive(true).build(pattern)?)
@@ -396,21 +379,10 @@ struct FileContext<'a> {
     max_file_bytes: u64,
 }
 
-/// One analyzer can own several languages (TypeScript's owns JavaScript too), so the `--language` filter goes by
-/// extension.
-fn has_language_extension(language: Language, path: &Utf8Path) -> bool {
-    match language {
-        Language::TypeScript => matches!(path.extension(), Some("ts" | "tsx" | "mts" | "cts")),
-        Language::JavaScript => matches!(path.extension(), Some("js" | "jsx" | "mjs" | "cjs")),
-        Language::Rust => path.extension() == Some("rs"),
-        Language::Python => false,
-    }
-}
-
 /// Whether a file can yield blocks: an analyzer owns it and, when `language` is set, its extension belongs to it. Text
 /// search asks this before opening a file; [`retrieve_blocks`] keeps the same two checks for a file it is handed.
 fn searchable(registry: &AnalyzerRegistry, language: Option<Language>, path: &Utf8Path) -> bool {
-    registry.analyzer_for(path).is_some() && language.is_none_or(|language| has_language_extension(language, path))
+    registry.analyzer_for(path).is_some() && language.is_none_or(|language| Language::of(path) == Some(language))
 }
 
 /// Analyzes one surviving file and pushes the annotated blocks that contain a matching line onto `out`.
@@ -423,7 +395,7 @@ fn retrieve_blocks(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(analyzer) = ctx.registry.analyzer_for(path) else { return };
-    if ctx.language.is_some_and(|language| !has_language_extension(language, path)) {
+    if ctx.language.is_some_and(|language| Language::of(path) != Some(language)) {
         return;
     }
     // Text search checked the size too, but the file can have grown since, and a caller can hand this any path.
@@ -577,7 +549,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::analysis::LanguageId;
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
     use crate::analysis::lang::LanguageAnalyzer;
     use crate::types::{ParentContext, SymbolKind};
@@ -591,8 +562,8 @@ mod tests {
     }
 
     impl LanguageAnalyzer for Canned {
-        fn languages(&self) -> &[LanguageId] {
-            &[LanguageId::TypeScript]
+        fn languages(&self) -> &[Language] {
+            &[Language::TypeScript, Language::JavaScript]
         }
         fn supports(&self, path: &Utf8Path) -> bool {
             matches!(path.extension(), Some("ts" | "js"))
@@ -659,23 +630,6 @@ mod tests {
     }
 
     #[test]
-    fn language_without_an_analyzer_path_is_skipped_with_a_diagnostic() {
-        let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
-        let request = SearchRequest { language: Some(Language::Python), ..request(&root, "alpha") };
-        let result = search(&whole_file_registry(), &request).unwrap();
-        assert!(result.ranked.is_empty());
-        assert_eq!(result.files_total, 0);
-        assert_eq!(
-            summary(&result.diagnostics),
-            [(
-                DiagnosticKind::Skipped,
-                None,
-                "language Python not supported in v1; only TypeScript, JavaScript and Rust"
-            )]
-        );
-    }
-
-    #[test]
     fn language_with_no_registered_analyzer_is_skipped_with_a_diagnostic() {
         let (_dir, root) = tree(&[("a.ts", "alpha\n"), ("b.rs", "alpha\n")]);
         let request = SearchRequest { language: Some(Language::Rust), ..request(&root, "alpha") };
@@ -703,8 +657,8 @@ mod tests {
     fn language_filter_drops_files_owned_by_another_language() {
         struct Rusty;
         impl LanguageAnalyzer for Rusty {
-            fn languages(&self) -> &[LanguageId] {
-                &[LanguageId::Rust]
+            fn languages(&self) -> &[Language] {
+                &[Language::Rust]
             }
             fn supports(&self, path: &Utf8Path) -> bool {
                 path.extension() == Some("rs")

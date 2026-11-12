@@ -290,14 +290,12 @@ fn a_query_with_no_positive_terms_says_so() {
 }
 
 #[test]
-fn an_unsupported_language_says_so() {
+fn an_unsupported_language_is_a_usage_error_listing_the_supported_ones() {
     let output = monokl(&["search", "format", ".", "--language", "python"]);
-    assert!(output.status.success());
-    assert_eq!(
-        stdout(&output),
-        "search: []\nhelp[2]: \"language Python not supported in v1; only TypeScript, JavaScript and Rust\",\
-         \"only declarations and the members of their classes, objects, impls and traits are searched; for text in tests, calls or config try rg\"\n"
-    );
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).contains("invalid value 'python' for '--language <LANGUAGE>'"), "got: {}", stderr(&output));
+    assert!(stderr(&output).contains("[possible values: typescript, javascript, rust]"), "got: {}", stderr(&output));
 }
 
 #[test]
