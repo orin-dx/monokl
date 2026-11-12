@@ -92,7 +92,7 @@ fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
         Value::from(block.block.line_start),
         Value::from(block.block.line_end),
         Value::from(block.block.node_kind.as_str()),
-        parent_cell(block.parent_context.as_ref()),
+        parent_cell(block.block.parent.as_ref()),
         opt_cell(block.block.symbol_signature.as_deref()),
         opt_cell(snippet(&block.block).as_deref()),
         Value::from(block.rank),
@@ -178,7 +178,6 @@ mod snippet_tests {
             // What the analyzer would give: the first line without its opening brace.
             symbol_signature: Some(code.lines().next().unwrap_or("").trim_end_matches(['{', ' ']).to_owned()),
             matched_lines: matched_lines.to_vec(),
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }
@@ -315,12 +314,10 @@ mod projection_tests {
                     code: "fn foo(x) {\n    let y = foo(x);\n    unrelated();\n    y\n}".to_string(),
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
                     matched_lines: vec![5, 6],
-                    matched_keywords: vec!["foo".to_string()],
                     parent: None,
                 },
                 final_score: 0.92,
                 rank: 2,
-                parent_context: None,
             }],
             total_blocks_before_truncation: 1,
             truncated: false,
@@ -340,7 +337,7 @@ mod projection_tests {
         use crate::types::{CodeBlock, ParentContext, RankedBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
 
-        let ranked = |line_start, node_kind, parent_context, rank| RankedBlock {
+        let ranked = |line_start, node_kind, parent, rank| RankedBlock {
             block: CodeBlock {
                 file: Utf8PathBuf::from("src/a.ts"),
                 line_start,
@@ -349,14 +346,12 @@ mod projection_tests {
                 code: String::new(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
-                parent: None,
+                parent,
             },
             final_score: 0.5,
             rank,
-            parent_context,
         };
-        let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned(), line: 1 };
+        let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned() };
         let response = SearchResponse {
             results: vec![
                 ranked(3, SymbolKind::Method, Some(class("Foo")), 1),
@@ -469,12 +464,10 @@ mod projection_tests {
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
                     matched_lines: Vec::new(),
-                    matched_keywords: Vec::new(),
                     parent: None,
                 },
                 final_score: 0.5,
                 rank,
-                parent_context: None,
             })
             .collect();
         let budget = Budget { max_results: 2, ..Budget::default() };
@@ -506,12 +499,10 @@ mod projection_tests {
                     code: String::new(),
                     symbol_signature: None,
                     matched_lines: Vec::new(),
-                    matched_keywords: Vec::new(),
                     parent: None,
                 },
                 final_score,
                 rank,
-                parent_context: None,
             }
         }
 

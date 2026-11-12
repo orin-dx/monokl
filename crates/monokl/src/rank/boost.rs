@@ -27,7 +27,6 @@ use crate::types::{CodeBlock, SymbolKind};
 ///     code: String::new(),
 ///     symbol_signature: Some("function mergeConfig(a: Config, b: Config)".to_string()),
 ///     matched_lines: Vec::new(),
-///     matched_keywords: Vec::new(),
 ///     parent: None,
 /// };
 /// assert_eq!(name_match_boost(&block, &["merge", "config", "deep", "copy"]), 2.0);
@@ -118,7 +117,6 @@ mod tests {
             code: String::new(),
             symbol_signature: None,
             matched_lines,
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }

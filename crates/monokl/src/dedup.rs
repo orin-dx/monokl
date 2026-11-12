@@ -32,12 +32,10 @@ use crate::types::{CodeBlock, RankedBlock};
 ///         code: String::new(),
 ///         symbol_signature: None,
 ///         matched_lines: Vec::new(),
-///         matched_keywords: Vec::new(),
 ///         parent: None,
 ///     },
 ///     final_score: 0.0,
 ///     rank,
-///     parent_context: None,
 /// };
 /// let kept = dedup_blocks(vec![ranked(1, 10, 1), ranked(5, 10, 2), ranked(20, 30, 3)]);
 /// let kept: Vec<_> = kept.iter().map(|r| (r.block.line_start, r.rank)).collect();
@@ -210,12 +208,10 @@ mod tests {
                 code: String::new(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             },
             final_score: 0.0,
             rank,
-            parent_context: None,
         }
     }
 
@@ -226,10 +222,8 @@ mod tests {
         first.block.code = "class A {}".to_string();
         first.block.symbol_signature = Some("class A".to_string());
         first.block.matched_lines = vec![11, 12];
-        first.block.matched_keywords = vec!["a".to_string()];
         first.final_score = 2.25;
-        first.parent_context =
-            Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string(), line: 1 });
+        first.block.parent = Some(crate::types::ParentContext { kind: SymbolKind::Module, name: "m".to_string() });
         let duplicate = ranked("a.ts", 12, 18, 8);
         let mut other = ranked("b.ts", 1, 3, 9);
         other.block.code = "fn b() {}".to_string();
@@ -238,11 +232,11 @@ mod tests {
         let out = dedup_blocks(vec![first.clone(), duplicate, other.clone()]);
         let fields = |r: &RankedBlock| {
             let b = &r.block;
-            let parent = r.parent_context.as_ref().map(|p| (p.kind, p.name.clone(), p.line));
+            let parent = b.parent.as_ref().map(|p| (p.kind, p.name.clone()));
             // Two tuples: std implements PartialEq and Debug for tuples of at most 12 elements.
             (
                 (b.file.clone(), b.line_start, b.line_end, b.node_kind, b.code.clone(), b.symbol_signature.clone()),
-                (b.matched_lines.clone(), b.matched_keywords.clone(), r.final_score.to_bits(), parent),
+                (b.matched_lines.clone(), r.final_score.to_bits(), parent),
             )
         };
         assert_eq!(out.iter().map(|r| r.rank).collect::<Vec<_>>(), [1, 2]);
@@ -345,7 +339,7 @@ mod tests {
 
     fn member_of_class(file: &str, line_start: usize, line_end: usize, rank: usize) -> RankedBlock {
         let mut member = ranked(file, line_start, line_end, rank);
-        member.block.parent = Some(ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 });
+        member.block.parent = Some(ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() });
         member
     }
 

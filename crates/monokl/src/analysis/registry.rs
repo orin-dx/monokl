@@ -60,7 +60,7 @@ impl AnalyzerRegistry {
 mod tests {
     use super::*;
     use crate::analysis::file_analysis::FileAnalysis;
-    use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageId};
+    use crate::analysis::lang::LanguageId;
     use crate::error::{MonoklError, Result};
 
     /// Claims every path ending in `extension` and reports its one language for it.
@@ -76,25 +76,7 @@ mod tests {
         fn supports(&self, path: &Utf8Path) -> bool {
             path.extension() == Some(self.extension)
         }
-        fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-            self.supports(path).then_some(self.languages[0])
-        }
-        fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-            AnalyzerCapabilities {
-                blocks: true,
-                classified_imports: false,
-                resolved_import_graph: CapabilityPrecision::Unsupported,
-                refs: CapabilityPrecision::Unsupported,
-                definition: CapabilityPrecision::Unsupported,
-                inspect_detail: CapabilityPrecision::Unsupported,
-            }
-        }
-        fn analyze_with_profile(
-            &self,
-            _path: &Utf8Path,
-            _source: Box<dyn FnOnce() -> Result<String>>,
-            _profile: AnalysisProfile,
-        ) -> Result<Arc<FileAnalysis>> {
+        fn analyze(&self, _path: &Utf8Path, _source: String) -> Result<Arc<FileAnalysis>> {
             Err(MonoklError::TooManyTerms { count: 0, limit: 0 })
         }
     }
@@ -108,7 +90,7 @@ mod tests {
         let registry = AnalyzerRegistry::new(vec![
             analyzer("ts", LanguageId::TypeScript),
             analyzer("rs", LanguageId::Rust),
-            analyzer("ts", LanguageId::Go),
+            analyzer("ts", LanguageId::Rust),
         ]);
         let owner = registry.analyzer_for(Utf8Path::new("src/a.ts")).unwrap();
         assert_eq!(owner.languages(), [LanguageId::TypeScript]);

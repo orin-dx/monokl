@@ -17,12 +17,10 @@ fn block_strategy() -> impl Strategy<Value = RankedBlock> {
                 code: String::new(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             },
             final_score: 0.0,
             rank,
-            parent_context: None,
         },
     )
 }
@@ -76,12 +74,10 @@ fn ranked(line_start: usize, line_end: usize, parent: Option<ParentContext>) -> 
             code: String::new(),
             symbol_signature: None,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent,
         },
         final_score: 0.0,
         rank: 0,
-        parent_context: None,
     }
 }
 
@@ -89,7 +85,7 @@ fn ranked(line_start: usize, line_end: usize, parent: Option<ParentContext>) -> 
 fn class_with_members() -> impl Strategy<Value = Vec<RankedBlock>> {
     prop::collection::vec((0usize..3, 3usize..8), 0..6)
         .prop_map(|layout| {
-            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
             let mut members = Vec::new();
             let mut line = 2;
             for (gap, len) in layout {
@@ -117,7 +113,7 @@ proptest! {
 
 /// Blocks that may be members, many per file, with nested and partly overlapping ranges of widely varying length.
 fn dense_block_strategy() -> impl Strategy<Value = RankedBlock> {
-    let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+    let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
     (
         prop::sample::select(vec!["a.ts", "b.ts"]),
         0usize..60,

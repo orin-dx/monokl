@@ -2,6 +2,8 @@
 
 **Status:** Accepted **Date:** 2026-10-23
 
+**Update:** `monokl::digest` was deleted unread: no code consumed `Digest`, `FileAnalysis.digest` or the `blake3` and `serde` dependencies it needed. The decision below applies to whoever adds `Digest` back (cache or session work), not to the deleted module.
+
 ## Context
 
 `08-library-session-api.md` §8.4 replaces bare-hex `ContentHash` with an algorithm-prefixed `Digest` and places it in `wisp-contracts`, an MIT crate in the Wisp repository. That crate does not exist: it is not on crates.io and the Wisp repository has no such crate. FileAnalysis, the cache and disk persistence all key on the digest, and §14 says nothing should be built on bare hex.

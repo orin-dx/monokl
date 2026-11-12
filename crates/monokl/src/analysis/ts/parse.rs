@@ -5,24 +5,17 @@
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPattern, Class, ClassElement, Declaration, ExportAllDeclaration, ExportDeclaration,
-    ExportDefaultDeclaration, ExportDefaultDeclarationKind, ExportFromDeclaration, ExportNamedDeclaration, Expression,
-    Function, ImportDeclaration, ImportDeclarationSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXElement, JSXElementName, JSXMemberExpression, JSXMemberExpressionObject, MethodDefinition, MethodDefinitionKind,
-    ModuleExportName, ObjectExpression, ObjectProperty, ObjectPropertyKind, Program, PropertyDefinition, PropertyKind,
-    Statement, VariableDeclaration,
+    BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, Function,
+    MethodDefinition, MethodDefinitionKind, ObjectExpression, ObjectProperty, ObjectPropertyKind, PropertyDefinition,
+    PropertyKind, Statement,
 };
-use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
 
+use crate::analysis::Degradation;
 use crate::analysis::nesting::{self, Syntax};
 use crate::analysis::parse_stack::on_parse_stack;
-use crate::analysis::{AnalysisProfile, Degradation};
-use crate::types::{
-    BindingKind, CodeBlock, DependencyBinding, DependencyRecord, DependencyTarget, ExportRecord, JsxAttribute,
-    JsxElementEntry, ParentContext, SymbolEntry, SymbolKind,
-};
+use crate::types::{CodeBlock, ParentContext, SymbolKind};
 
 /// The fewest lines a class or object member needs to get a block of its own. A shorter one is a stub or accessor that
 /// the block holding it already shows whole.
@@ -44,12 +37,7 @@ pub(super) const MAX_NESTING_LEVELS: usize = 16_384;
 /// Everything extracted from one file, before it is wrapped in a `FileAnalysis`.
 #[derive(Debug, Default)]
 pub(super) struct Extraction {
-    pub(super) symbols: Vec<SymbolEntry>,
-    pub(super) dependencies: Vec<DependencyRecord>,
-    pub(super) exports: Vec<ExportRecord>,
     pub(super) blocks: Vec<CodeBlock>,
-    pub(super) jsx_elements: Vec<JsxElementEntry>,
-    pub(super) type_only_imports: Vec<String>,
     pub(super) had_parse_errors: bool,
     pub(super) degradation: Option<Degradation>,
 }
@@ -61,12 +49,12 @@ impl Extraction {
     }
 }
 
-/// Extracts what `profile` asks for from `source`.
+/// Extracts the blocks of `source`.
 ///
 /// A file too long or nested too deeply for the parse stack is [`Extraction::degraded`] without being parsed, and so is
 /// one whose parse or extraction panics. The scan that rejects the nesting is linear in the length, and the parse runs
 /// on a stack of one fixed size, so what a file can cost is bounded by these two limits and not by its contents.
-pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
+pub(super) fn extract(path: &Utf8Path, source: &str) -> Extraction {
     if source.len() > MAX_PARSED_SOURCE_LEN {
         return Extraction::degraded(Degradation::TooLarge { bytes: source.len(), cap: MAX_PARSED_SOURCE_LEN });
     }
@@ -74,13 +62,13 @@ pub(super) fn extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -
     if let Err(degradation) = nesting::check(source, syntax, MAX_NESTING_LEVELS) {
         return Extraction::degraded(degradation);
     }
-    on_parse_stack(|| parse_and_extract(path, source, profile)).unwrap_or_else(Extraction::degraded)
+    on_parse_stack(|| parse_and_extract(path, source)).unwrap_or_else(Extraction::degraded)
 }
 
 /// Parses and extracts on the calling thread, for a test that supplies its own stack.
 #[cfg(all(test, feature = "lang-rust"))]
 pub(super) fn parse_here(path: &Utf8Path, source: &str) {
-    drop(parse_and_extract(path, source, AnalysisProfile::Full));
+    drop(parse_and_extract(path, source));
 }
 
 /// JavaScript files may hold JSX whatever their extension; TypeScript files only in `.tsx`, since `<T>x` is a cast
@@ -90,7 +78,7 @@ fn source_type_for(path: &Utf8Path) -> SourceType {
     if source_type.is_javascript() { source_type.with_jsx(true) } else { source_type }
 }
 
-fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) -> Extraction {
+fn parse_and_extract(path: &Utf8Path, source: &str) -> Extraction {
     let allocator = Allocator::default();
     // Parentheses carry no meaning here and a `ParenthesizedExpression` node would only add a level to every walk.
     let options = ParseOptions { preserve_parens: false, ..ParseOptions::default() };
@@ -98,12 +86,9 @@ fn parse_and_extract(path: &Utf8Path, source: &str, profile: AnalysisProfile) ->
     // The recovered program is still used below, so record the diagnostics rather than discarding the parse.
     let had_parse_errors = parsed.fatal_error || !parsed.diagnostics.is_empty();
 
-    let mut extractor = Extractor { path, source, profile, lines: LineIndex::new(source), out: Extraction::default() };
+    let mut extractor = Extractor { path, source, lines: LineIndex::new(source), out: Extraction::default() };
     for statement in &parsed.program.body {
         extractor.statement(statement);
-    }
-    if profile == AnalysisProfile::Full {
-        extractor.jsx(&parsed.program);
     }
     Extraction { had_parse_errors, ..extractor.out }
 }
@@ -126,83 +111,18 @@ impl LineIndex {
 struct Extractor<'s> {
     path: &'s Utf8Path,
     source: &'s str,
-    profile: AnalysisProfile,
     lines: LineIndex,
     out: Extraction,
 }
 
 impl Extractor<'_> {
-    fn structural(&self) -> bool {
-        self.profile != AnalysisProfile::Dependencies
-    }
-
     fn text(&self, span: Span) -> &str {
         self.source.get(span.start as usize..span.end as usize).unwrap_or_default()
     }
 
     fn statement(&mut self, statement: &Statement<'_>) {
-        match statement {
-            Statement::ImportDeclaration(decl) => self.import(decl),
-            Statement::ExportDeclaration(decl) => self.export_declaration(decl),
-            Statement::ExportNamedDeclaration(decl) => self.export_named(decl),
-            Statement::ExportFromDeclaration(decl) => self.export_from(decl),
-            Statement::ExportDefaultDeclaration(decl) => self.export_default(decl),
-            Statement::ExportAllDeclaration(decl) => self.export_all(decl),
-            Statement::FunctionDeclaration(function) => {
-                self.function(function);
-            }
-            Statement::ClassDeclaration(class) => {
-                self.class(class);
-            }
-            Statement::TSInterfaceDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::Interface, decl.span, None);
-            }
-            Statement::TSTypeAliasDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::TypeAlias, decl.span, None);
-            }
-            Statement::TSEnumDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::Enum, decl.span, None);
-            }
-            Statement::VariableDeclaration(decl) => {
-                self.variables(decl);
-            }
-            _ => {}
-        }
-        if self.profile == AnalysisProfile::Full {
-            self.block(statement);
-            self.member_blocks(statement);
-        }
-    }
-
-    fn symbol(&mut self, name: &str, kind: SymbolKind, span: Span, signature: Option<String>) {
-        if !self.structural() {
-            return;
-        }
-        self.out.symbols.push(SymbolEntry {
-            name: name.to_owned(),
-            kind,
-            line: self.lines.line(span.start),
-            signature,
-            owner: None,
-            trait_impl: None,
-            visibility: None,
-            kind_detail: None,
-        });
-    }
-
-    fn export(&mut self, name: String, span: Span, re_export: bool) {
-        if !self.structural() {
-            return;
-        }
-        self.out.exports.push(ExportRecord { name, line: self.lines.line(span.start), re_export });
-    }
-
-    /// Records a function symbol and returns its name; anonymous functions have none.
-    fn function(&mut self, function: &Function<'_>) -> Option<String> {
-        let name = function.id.as_ref()?.name.as_str();
-        let signature = self.function_signature(function);
-        self.symbol(name, SymbolKind::Function, function.span, Some(signature));
-        Some(name.to_owned())
+        self.block(statement);
+        self.member_blocks(statement);
     }
 
     /// The function's text up to its body, on one line: `function f(a: A): B`.
@@ -214,153 +134,6 @@ impl Extractor<'_> {
     /// The text of `span` on one line, without a trailing `;`.
     fn signature_text(&self, span: Span) -> String {
         self.text(span).split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';').trim_end().to_owned()
-    }
-
-    fn class(&mut self, class: &Class<'_>) -> Option<String> {
-        let name = class.id.as_ref()?.name.as_str();
-        self.symbol(name, SymbolKind::Class, class.span, None);
-        Some(name.to_owned())
-    }
-
-    fn variables(&mut self, decl: &VariableDeclaration<'_>) -> Vec<String> {
-        let mut names = Vec::new();
-        for declarator in &decl.declarations {
-            if let BindingPattern::BindingIdentifier(id) = &declarator.id {
-                self.symbol(id.name.as_str(), SymbolKind::Variable, declarator.span, None);
-                names.push(id.name.as_str().to_owned());
-            }
-        }
-        names
-    }
-
-    /// Records the symbols a declaration introduces and returns their names.
-    fn declaration(&mut self, decl: &Declaration<'_>) -> Vec<String> {
-        match decl {
-            Declaration::FunctionDeclaration(function) => self.function(function).into_iter().collect(),
-            Declaration::ClassDeclaration(class) => self.class(class).into_iter().collect(),
-            Declaration::TSInterfaceDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::Interface, decl.span, None);
-                vec![decl.id.name.as_str().to_owned()]
-            }
-            Declaration::TSTypeAliasDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::TypeAlias, decl.span, None);
-                vec![decl.id.name.as_str().to_owned()]
-            }
-            Declaration::TSEnumDeclaration(decl) => {
-                self.symbol(decl.id.name.as_str(), SymbolKind::Enum, decl.span, None);
-                vec![decl.id.name.as_str().to_owned()]
-            }
-            Declaration::VariableDeclaration(decl) => self.variables(decl),
-            Declaration::TSExternalModuleDeclaration(_)
-            | Declaration::TSNamespaceDeclaration(_)
-            | Declaration::TSGlobalDeclaration(_)
-            | Declaration::TSImportEqualsDeclaration(_) => Vec::new(),
-        }
-    }
-
-    fn import(&mut self, decl: &ImportDeclaration<'_>) {
-        let specifier = decl.source.value.as_str().to_owned();
-        if decl.import_kind.is_type() {
-            self.out.type_only_imports.push(specifier);
-            return;
-        }
-        let mut bindings = Vec::new();
-        for specifier in decl.specifiers.iter().flatten() {
-            match specifier {
-                ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                    if !named.import_kind.is_type() {
-                        bindings.push(DependencyBinding {
-                            imported: module_export_name(&named.imported),
-                            local: named.local.name.as_str().to_owned(),
-                            kind: BindingKind::Named,
-                        });
-                    }
-                }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => bindings.push(DependencyBinding {
-                    imported: "default".to_owned(),
-                    local: default.local.name.as_str().to_owned(),
-                    kind: BindingKind::Default,
-                }),
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => bindings.push(DependencyBinding {
-                    imported: "*".to_owned(),
-                    local: namespace.local.name.as_str().to_owned(),
-                    kind: BindingKind::Namespace,
-                }),
-            }
-        }
-        self.dependency(decl.source.value.as_str(), decl.span, bindings);
-    }
-
-    fn dependency(&mut self, specifier: &str, span: Span, bindings: Vec<DependencyBinding>) {
-        self.out.dependencies.push(DependencyRecord {
-            line: self.lines.line(span.start),
-            bindings,
-            target: DependencyTarget::File {
-                specifier: specifier.to_owned(),
-                resolved: None,
-                is_relative: specifier.starts_with('.'),
-            },
-        });
-    }
-
-    /// `export function f() {}`, `export const x = 1`.
-    fn export_declaration(&mut self, decl: &ExportDeclaration<'_>) {
-        for name in self.declaration(&decl.declaration) {
-            self.export(name, decl.span, false);
-        }
-    }
-
-    /// `export { a, b as c }`.
-    fn export_named(&mut self, decl: &ExportNamedDeclaration<'_>) {
-        for specifier in &decl.specifiers {
-            self.export(module_export_name(&specifier.exported), decl.span, false);
-        }
-    }
-
-    /// `export { a } from './m'`. A type-only re-export adds no runtime dependency.
-    fn export_from(&mut self, decl: &ExportFromDeclaration<'_>) {
-        for specifier in &decl.specifiers {
-            self.export(module_export_name(&specifier.exported), decl.span, true);
-        }
-        if decl.export_kind.is_type() {
-            return;
-        }
-        let bindings = decl
-            .specifiers
-            .iter()
-            .filter(|specifier| !specifier.export_kind.is_type())
-            .map(|specifier| DependencyBinding {
-                imported: module_export_name(&specifier.local),
-                local: module_export_name(&specifier.exported),
-                kind: BindingKind::Named,
-            })
-            .collect();
-        self.dependency(decl.source.value.as_str(), decl.span, bindings);
-    }
-
-    fn export_default(&mut self, decl: &ExportDefaultDeclaration<'_>) {
-        self.export("default".to_owned(), decl.span, false);
-        match &decl.declaration {
-            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-                self.function(function);
-            }
-            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
-                self.class(class);
-            }
-            _ => {}
-        }
-    }
-
-    fn export_all(&mut self, decl: &ExportAllDeclaration<'_>) {
-        let (name, kind) = match &decl.exported {
-            Some(exported) => (module_export_name(exported), BindingKind::Namespace),
-            None => ("*".to_owned(), BindingKind::Glob),
-        };
-        self.export(name.clone(), decl.span, true);
-        if !decl.export_kind.is_type() {
-            let binding = DependencyBinding { imported: "*".to_owned(), local: name, kind };
-            self.dependency(decl.source.value.as_str(), decl.span, vec![binding]);
-        }
     }
 
     fn block(&mut self, statement: &Statement<'_>) {
@@ -395,7 +168,6 @@ impl Extractor<'_> {
             code: code.to_owned(),
             symbol_signature,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent,
         };
         self.out.blocks.push(block);
@@ -408,7 +180,7 @@ impl Extractor<'_> {
         if let Some(class) = statement_class(statement) {
             self.class_member_blocks(class);
         }
-        for (parent, object) in self.statement_objects(statement) {
+        for (parent, object) in Self::statement_objects(statement) {
             for property in &object.properties {
                 match property {
                     ObjectPropertyKind::ObjectProperty(property) => self.object_property_block(property, &parent),
@@ -420,10 +192,7 @@ impl Extractor<'_> {
 
     /// The object literals a top-level or exported statement binds to a name, each with the parent its members get: the
     /// declarator's name for `const api = { ... }`, `default` for `export default { ... }`.
-    fn statement_objects<'a, 'b>(
-        &self,
-        statement: &'b Statement<'a>,
-    ) -> Vec<(ParentContext, &'b ObjectExpression<'a>)> {
+    fn statement_objects<'a, 'b>(statement: &'b Statement<'a>) -> Vec<(ParentContext, &'b ObjectExpression<'a>)> {
         let declaration = match statement {
             Statement::VariableDeclaration(declaration) => Some(&**declaration),
             Statement::ExportDeclaration(export) => match &export.declaration {
@@ -439,33 +208,21 @@ impl Extractor<'_> {
                 .filter_map(|declarator| {
                     let BindingPattern::BindingIdentifier(id) = &declarator.id else { return None };
                     let object = object_literal(declarator.init.as_ref()?)?;
-                    let parent = ParentContext {
-                        kind: SymbolKind::Variable,
-                        name: id.name.as_str().to_owned(),
-                        line: self.lines.line(declarator.span.start),
-                    };
+                    let parent = ParentContext { kind: SymbolKind::Variable, name: id.name.as_str().to_owned() };
                     Some((parent, object))
                 })
                 .collect();
         }
         let Statement::ExportDefaultDeclaration(export) = statement else { return Vec::new() };
         let Some(object) = export.declaration.as_expression().and_then(object_literal) else { return Vec::new() };
-        let parent = ParentContext {
-            kind: SymbolKind::Other,
-            name: "default".to_owned(),
-            line: self.lines.line(export.span.start),
-        };
+        let parent = ParentContext { kind: SymbolKind::Other, name: "default".to_owned() };
         vec![(parent, object)]
     }
 
     /// A method, constructor or function-valued property of a named class.
     fn class_member_blocks(&mut self, class: &Class<'_>) {
         let Some(id) = &class.id else { return };
-        let parent = ParentContext {
-            kind: SymbolKind::Class,
-            name: id.name.as_str().to_owned(),
-            line: self.lines.line(class.span.start),
-        };
+        let parent = ParentContext { kind: SymbolKind::Class, name: id.name.as_str().to_owned() };
         for element in &class.body.body {
             match element {
                 ClassElement::MethodDefinition(method) => self.method_block(method, &parent),
@@ -517,12 +274,6 @@ impl Extractor<'_> {
         if lines >= MIN_MEMBER_LINES {
             self.push_block(span, node_kind, Some(signature), Some(parent.clone()));
         }
-    }
-
-    fn jsx(&mut self, program: &Program<'_>) {
-        let mut collector = JsxCollector { lines: &self.lines, found: Vec::new() };
-        collector.visit_program(program);
-        self.out.jsx_elements = collector.found;
     }
 }
 
@@ -617,78 +368,6 @@ fn statement_function<'a, 'b>(statement: &'b Statement<'a>) -> Option<&'b Functi
     }
 }
 
-fn module_export_name(name: &ModuleExportName<'_>) -> String {
-    match name {
-        ModuleExportName::IdentifierName(id) => id.name.as_str().to_owned(),
-        ModuleExportName::IdentifierReference(id) => id.name.as_str().to_owned(),
-        ModuleExportName::StringLiteral(literal) => literal.value.as_str().to_owned(),
-    }
-}
-
-/// Collects every JSX element in document order.
-struct JsxCollector<'l> {
-    lines: &'l LineIndex,
-    found: Vec<JsxElementEntry>,
-}
-
-impl<'a> Visit<'a> for JsxCollector<'_> {
-    fn visit_jsx_element(&mut self, element: &JSXElement<'a>) {
-        let opening = &element.opening_element;
-        let name = jsx_element_name(&opening.name);
-        let attributes = opening.attributes.iter().map(jsx_attribute).collect();
-        self.found.push(JsxElementEntry {
-            is_html: name.chars().next().is_some_and(char::is_lowercase),
-            name,
-            line: self.lines.line(opening.span.start),
-            attributes,
-        });
-        walk::walk_jsx_element(self, element);
-    }
-}
-
-fn jsx_attribute(item: &JSXAttributeItem<'_>) -> JsxAttribute {
-    match item {
-        JSXAttributeItem::Attribute(attribute) => {
-            let name = match &attribute.name {
-                JSXAttributeName::Identifier(id) => id.name.as_str().to_owned(),
-                JSXAttributeName::NamespacedName(ns) => format!("{}:{}", ns.namespace.name, ns.name.name),
-            };
-            let (string_value, is_expression) = match &attribute.value {
-                Some(JSXAttributeValue::StringLiteral(literal)) => (Some(literal.value.as_str().to_owned()), false),
-                Some(
-                    JSXAttributeValue::ExpressionContainer(_)
-                    | JSXAttributeValue::Element(_)
-                    | JSXAttributeValue::Fragment(_),
-                ) => (None, true),
-                None => (None, false),
-            };
-            JsxAttribute { name, string_value, is_expression, is_spread: false }
-        }
-        JSXAttributeItem::SpreadAttribute(_) => {
-            JsxAttribute { name: "...".to_owned(), string_value: None, is_expression: false, is_spread: true }
-        }
-    }
-}
-
-fn jsx_element_name(name: &JSXElementName<'_>) -> String {
-    match name {
-        JSXElementName::Identifier(id) => id.name.as_str().to_owned(),
-        JSXElementName::IdentifierReference(id) => id.name.as_str().to_owned(),
-        JSXElementName::NamespacedName(ns) => format!("{}:{}", ns.namespace.name, ns.name.name),
-        JSXElementName::MemberExpression(member) => jsx_member(member),
-        JSXElementName::ThisExpression(_) => "this".to_owned(),
-    }
-}
-
-fn jsx_member(member: &JSXMemberExpression<'_>) -> String {
-    let object = match &member.object {
-        JSXMemberExpressionObject::IdentifierReference(id) => id.name.as_str().to_owned(),
-        JSXMemberExpressionObject::MemberExpression(inner) => jsx_member(inner),
-        JSXMemberExpressionObject::ThisExpression(_) => "this".to_owned(),
-    };
-    format!("{object}.{}", member.property.name)
-}
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -696,12 +375,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_parenthesized_default_export_is_exported_without_a_symbol_or_a_function_block() {
-        let extraction = extract(Utf8Path::new("a.ts"), "export default (function g() {});\n", AnalysisProfile::Full);
+    fn a_parenthesized_default_export_has_no_function_block() {
+        let extraction = extract(Utf8Path::new("a.ts"), "export default (function g() {});\n");
         assert!(!extraction.had_parse_errors);
-        assert!(extraction.symbols.is_empty());
-        let exports: Vec<_> = extraction.exports.iter().map(|e| (e.name.as_str(), e.line, e.re_export)).collect();
-        assert_eq!(exports, [("default", 1, false)]);
         let blocks: Vec<_> = extraction.blocks.iter().map(|b| (b.line_start, b.line_end, b.node_kind)).collect();
         assert_eq!(blocks, [(1, 1, SymbolKind::Other)]);
     }

@@ -24,7 +24,7 @@ required-features = ["cli"]
 default = ["cli", "lang-ts", "lang-rust"]
 
 # The TypeScript/JavaScript analyzer, built on OXC.
-lang-ts = ["dep:oxc_parser", "dep:oxc_ast", "dep:oxc_ast_visit","dep:oxc_span", "dep:oxc_allocator"]
+lang-ts = ["dep:oxc_parser", "dep:oxc_ast", "dep:oxc_span", "dep:oxc_allocator"]
 
 # The Rust analyzer, built on rust-analyzer's syntax crate.
 lang-rust = ["dep:ra_ap_syntax"]
@@ -33,7 +33,6 @@ lang-rust = ["dep:ra_ap_syntax"]
 cli = ["dep:clap", "dep:michi"]
 
 [dependencies]
-blake3.workspace = true
 camino.workspace = true
 grep-matcher.workspace = true
 grep-regex.workspace = true
@@ -42,14 +41,12 @@ ignore.workspace = true
 rayon.workspace = true
 regex.workspace = true
 rustc-hash.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 
 clap = { workspace = true, optional = true }
 michi = { workspace = true, optional = true }
 oxc_allocator = { workspace = true, optional = true }
 oxc_ast = { workspace = true, optional = true }
-oxc_ast_visit = { workspace = true, optional = true }
 oxc_parser = { workspace = true, optional = true }
 oxc_span = { workspace = true, optional = true }
 ra_ap_syntax = { workspace = true, optional = true }
@@ -61,5 +58,4 @@ workspace = true
 peak_alloc.workspace = true
 proptest.workspace = true
 rstest.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true

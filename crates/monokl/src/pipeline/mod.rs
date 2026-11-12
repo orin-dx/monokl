@@ -77,7 +77,7 @@ impl SearchResult {
 /// dropped when it has none. Files no analyzer supports, or that `language` excludes, are never opened, counted or reported.
 ///
 /// BM25 query terms are the lowercase [`tokenize`] output of each non-excluded literal term. Regex terms select
-/// lines and appear in `matched_keywords` but add no BM25 terms. A query with only excluded terms has nothing to
+/// lines but add no BM25 terms. A query with only excluded terms has nothing to
 /// search for and returns an empty result with one `Skipped` diagnostic.
 ///
 /// # Errors
@@ -445,7 +445,7 @@ fn retrieve_blocks(
             message: "invalid UTF-8 replaced with U+FFFD".to_owned(),
         });
     }
-    let analysis = match analyzer.analyze(path, Box::new(move || Ok(text))) {
+    let analysis = match analyzer.analyze(path, text) {
         Ok(analysis) => analysis,
         Err(err) => {
             diagnostics.push(skipped(Some(path), format!("could not analyze: {err}")));
@@ -476,20 +476,8 @@ fn retrieve_blocks(
         if inside.is_empty() {
             continue;
         }
-        let matched_keywords = ctx
-            .plan
-            .terms
-            .iter()
-            .zip(ctx.matchers)
-            .filter(|(term, _)| term.modifier != Modifier::Excluded)
-            .filter(|(_, matcher)| inside.iter().any(|hit| matches_text(matcher, &hit.text)))
-            .map(|(term, _)| keyword(term))
-            .collect();
-        let annotated = CodeBlock {
-            matched_lines: inside.iter().map(|hit| hit.line_number).collect(),
-            matched_keywords,
-            ..(*block).clone()
-        };
+        let annotated =
+            CodeBlock { matched_lines: inside.iter().map(|hit| hit.line_number).collect(), ..(*block).clone() };
         let tokens = tokenize_block(&annotated);
         out.push((annotated, tokens));
     }
@@ -591,9 +579,8 @@ mod tests {
     use super::*;
     use crate::analysis::LanguageId;
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
-    use crate::analysis::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer};
-    use crate::digest::Digest;
-    use crate::types::{LangData, ParentContext, SymbolKind, TsData};
+    use crate::analysis::lang::LanguageAnalyzer;
+    use crate::types::{ParentContext, SymbolKind};
 
     type MakeBlocks = dyn Fn(&Utf8Path, &str) -> Result<(Vec<CodeBlock>, bool)> + Send + Sync;
 
@@ -610,39 +597,13 @@ mod tests {
         fn supports(&self, path: &Utf8Path) -> bool {
             matches!(path.extension(), Some("ts" | "js"))
         }
-        fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-            self.supports(path).then_some(LanguageId::TypeScript)
-        }
-        fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-            AnalyzerCapabilities {
-                blocks: true,
-                classified_imports: false,
-                resolved_import_graph: CapabilityPrecision::Unsupported,
-                refs: CapabilityPrecision::Unsupported,
-                definition: CapabilityPrecision::Unsupported,
-                inspect_detail: CapabilityPrecision::Unsupported,
-            }
-        }
-        fn analyze_with_profile(
-            &self,
-            path: &Utf8Path,
-            source: Box<dyn FnOnce() -> Result<String>>,
-            profile: AnalysisProfile,
-        ) -> Result<Arc<FileAnalysis>> {
-            let source = source()?;
+        fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
             let (blocks, had_parse_errors) = (self.make)(path, &source)?;
             Ok(Arc::new(FileAnalysis {
-                source_path: path.to_owned(),
-                digest: Digest::blake3(source.as_bytes()),
-                profile,
                 had_parse_errors,
                 degradation: self.degradation,
-                symbols: Vec::new(),
-                dependencies: Vec::new(),
-                exports: Vec::new(),
                 blocks,
                 test_blocks: Vec::new(),
-                lang: LangData::Ts(TsData::default()),
             }))
         }
     }
@@ -664,7 +625,6 @@ mod tests {
             code: code.join("\n"),
             symbol_signature: None,
             matched_lines: Vec::new(),
-            matched_keywords: Vec::new(),
             parent: None,
         }
     }
@@ -749,32 +709,12 @@ mod tests {
             fn supports(&self, path: &Utf8Path) -> bool {
                 path.extension() == Some("rs")
             }
-            fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-                self.supports(path).then_some(LanguageId::Rust)
-            }
-            fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-                Canned { make: Box::new(|_, _| Ok((Vec::new(), false))), degradation: None }
-                    .capabilities(LanguageId::Rust)
-            }
-            fn analyze_with_profile(
-                &self,
-                path: &Utf8Path,
-                source: Box<dyn FnOnce() -> Result<String>>,
-                profile: AnalysisProfile,
-            ) -> Result<Arc<FileAnalysis>> {
-                let source = source()?;
+            fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
                 Ok(Arc::new(FileAnalysis {
-                    source_path: path.to_owned(),
-                    digest: Digest::blake3(source.as_bytes()),
-                    profile,
                     had_parse_errors: false,
                     degradation: None,
-                    symbols: Vec::new(),
-                    dependencies: Vec::new(),
-                    exports: Vec::new(),
                     blocks: vec![block(path, &source, 1, 1)],
                     test_blocks: Vec::new(),
-                    lang: LangData::Ts(TsData::default()),
                 }))
             }
         }
@@ -960,7 +900,6 @@ mod tests {
         let exact = SearchRequest { exact: true, ..request(&root, "a.b -x") };
         let result = search(&whole_file_registry(), &exact).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.matched_keywords, ["a.b -x"]);
     }
 
     #[test]
@@ -968,7 +907,6 @@ mod tests {
         let (_dir, root) = tree(&[("a.ts", "boooo\n"), ("b.ts", "bravo\n")]);
         let result = search(&whole_file_registry(), &request(&root, "regex:BO+")).unwrap();
         assert_eq!(files(&result, &root), ["a.ts"]);
-        assert_eq!(result.ranked[0].block.matched_keywords, ["BO+"]);
     }
 
     #[test]
@@ -1009,22 +947,9 @@ mod tests {
             Ok((vec![block(path, source, 1, 3), block(path, source, 4, 4), block(path, source, 5, 8)], false))
         });
         let result = search(&registry, &request(&root, "alpha beta")).unwrap();
-        let blocks: Vec<_> = result
-            .ranked
-            .iter()
-            .map(|r| (r.block.line_start, r.block.matched_lines.clone(), r.block.matched_keywords.clone()))
-            .collect();
-        assert_eq!(
-            blocks,
-            [(5, vec![6, 7], vec!["alpha".to_owned(), "beta".to_owned()]), (1, vec![2], vec!["alpha".to_owned()]),]
-        );
-    }
-
-    #[test]
-    fn matched_keywords_follow_query_order_not_text_order() {
-        let (_dir, root) = tree(&[("a.ts", "beta alpha\n")]);
-        let result = search(&whole_file_registry(), &request(&root, "alpha beta")).unwrap();
-        assert_eq!(result.ranked[0].block.matched_keywords, ["alpha", "beta"]);
+        let blocks: Vec<_> =
+            result.ranked.iter().map(|r| (r.block.line_start, r.block.matched_lines.clone())).collect();
+        assert_eq!(blocks, [(5, vec![6, 7]), (1, vec![2])]);
     }
 
     #[test]
@@ -1068,7 +993,6 @@ mod tests {
                 code: code.to_owned(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             };
             let tokens = tokenize_block(&block);
@@ -1108,7 +1032,7 @@ class Foo {
     /// The class `Foo` (lines 1-9) with the methods `alpha` (3-5) and `beta` (6-8), as the TypeScript analyzer emits them.
     fn class_registry() -> AnalyzerRegistry {
         registry(|path, source| {
-            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned(), line: 1 };
+            let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
             let member = |start, end| CodeBlock {
                 node_kind: SymbolKind::Method,
                 parent: Some(parent.clone()),
@@ -1204,8 +1128,8 @@ class Foo {
     fn member_rows_carry_their_parent_into_the_ranked_block() {
         let (_dir, root) = tree(&[("a.ts", CLASS_SOURCE)]);
         let result = search(&class_registry(), &request(&root, "alpha")).unwrap();
-        let parent = result.ranked[0].parent_context.as_ref().map(|p| (p.kind, p.name.as_str(), p.line));
-        assert_eq!(parent, Some((SymbolKind::Class, "Foo", 1)));
+        let parent = result.ranked[0].block.parent.as_ref().map(|p| (p.kind, p.name.as_str()));
+        assert_eq!(parent, Some((SymbolKind::Class, "Foo")));
     }
 
     #[test]
@@ -1463,7 +1387,6 @@ class Foo {
         let ranks: Vec<usize> = result.ranked.iter().map(|r| r.rank).collect();
         assert_eq!(ranks, [1, 2]);
         assert_eq!(result.ranked[1].block.matched_lines, [1]);
-        assert_eq!(result.ranked[1].block.matched_keywords, ["login"]);
 
         let everything = SearchRequest { allow_tests: true, respect_ignore_files: false, ..request(&root, query) };
         let result = search(&whole_file_registry(), &everything).unwrap();

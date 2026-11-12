@@ -115,12 +115,10 @@ mod tests {
                 code: code.to_owned(),
                 symbol_signature: None,
                 matched_lines: Vec::new(),
-                matched_keywords: Vec::new(),
                 parent: None,
             },
             final_score: 1.0,
             rank,
-            parent_context: None,
         }
     }
 

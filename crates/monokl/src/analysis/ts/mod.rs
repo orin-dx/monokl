@@ -7,17 +7,14 @@ use std::sync::Arc;
 use camino::Utf8Path;
 
 use super::file_analysis::FileAnalysis;
-use super::lang::{AnalysisProfile, AnalyzerCapabilities, CapabilityPrecision, LanguageAnalyzer, LanguageId};
-use crate::digest::Digest;
+use super::lang::{LanguageAnalyzer, LanguageId};
 use crate::error::Result;
-use crate::types::{LangData, TsData};
 
 const LANGUAGES: [LanguageId; 1] = [LanguageId::TypeScript];
 
 /// Analyzes TypeScript and JavaScript files with OXC.
 ///
-/// It is stateless: every call parses its own source and returns owned data. Dependencies keep their specifier as
-/// written; resolving them to files is not done here.
+/// It is stateless: every call parses its own source and returns owned data.
 ///
 /// # Examples
 ///
@@ -59,52 +56,9 @@ impl LanguageAnalyzer for TsAnalyzer {
             && matches!(path.extension(), Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs"))
     }
 
-    fn language_for(&self, path: &Utf8Path) -> Option<LanguageId> {
-        self.supports(path).then_some(LanguageId::TypeScript)
-    }
-
-    fn capabilities(&self, _language: LanguageId) -> AnalyzerCapabilities {
-        AnalyzerCapabilities {
-            blocks: true,
-            classified_imports: false,
-            resolved_import_graph: CapabilityPrecision::Unsupported,
-            refs: CapabilityPrecision::Structural,
-            definition: CapabilityPrecision::Structural,
-            inspect_detail: CapabilityPrecision::Structural,
-        }
-    }
-
-    fn analyze_with_profile(
-        &self,
-        path: &Utf8Path,
-        source: Box<dyn FnOnce() -> Result<String>>,
-        profile: AnalysisProfile,
-    ) -> Result<Arc<FileAnalysis>> {
-        let source = source()?;
-        let digest = Digest::blake3(source.as_bytes());
-        let parse::Extraction {
-            symbols,
-            dependencies,
-            exports,
-            blocks,
-            jsx_elements,
-            type_only_imports,
-            had_parse_errors,
-            degradation,
-        } = parse::extract(path, &source, profile);
-        Ok(Arc::new(FileAnalysis {
-            source_path: path.to_owned(),
-            digest,
-            profile,
-            had_parse_errors,
-            degradation,
-            symbols,
-            dependencies,
-            exports,
-            blocks,
-            test_blocks: Vec::new(),
-            lang: LangData::Ts(TsData { jsx_elements, type_only_imports, unresolved_aliases: Vec::new() }),
-        }))
+    fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
+        let parse::Extraction { blocks, had_parse_errors, degradation } = parse::extract(path, &source);
+        Ok(Arc::new(FileAnalysis { had_parse_errors, degradation, blocks, test_blocks: Vec::new() }))
     }
 }
 
@@ -116,65 +70,33 @@ pub(crate) fn parse_on_stack(path: &Utf8Path, source: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use rstest::rstest;
 
     use super::*;
     use crate::analysis::{Degradation, nesting};
-    use crate::error::MonoklError;
-    use crate::types::{BindingKind, DependencyTarget, SymbolKind};
+    use crate::types::SymbolKind;
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/small-ts");
 
-    fn analyze_source(path: &str, text: &str, profile: AnalysisProfile) -> Arc<FileAnalysis> {
-        let text = text.to_owned();
-        TsAnalyzer::new().analyze_with_profile(Utf8Path::new(path), Box::new(move || Ok(text)), profile).unwrap()
+    fn analyze_source(path: &str, text: &str) -> Arc<FileAnalysis> {
+        TsAnalyzer::new().analyze(Utf8Path::new(path), text.to_owned()).unwrap()
     }
 
     fn fixture(relative: &str) -> String {
         std::fs::read_to_string(format!("{FIXTURES}/{relative}")).unwrap()
     }
 
-    fn analyze_fixture(relative: &str, profile: AnalysisProfile) -> Arc<FileAnalysis> {
-        analyze_source(&format!("src/{relative}"), &fixture(&format!("src/{relative}")), profile)
-    }
-
-    type Symbol<'a> = (&'a str, SymbolKind, usize, Option<&'a str>);
-    type Binding<'a> = (&'a str, &'a str, BindingKind);
-
-    fn symbols(analysis: &FileAnalysis) -> Vec<Symbol<'_>> {
-        analysis.symbols.iter().map(|s| (s.name.as_str(), s.kind, s.line, s.signature.as_deref())).collect()
-    }
-
-    fn exports(analysis: &FileAnalysis) -> Vec<(&str, usize, bool)> {
-        analysis.exports.iter().map(|e| (e.name.as_str(), e.line, e.re_export)).collect()
-    }
-
-    fn dependencies(analysis: &FileAnalysis) -> Vec<(&str, usize, Vec<Binding<'_>>)> {
-        analysis
-            .dependencies
-            .iter()
-            .map(|dep| {
-                let DependencyTarget::File { specifier, resolved, is_relative } = &dep.target;
-                assert_eq!(*resolved, None);
-                assert_eq!(*is_relative, specifier.starts_with('.'));
-                let bindings = dep.bindings.iter().map(|b| (b.imported.as_str(), b.local.as_str(), b.kind)).collect();
-                (specifier.as_str(), dep.line, bindings)
-            })
-            .collect()
+    fn analyze_fixture(relative: &str) -> Arc<FileAnalysis> {
+        analyze_source(&format!("src/{relative}"), &fixture(&format!("src/{relative}")))
     }
 
     fn blocks(analysis: &FileAnalysis) -> Vec<(usize, usize, SymbolKind, Option<&str>)> {
-        analysis
-            .blocks
-            .iter()
-            .map(|b| {
-                assert_eq!(b.file, analysis.source_path);
-                (b.line_start, b.line_end, b.node_kind, b.symbol_signature.as_deref())
-            })
-            .collect()
+        analysis.blocks.iter().map(|b| (b.line_start, b.line_end, b.node_kind, b.symbol_signature.as_deref())).collect()
+    }
+
+    /// Every block as `(line_start, kind, signature)`.
+    fn outline(analysis: &FileAnalysis) -> Vec<(usize, SymbolKind, Option<&str>)> {
+        analysis.blocks.iter().map(|b| (b.line_start, b.node_kind, b.symbol_signature.as_deref())).collect()
     }
 
     #[rstest]
@@ -198,85 +120,27 @@ mod tests {
         let analyzer = TsAnalyzer::new();
         let path = Utf8Path::new(path);
         assert_eq!(analyzer.supports(path), expected);
-        assert_eq!(analyzer.language_for(path), expected.then_some(LanguageId::TypeScript));
     }
 
     #[test]
-    fn it_reports_its_language_and_capabilities() {
-        let analyzer = TsAnalyzer::new();
-        assert_eq!(analyzer.languages(), [LanguageId::TypeScript]);
-        assert_eq!(
-            analyzer.capabilities(LanguageId::TypeScript),
-            AnalyzerCapabilities {
-                blocks: true,
-                classified_imports: false,
-                resolved_import_graph: CapabilityPrecision::Unsupported,
-                refs: CapabilityPrecision::Structural,
-                definition: CapabilityPrecision::Structural,
-                inspect_detail: CapabilityPrecision::Structural,
-            }
-        );
+    fn it_reports_its_language() {
+        assert_eq!(TsAnalyzer::new().languages(), [LanguageId::TypeScript]);
     }
 
     #[test]
-    fn the_index_fixture_re_exports_without_declaring() {
-        let analysis = analyze_fixture("index.ts", AnalysisProfile::Full);
-        assert_eq!(analysis.source_path, "src/index.ts");
-        assert_eq!(analysis.digest, Digest::blake3(fixture("src/index.ts").as_bytes()));
+    fn the_index_fixture_yields_one_block_per_re_export() {
+        let analysis = analyze_fixture("index.ts");
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis), []);
-        assert_eq!(
-            exports(&analysis),
-            [
-                ("Button", 1, true),
-                ("useCart", 2, true),
-                ("formatCurrency", 3, true),
-                ("truncateString", 3, true),
-                ("validatePrice", 4, true),
-                ("ButtonProps", 5, true),
-                ("CartItem", 5, true),
-                ("ValidationResult", 5, true),
-                ("PriceValidator", 5, true),
-            ]
-        );
-        assert_eq!(
-            dependencies(&analysis),
-            [
-                ("./components/Button", 1, vec![("Button", "Button", BindingKind::Named)]),
-                ("./hooks/useCart", 2, vec![("useCart", "useCart", BindingKind::Named)]),
-                (
-                    "./utils/format",
-                    3,
-                    vec![
-                        ("formatCurrency", "formatCurrency", BindingKind::Named),
-                        ("truncateString", "truncateString", BindingKind::Named),
-                    ]
-                ),
-                ("./utils/validation", 4, vec![("validatePrice", "validatePrice", BindingKind::Named)]),
-            ]
-        );
-        assert_eq!(analysis.lang.ts().type_only_imports, Vec::<String>::new());
+        assert!(analysis.blocks.iter().all(|b| b.file == "src/index.ts"));
         assert_eq!(blocks(&analysis), (1..=5).map(|n| (n, n, SymbolKind::Other, None)).collect::<Vec<_>>());
         assert_eq!(analysis.blocks[0].code, "export { Button } from './components/Button';");
     }
 
     #[test]
-    fn the_button_fixture_has_a_component_a_default_export_and_jsx() {
-        let analysis = analyze_fixture("components/Button.tsx", AnalysisProfile::Full);
+    fn the_button_fixture_has_a_component_and_a_default_export() {
+        let analysis = analyze_fixture("components/Button.tsx");
         assert!(!analysis.had_parse_errors);
         let signature = "function Button({ label, price, onClick, disabled }: ButtonProps)";
-        assert_eq!(
-            symbols(&analysis),
-            [("ButtonProps", SymbolKind::Interface, 4, None), ("Button", SymbolKind::Function, 11, Some(signature))]
-        );
-        assert_eq!(exports(&analysis), [("ButtonProps", 4, false), ("Button", 11, false), ("default", 20, false)]);
-        assert_eq!(
-            dependencies(&analysis),
-            [
-                ("react", 1, vec![("default", "React", BindingKind::Default)]),
-                ("../utils/validation", 2, vec![("validatePrice", "validatePrice", BindingKind::Named)]),
-            ]
-        );
         assert_eq!(
             blocks(&analysis),
             [
@@ -286,58 +150,23 @@ mod tests {
             ]
         );
         assert_eq!(analysis.blocks[2].code, "export default Button;");
-        let jsx = analysis.jsx_elements();
-        assert_eq!(jsx.len(), 1);
-        assert_eq!((jsx[0].name.as_str(), jsx[0].is_html, jsx[0].line), ("button", true, 14));
-        let attributes: Vec<_> = jsx[0]
-            .attributes
-            .iter()
-            .map(|a| (a.name.as_str(), a.string_value.clone(), a.is_expression, a.is_spread))
-            .collect();
-        assert_eq!(attributes, [("onClick", None, true, false), ("disabled", None, true, false)]);
     }
 
     #[test]
-    fn the_use_cart_fixture_separates_type_only_imports() {
-        let analysis = analyze_fixture("hooks/useCart.ts", AnalysisProfile::Full);
+    fn the_use_cart_fixture_has_an_interface_and_a_function() {
+        let analysis = analyze_fixture("hooks/useCart.ts");
         assert!(!analysis.had_parse_errors);
-        assert_eq!(
-            symbols(&analysis),
-            [
-                ("CartItem", SymbolKind::Interface, 5, None),
-                ("useCart", SymbolKind::Function, 11, Some("function useCart()")),
-            ]
-        );
-        assert_eq!(exports(&analysis), [("CartItem", 5, false), ("useCart", 11, false)]);
-        assert_eq!(
-            dependencies(&analysis),
-            [
-                ("react", 1, vec![("useState", "useState", BindingKind::Named)]),
-                ("../utils/validation", 2, vec![("validatePrice", "validatePrice", BindingKind::Named)]),
-            ]
-        );
-        assert_eq!(analysis.lang.ts().type_only_imports, ["../utils/validation"]);
         assert_eq!(
             blocks(&analysis),
             [(5, 9, SymbolKind::Interface, None), (11, 25, SymbolKind::Function, Some("function useCart()"))]
         );
-        assert!(analysis.jsx_elements().is_empty());
     }
 
     #[test]
-    fn the_format_fixture_has_two_functions_and_no_dependencies() {
-        let analysis = analyze_fixture("utils/format.ts", AnalysisProfile::Full);
+    fn the_format_fixture_has_two_functions() {
+        let analysis = analyze_fixture("utils/format.ts");
         let currency = "function formatCurrency(amount: number, currency: string = 'USD'): string";
         let truncate = "function truncateString(str: string, maxLength: number): string";
-        assert_eq!(
-            symbols(&analysis),
-            [
-                ("formatCurrency", SymbolKind::Function, 1, Some(currency)),
-                ("truncateString", SymbolKind::Function, 5, Some(truncate)),
-            ]
-        );
-        assert_eq!(exports(&analysis), [("formatCurrency", 1, false), ("truncateString", 5, false)]);
-        assert_eq!(dependencies(&analysis), []);
         assert_eq!(
             blocks(&analysis),
             [(1, 3, SymbolKind::Function, Some(currency)), (5, 8, SymbolKind::Function, Some(truncate))]
@@ -346,24 +175,8 @@ mod tests {
 
     #[test]
     fn the_validation_fixture_has_an_interface_a_function_and_a_type_alias() {
-        let analysis = analyze_fixture("utils/validation.ts", AnalysisProfile::Full);
+        let analysis = analyze_fixture("utils/validation.ts");
         let signature = "function validatePrice(price: number): ValidationResult";
-        assert_eq!(
-            symbols(&analysis),
-            [
-                ("ValidationResult", SymbolKind::Interface, 3, None),
-                ("validatePrice", SymbolKind::Function, 8, Some(signature)),
-                ("PriceValidator", SymbolKind::TypeAlias, 14, None),
-            ]
-        );
-        assert_eq!(
-            exports(&analysis),
-            [("ValidationResult", 3, false), ("validatePrice", 8, false), ("PriceValidator", 14, false)]
-        );
-        assert_eq!(
-            dependencies(&analysis),
-            [("./format", 1, vec![("formatCurrency", "formatCurrency", BindingKind::Named)])]
-        );
         assert_eq!(
             blocks(&analysis),
             [
@@ -376,48 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn profiles_fill_only_what_they_promise() {
-        let path = "components/Button.tsx";
-        let full = analyze_fixture(path, AnalysisProfile::Full);
-
-        let dependencies_only = analyze_fixture(path, AnalysisProfile::Dependencies);
-        assert_eq!(dependencies_only.profile, AnalysisProfile::Dependencies);
-        assert_eq!(format!("{:?}", dependencies_only.dependencies), format!("{:?}", full.dependencies));
-        assert_eq!(symbols(&dependencies_only), []);
-        assert_eq!(exports(&dependencies_only), []);
-        assert_eq!(blocks(&dependencies_only), []);
-        assert!(dependencies_only.jsx_elements().is_empty());
-
-        let structural = analyze_fixture(path, AnalysisProfile::Structural);
-        assert_eq!(structural.profile, AnalysisProfile::Structural);
-        assert_eq!(format!("{:?}", structural.dependencies), format!("{:?}", full.dependencies));
-        assert_eq!(format!("{:?}", structural.symbols), format!("{:?}", full.symbols));
-        assert_eq!(format!("{:?}", structural.exports), format!("{:?}", full.exports));
-        assert_eq!(blocks(&structural), []);
-        assert!(structural.jsx_elements().is_empty());
-
-        assert_eq!(full.profile, AnalysisProfile::Full);
-        assert_eq!(full.blocks.len(), 3);
-        assert_eq!(full.jsx_elements().len(), 1);
-    }
-
-    #[test]
-    fn type_only_imports_survive_the_dependencies_profile() {
-        let analysis = analyze_fixture("hooks/useCart.ts", AnalysisProfile::Dependencies);
-        assert_eq!(analysis.lang.ts().type_only_imports, ["../utils/validation"]);
-        assert_eq!(analysis.dependencies.len(), 2);
-    }
-
-    #[test]
-    fn analyze_defaults_to_the_full_profile() {
-        let text = fixture("src/utils/format.ts");
-        let analysis = TsAnalyzer::new().analyze(Utf8Path::new("format.ts"), Box::new(move || Ok(text))).unwrap();
-        assert_eq!(analysis.profile, AnalysisProfile::Full);
-        assert_eq!(analysis.blocks.len(), 2);
-    }
-
-    #[test]
-    fn declarations_other_than_functions_become_symbols() {
+    fn declarations_other_than_functions_get_their_kind() {
         let text = "\
 const a = 1, b = () => 2;
 class Plain {}
@@ -427,25 +199,24 @@ export enum Open { Yes }
 export const [first] = [1];
 export default class Named {}
 ";
-        let analysis = analyze_source("kinds.ts", text, AnalysisProfile::Structural);
+        let analysis = analyze_source("kinds.ts", text);
         assert!(!analysis.had_parse_errors);
         assert_eq!(
-            symbols(&analysis),
+            outline(&analysis),
             [
-                ("a", SymbolKind::Variable, 1, None),
-                ("b", SymbolKind::Variable, 1, None),
-                ("Plain", SymbolKind::Class, 2, None),
-                ("Shown", SymbolKind::Class, 3, None),
-                ("Mode", SymbolKind::Enum, 4, None),
-                ("Open", SymbolKind::Enum, 5, None),
-                ("Named", SymbolKind::Class, 7, None),
+                (1, SymbolKind::Variable, None),
+                (2, SymbolKind::Class, None),
+                (3, SymbolKind::Class, None),
+                (4, SymbolKind::Enum, None),
+                (5, SymbolKind::Enum, None),
+                (6, SymbolKind::Variable, None),
+                (7, SymbolKind::Class, None),
             ]
         );
-        assert_eq!(exports(&analysis), [("Shown", 3, false), ("Open", 5, false), ("default", 7, false)]);
     }
 
     #[test]
-    fn every_top_level_declaration_kind_yields_its_symbol_export_and_block() {
+    fn every_top_level_declaration_kind_yields_a_block() {
         let text = "\
 function f(a: number): string {
   return String(a);
@@ -466,23 +237,8 @@ export default function h() {}
 export { v };
 export const y = 1;
 ";
-        let analysis = analyze_source("kinds.ts", text, AnalysisProfile::Full);
+        let analysis = analyze_source("kinds.ts", text);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(
-            symbols(&analysis),
-            [
-                ("f", SymbolKind::Function, 1, Some("function f(a: number): string")),
-                ("C", SymbolKind::Class, 4, None),
-                ("I", SymbolKind::Interface, 7, None),
-                ("T", SymbolKind::TypeAlias, 10, None),
-                ("E", SymbolKind::Enum, 11, None),
-                ("v", SymbolKind::Variable, 14, None),
-                ("g", SymbolKind::Function, 15, Some("function g()")),
-                ("h", SymbolKind::Function, 16, Some("function h()")),
-                ("y", SymbolKind::Variable, 18, None),
-            ]
-        );
-        assert_eq!(exports(&analysis), [("g", 15, false), ("default", 16, false), ("v", 17, false), ("y", 18, false)]);
         assert_eq!(
             blocks(&analysis),
             [
@@ -512,19 +268,17 @@ export const y = 1;
     #[case::renamed_specifier("const x = 1;\nexport { x as default };\n", SymbolKind::Other)]
     #[case::plain_function("export function X() {}\n", SymbolKind::Function)]
     fn a_default_export_block_has_the_kind_of_what_it_declares(#[case] source: &str, #[case] kind: SymbolKind) {
-        let analysis = analyze_source("kind.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("kind.ts", source);
         assert_eq!(analysis.blocks.last().map(|b| b.node_kind), Some(kind));
     }
 
     #[test]
-    fn an_anonymous_default_function_is_exported_but_has_no_symbol() {
-        let analysis = analyze_source("anon.ts", "export default function () {}\n", AnalysisProfile::Full);
-        assert_eq!(symbols(&analysis), []);
-        assert_eq!(exports(&analysis), [("default", 1, false)]);
+    fn an_anonymous_default_function_has_a_block_without_a_signature() {
+        let analysis = analyze_source("anon.ts", "export default function () {}\n");
         assert_eq!(blocks(&analysis), [(1, 1, SymbolKind::Function, None)]);
     }
 
-    type MemberBlock<'a> = (usize, usize, SymbolKind, Option<&'a str>, Option<(SymbolKind, &'a str, usize)>);
+    type MemberBlock<'a> = (usize, usize, SymbolKind, Option<&'a str>, Option<(SymbolKind, &'a str)>);
 
     /// Every block as `(line_start, line_end, kind, signature, parent)`.
     fn blocks_with_parents(analysis: &FileAnalysis) -> Vec<MemberBlock<'_>> {
@@ -532,7 +286,7 @@ export const y = 1;
             .blocks
             .iter()
             .map(|b| {
-                let parent = b.parent.as_ref().map(|p| (p.kind, p.name.as_str(), p.line));
+                let parent = b.parent.as_ref().map(|p| (p.kind, p.name.as_str()));
                 (b.line_start, b.line_end, b.node_kind, b.symbol_signature.as_deref(), parent)
             })
             .collect()
@@ -569,9 +323,9 @@ export class Foo {
 
     #[test]
     fn a_class_yields_a_block_for_each_long_method_constructor_and_function_valued_property() {
-        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS);
         assert!(!analysis.had_parse_errors);
-        let foo = Some((SymbolKind::Class, "Foo", 1));
+        let foo = Some((SymbolKind::Class, "Foo"));
         assert_eq!(
             blocks_with_parents(&analysis),
             [
@@ -588,7 +342,7 @@ export class Foo {
 
     #[test]
     fn a_member_block_holds_exactly_the_member_text() {
-        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS);
         let codes: Vec<&str> = analysis.blocks.iter().skip(1).take(2).map(|b| b.code.as_str()).collect();
         assert_eq!(
             codes,
@@ -605,7 +359,7 @@ export class Foo {
     #[case("export class Foo {\n  m = () => {\n  };\n}\n", 0)]
     #[case("export class Foo {\n  m = () => {\n    return 1;\n  };\n}\n", 1)]
     fn a_member_shorter_than_three_lines_has_no_block(#[case] source: &str, #[case] members: usize) {
-        let analysis = analyze_source("short.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("short.ts", source);
         assert_eq!(analysis.blocks.len(), 1 + members);
     }
 
@@ -614,7 +368,7 @@ export class Foo {
     #[case::exported("export class Foo {\n  m() {\n    return 1;\n  }\n}\n")]
     #[case::default_exported("export default class Foo {\n  m() {\n    return 1;\n  }\n}\n")]
     fn members_of_a_declared_or_exported_class_name_their_class(#[case] source: &str) {
-        let analysis = analyze_source("named.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("named.ts", source);
         let parents: Vec<_> =
             analysis.blocks.iter().map(|b| b.parent.as_ref().map(|p| (p.kind, p.name.as_str()))).collect();
         assert_eq!(parents, [None, Some((SymbolKind::Class, "Foo"))]);
@@ -625,7 +379,7 @@ export class Foo {
     #[case::nested_in_a_function("function f() {\n  class Foo {\n    m() {\n      return 1;\n    }\n  }\n}\n")]
     #[case::class_expression("const Foo = class {\n  m() {\n    return 1;\n  }\n};\n")]
     fn a_class_without_a_name_or_outside_the_top_level_gets_no_member_blocks(#[case] source: &str) {
-        let analysis = analyze_source("other.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("other.ts", source);
         assert_eq!(analysis.blocks.len(), 1);
     }
 
@@ -648,12 +402,12 @@ export abstract class Base {
   [key: string]: unknown;
 }
 ";
-        let analysis = analyze_source("abstract.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("abstract.ts", source);
         assert_eq!(
             blocks_with_parents(&analysis),
             [
                 (1, 15, SymbolKind::Class, None, None),
-                (7, 9, SymbolKind::Method, Some("overload(a: unknown): void"), Some((SymbolKind::Class, "Base", 1))),
+                (7, 9, SymbolKind::Method, Some("overload(a: unknown): void"), Some((SymbolKind::Class, "Base"))),
             ]
         );
     }
@@ -668,7 +422,7 @@ export class Ctl {
   }
 }
 ";
-        let analysis = analyze_source("decorated.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("decorated.ts", source);
         let member = &analysis.blocks[1];
         assert_eq!(
             (member.line_start, member.line_end, member.symbol_signature.as_deref()),
@@ -678,17 +432,9 @@ export class Ctl {
     }
 
     #[test]
-    fn only_the_full_profile_extracts_member_blocks() {
-        for profile in [AnalysisProfile::Dependencies, AnalysisProfile::Structural] {
-            let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS, profile);
-            assert_eq!(analysis.blocks.len(), 0, "{profile:?}");
-        }
-    }
-
-    #[test]
     fn member_blocks_are_deterministic() {
-        let first = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
-        let second = analyze_source("members.ts", CLASS_WITH_MEMBERS, AnalysisProfile::Full);
+        let first = analyze_source("members.ts", CLASS_WITH_MEMBERS);
+        let second = analyze_source("members.ts", CLASS_WITH_MEMBERS);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
 
@@ -725,9 +471,9 @@ export const api = {
 
     #[test]
     fn an_object_literal_yields_a_block_for_each_long_function_valued_property_and_method() {
-        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS, AnalysisProfile::Full);
+        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS);
         assert!(!analysis.had_parse_errors);
-        let api = Some((SymbolKind::Variable, "api", 1));
+        let api = Some((SymbolKind::Variable, "api"));
         assert_eq!(
             blocks_with_parents(&analysis),
             [
@@ -743,7 +489,7 @@ export const api = {
 
     #[test]
     fn an_object_member_block_holds_exactly_the_member_text() {
-        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS, AnalysisProfile::Full);
+        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS);
         let codes: Vec<&str> = analysis.blocks.iter().skip(1).take(2).map(|b| b.code.as_str()).collect();
         assert_eq!(
             codes,
@@ -769,7 +515,7 @@ export const api = {
         #[case] parent: (SymbolKind, &str),
     ) {
         let source = source.replace("OBJ", "{\n  m() {\n    return 1;\n  },\n}");
-        let analysis = analyze_source("named.ts", &source, AnalysisProfile::Full);
+        let analysis = analyze_source("named.ts", &source);
         let parents: Vec<_> =
             analysis.blocks.iter().map(|b| b.parent.as_ref().map(|p| (p.kind, p.name.as_str()))).collect();
         assert_eq!(parents, [None, Some(parent)]);
@@ -778,13 +524,13 @@ export const api = {
     #[test]
     fn each_declarator_of_a_statement_owns_its_own_members() {
         let source = "const a = {\n  m() {\n    return 1;\n  },\n}, b = {\n  n() {\n    return 2;\n  },\n};\n";
-        let analysis = analyze_source("two.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("two.ts", source);
         assert_eq!(
             blocks_with_parents(&analysis),
             [
                 (1, 9, SymbolKind::Variable, None, None),
-                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Variable, "a", 1))),
-                (6, 8, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "b", 5))),
+                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Variable, "a"))),
+                (6, 8, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "b"))),
             ]
         );
     }
@@ -806,7 +552,7 @@ export const api = {
     #[case::assigned("module.exports = {\n  m() {\n    return 1;\n  },\n};\n")]
     #[case::class_property_object("export class C {\n  o = {\n    m() {\n      return 1;\n    },\n  };\n}\n")]
     fn only_a_top_level_or_exported_object_literal_with_long_functions_gets_member_blocks(#[case] source: &str) {
-        let analysis = analyze_source("none.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("none.ts", source);
         let members: Vec<_> = analysis.blocks.iter().filter(|b| b.parent.is_some()).map(|b| b.line_start).collect();
         assert_eq!(members, Vec::<usize>::new());
     }
@@ -822,7 +568,7 @@ export const api = {
         #[case] source: &str,
         #[case] members: &[(usize, usize)],
     ) {
-        let analysis = analyze_source("nested.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("nested.ts", source);
         let found: Vec<_> =
             analysis.blocks.iter().filter(|b| b.parent.is_some()).map(|b| (b.line_start, b.line_end)).collect();
         assert_eq!(found, members);
@@ -832,105 +578,55 @@ export const api = {
     fn a_class_and_an_object_in_one_file_each_name_their_own_members() {
         let source =
             "export class C {\n  m() {\n    return 1;\n  }\n}\nexport const o = {\n  n() {\n    return 2;\n  },\n};\n";
-        let analysis = analyze_source("both.ts", source, AnalysisProfile::Full);
+        let analysis = analyze_source("both.ts", source);
         assert_eq!(
             blocks_with_parents(&analysis),
             [
                 (1, 5, SymbolKind::Class, None, None),
-                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Class, "C", 1))),
+                (2, 4, SymbolKind::Method, Some("m()"), Some((SymbolKind::Class, "C"))),
                 (6, 10, SymbolKind::Variable, None, None),
-                (7, 9, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "o", 6))),
+                (7, 9, SymbolKind::Method, Some("n()"), Some((SymbolKind::Variable, "o"))),
             ]
-        );
-    }
-
-    #[test]
-    fn imports_record_namespace_side_effect_and_inline_type_bindings() {
-        let text = "\
-import * as fs from 'node:fs';
-import './polyfill';
-import def, { a as b, type T } from './m';
-export * from './all';
-export * as ns from './named';
-export type * from './types';
-";
-        let analysis = analyze_source("imports.ts", text, AnalysisProfile::Dependencies);
-        assert!(!analysis.had_parse_errors);
-        assert_eq!(
-            dependencies(&analysis),
-            [
-                ("node:fs", 1, vec![("*", "fs", BindingKind::Namespace)]),
-                ("./polyfill", 2, vec![]),
-                ("./m", 3, vec![("default", "def", BindingKind::Default), ("a", "b", BindingKind::Named)]),
-                ("./all", 4, vec![("*", "*", BindingKind::Glob)]),
-                ("./named", 5, vec![("*", "ns", BindingKind::Namespace)]),
-            ]
-        );
-    }
-
-    #[test]
-    fn jsx_elements_are_collected_at_every_depth_in_document_order() {
-        let text = "\
-export const App = (p) => (
-  <Layout {...p} title=\"home\" flag>
-    <Foo.Bar />
-    <svg:rect width=\"1\" />
-  </Layout>
-);
-";
-        let analysis = analyze_source("app.jsx", text, AnalysisProfile::Full);
-        assert!(!analysis.had_parse_errors);
-        let elements: Vec<_> =
-            analysis.jsx_elements().iter().map(|e| (e.name.as_str(), e.is_html, e.line, e.attributes.len())).collect();
-        assert_eq!(elements, [("Layout", false, 2, 3), ("Foo.Bar", false, 3, 0), ("svg:rect", true, 4, 1)]);
-        let layout: Vec<_> = analysis.jsx_elements()[0]
-            .attributes
-            .iter()
-            .map(|a| (a.name.as_str(), a.string_value.as_deref(), a.is_expression, a.is_spread))
-            .collect();
-        assert_eq!(
-            layout,
-            [("...", None, false, true), ("title", Some("home"), false, false), ("flag", None, false, false)]
         );
     }
 
     #[test]
     fn javascript_files_may_contain_jsx() {
-        let analysis = analyze_source("view.js", "export const v = <div />;\n", AnalysisProfile::Full);
+        let analysis = analyze_source("view.js", "export const v = <div />;\n");
         assert!(!analysis.had_parse_errors);
-        assert_eq!(analysis.jsx_elements().len(), 1);
+        assert_eq!(blocks(&analysis), [(1, 1, SymbolKind::Variable, None)]);
     }
 
     #[test]
     fn a_syntax_error_is_flagged_and_what_parsed_is_kept() {
         let text = "import { a } from './a';\nexport function good(x: number) { return x; }\nconst x;\nexport function after() {}\n";
-        let analysis = analyze_source("broken.ts", text, AnalysisProfile::Full);
+        let analysis = analyze_source("broken.ts", text);
         assert!(analysis.had_parse_errors);
-        let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["good", "x", "after"]);
-        assert_eq!(dependencies(&analysis), [("./a", 1, vec![("a", "a", BindingKind::Named)])]);
+        assert_eq!(
+            outline(&analysis),
+            [
+                (2, SymbolKind::Function, Some("function good(x: number)")),
+                (3, SymbolKind::Variable, None),
+                (4, SymbolKind::Function, Some("function after()")),
+            ]
+        );
     }
 
     #[test]
     fn an_unrecoverable_syntax_error_leaves_nothing_but_the_flag() {
-        let analysis = analyze_source("fatal.ts", "export function good() {}\nconst x = ;\n", AnalysisProfile::Full);
+        let analysis = analyze_source("fatal.ts", "export function good() {}\nconst x = ;\n");
         assert_degraded(&analysis);
         assert_eq!(analysis.degradation, None);
     }
 
     #[test]
     fn a_clean_file_has_no_parse_errors() {
-        assert!(!analyze_source("ok.ts", "export const x = 1;\n", AnalysisProfile::Full).had_parse_errors);
+        assert!(!analyze_source("ok.ts", "export const x = 1;\n").had_parse_errors);
     }
 
     fn assert_degraded(analysis: &FileAnalysis) {
         assert!(analysis.had_parse_errors);
-        assert_eq!(symbols(analysis), []);
-        assert_eq!(exports(analysis), []);
-        assert_eq!(dependencies(analysis), []);
         assert_eq!(blocks(analysis), []);
-        assert!(analysis.jsx_elements().is_empty());
-        assert_eq!(analysis.lang.ts().type_only_imports, Vec::<String>::new());
     }
 
     #[rstest]
@@ -939,22 +635,18 @@ export const App = (p) => (
     #[case::object_literals("{a:", "}")]
     fn brackets_nested_two_thousand_deep_are_parsed(#[case] open: &str, #[case] close: &str) {
         let text = nested("import a from './a';\nexport const x = ", open, "1", close, 2000);
-        let analysis = analyze_source("deep.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("deep.ts", &text);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 2, None)]);
-        assert_eq!(dependencies(&analysis), [("./a", 1, vec![("default", "a", BindingKind::Default)])]);
+        assert_eq!(outline(&analysis), [(2, SymbolKind::Variable, None)]);
     }
 
     #[test]
     fn a_string_continued_across_crlf_line_breaks_may_hold_many_parentheses() {
         let text = format!("export const s = \"{}\";\r\nexport function after() {{}}\r\n", "(\\\r\n".repeat(300));
-        let analysis = analyze_source("continued.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("continued.ts", &text);
         assert!(!analysis.had_parse_errors);
         let after = Some("function after()");
-        assert_eq!(
-            symbols(&analysis),
-            [("s", SymbolKind::Variable, 1, None), ("after", SymbolKind::Function, 302, after)]
-        );
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Variable, None), (302, SymbolKind::Function, after)]);
     }
 
     #[test]
@@ -963,13 +655,13 @@ export const App = (p) => (
             "export function f(values: number[], count: number, total: number) {{\n{}}}\nexport const y = 1;\n",
             "  values.push(count++ / total);\n".repeat(300)
         );
-        let analysis = analyze_source("division.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("division.ts", &text);
         assert!(!analysis.had_parse_errors);
         assert_eq!(
-            symbols(&analysis),
+            outline(&analysis),
             [
-                ("f", SymbolKind::Function, 1, Some("function f(values: number[], count: number, total: number)")),
-                ("y", SymbolKind::Variable, 303, None)
+                (1, SymbolKind::Function, Some("function f(values: number[], count: number, total: number)")),
+                (303, SymbolKind::Variable, None)
             ]
         );
     }
@@ -978,23 +670,22 @@ export const App = (p) => (
     fn a_file_longer_than_the_parse_limit_is_degraded_for_its_size() {
         let head = "export const x = 1;\n";
         let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN + 1 - head.len()));
-        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("long.ts", &text);
         assert_degraded(&analysis);
         assert_eq!(
             analysis.degradation,
             Some(Degradation::TooLarge { bytes: parse::MAX_PARSED_SOURCE_LEN + 1, cap: parse::MAX_PARSED_SOURCE_LEN })
         );
-        assert_eq!(analysis.digest, Digest::blake3(text.as_bytes()));
     }
 
     #[test]
     fn a_file_as_long_as_the_parse_limit_is_still_parsed() {
         let head = "export const x = 1;\n";
         let text = format!("{head}{}", " ".repeat(parse::MAX_PARSED_SOURCE_LEN - head.len()));
-        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("long.ts", &text);
         assert!(!analysis.had_parse_errors);
         assert_eq!(analysis.degradation, None);
-        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Variable, None)]);
     }
 
     #[test]
@@ -1005,11 +696,11 @@ export const App = (p) => (
             "[".repeat(3_000),
             "]".repeat(3_000)
         );
-        let analysis = analyze_source("regex.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("regex.ts", &text);
         assert!(!analysis.had_parse_errors);
         assert_eq!(
-            symbols(&analysis),
-            [("f", SymbolKind::Function, 1, Some("function f()")), ("T", SymbolKind::TypeAlias, 1, None)]
+            outline(&analysis),
+            [(1, SymbolKind::Function, Some("function f()")), (1, SymbolKind::TypeAlias, None)]
         );
     }
 
@@ -1019,31 +710,14 @@ export const App = (p) => (
     }
 
     #[rstest]
-    #[case::generic_types(
-        "deep.ts",
-        nested("export type T = ", "Array<", "number", ">", 4_000),
-        ("T", SymbolKind::TypeAlias),
-        0
-    )]
-    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 5_000), ("f", SymbolKind::Variable), 0)]
-    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 3_500), ("t", SymbolKind::Variable), 0)]
-    #[case::jsx_elements(
-        "deep.tsx",
-        nested("export const j = ", "<div>", "", "</div>", 1_500),
-        ("j", SymbolKind::Variable),
-        1_500
-    )]
-    fn deep_nesting_without_brackets_still_parses(
-        #[case] path: &str,
-        #[case] text: String,
-        #[case] symbol: (&str, SymbolKind),
-        #[case] jsx_elements: usize,
-    ) {
-        let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+    #[case::generic_types("deep.ts", nested("export type T = ", "Array<", "number", ">", 4_000), SymbolKind::TypeAlias)]
+    #[case::arrow_functions("deep.ts", nested("export const f = ", "() => ", "1", "", 5_000), SymbolKind::Variable)]
+    #[case::conditionals("deep.ts", nested("export const t = ", "a ? b : ", "c", "", 3_500), SymbolKind::Variable)]
+    #[case::jsx_elements("deep.tsx", nested("export const j = ", "<div>", "", "</div>", 1_500), SymbolKind::Variable)]
+    fn deep_nesting_without_brackets_still_parses(#[case] path: &str, #[case] text: String, #[case] kind: SymbolKind) {
+        let analysis = analyze_source(path, &text);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis), [(symbol.0, symbol.1, 1, None)]);
-        assert_eq!(blocks(&analysis), [(1, 1, symbol.1, None)]);
-        assert_eq!(analysis.jsx_elements().len(), jsx_elements);
+        assert_eq!(blocks(&analysis), [(1, 1, kind, None)]);
     }
 
     /// `export const x = <open>^depth <tail> <close>^depth;`
@@ -1128,7 +802,7 @@ export const App = (p) => (
     fn every_shape_at_the_cap_is_parsed_on_the_fixed_stack() {
         for (name, path, text) in shapes() {
             let depth = deepest_accepted(path, &*text);
-            let analysis = analyze_source(path, &text(depth), AnalysisProfile::Full);
+            let analysis = analyze_source(path, &text(depth));
             assert_eq!(analysis.degradation, None, "{name} at depth {depth}");
             assert!(!analysis.had_parse_errors, "{name} at depth {depth}");
         }
@@ -1138,7 +812,7 @@ export const App = (p) => (
     fn every_shape_one_past_the_cap_is_degraded_without_being_parsed() {
         for (name, path, text) in shapes() {
             let depth = deepest_accepted(path, &*text) + 1;
-            let analysis = analyze_source(path, &text(depth), AnalysisProfile::Full);
+            let analysis = analyze_source(path, &text(depth));
             assert_degraded(&analysis);
             assert_eq!(
                 analysis.degradation,
@@ -1153,10 +827,12 @@ export const App = (p) => (
         let build =
             |depth: usize| format!("export const before = 1;\n{}export const after = 2;\n", expr(depth, "[", "1", "]"));
         let depth = deepest_accepted("a.ts", &build);
-        let at = analyze_source("a.ts", &build(depth), AnalysisProfile::Full);
-        let names: Vec<_> = at.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["before", "x", "after"]);
-        let above = analyze_source("a.ts", &build(depth + 1), AnalysisProfile::Full);
+        let at = analyze_source("a.ts", &build(depth));
+        assert_eq!(
+            outline(&at),
+            [(1, SymbolKind::Variable, None), (2, SymbolKind::Variable, None), (3, SymbolKind::Variable, None)]
+        );
+        let above = analyze_source("a.ts", &build(depth + 1));
         assert_degraded(&above);
         assert_eq!(
             above.degradation,
@@ -1171,7 +847,7 @@ export const App = (p) => (
     fn a_hundred_thousand_levels_are_degraded_at_once(#[case] path: &str, #[case] open: &str, #[case] close: &str) {
         let text = expr(100_000, open, "1", close);
         let started = std::time::Instant::now();
-        let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+        let analysis = analyze_source(path, &text);
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
         assert_degraded(&analysis);
         assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { cap: parse::MAX_NESTING_LEVELS, .. })));
@@ -1190,7 +866,7 @@ export const App = (p) => (
         let text = format!("{open}{}1{}{close}\n", "(".repeat(20_000), ")".repeat(20_000));
         let braces = format!("{open}{}1{}{close}\n", "{a:".repeat(20_000), "}".repeat(20_000));
         for text in [text, braces] {
-            let analysis = analyze_source(path, &text, AnalysisProfile::Full);
+            let analysis = analyze_source(path, &text);
             assert!(
                 matches!(analysis.degradation, Some(Degradation::TooDeep { .. })),
                 "{path}: {:?}",
@@ -1205,7 +881,7 @@ export const App = (p) => (
     #[case::casts("as T ")]
     fn nesting_hidden_behind_a_brace_in_a_string_is_counted_in_a_jsx_file(#[case] chain: &str) {
         let text = format!("export const x = <p>'{{{}a}}'</p>;\n", chain.repeat(100_000));
-        let analysis = analyze_source("a.tsx", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("a.tsx", &text);
         assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { .. })), "{:?}", analysis.degradation);
     }
 
@@ -1216,10 +892,9 @@ export const App = (p) => (
             "[".repeat(3_000),
             "]".repeat(3_000)
         );
-        let analysis = analyze_source("a.tsx", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("a.tsx", &text);
         assert_eq!(analysis.degradation, None);
-        let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["x", "y"]);
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Variable, None), (2, SymbolKind::Variable, None)]);
     }
 
     #[test]
@@ -1229,10 +904,10 @@ export const App = (p) => (
         let count = 3_400_000 / entry.len();
         let text: String = (0..count).map(|index| entry.replace("000000", &format!("{index:06}"))).collect();
         assert!(text.len() > 3_300_000 && text.len() < parse::MAX_PARSED_SOURCE_LEN);
-        let analysis = analyze_source("generated.ts", &text, AnalysisProfile::Structural);
+        let analysis = analyze_source("generated.ts", &text);
         assert_eq!(analysis.degradation, None);
-        assert_eq!(analysis.symbols.len(), count);
-        assert_eq!(analysis.symbols[count - 1].name, format!("entry{:06}", count - 1));
+        assert_eq!(analysis.blocks.len(), count);
+        assert!(analysis.blocks[count - 1].code.starts_with(&format!("export const entry{:06} ", count - 1)));
     }
 
     fn list_of(count: usize, item: impl Fn(usize) -> String) -> String {
@@ -1246,26 +921,23 @@ export const App = (p) => (
 
     #[test]
     fn three_thousand_sibling_elements_are_not_nested_and_are_parsed() {
-        let analysis = analyze_source("List.tsx", &list_of(3_000, keyed_item), AnalysisProfile::Full);
+        let analysis = analyze_source("List.tsx", &list_of(3_000, keyed_item));
         assert_eq!(analysis.degradation, None);
         assert!(!analysis.had_parse_errors);
-        assert_eq!(symbols(&analysis), [("List", SymbolKind::Function, 1, Some("function List()"))]);
-        assert_eq!(analysis.jsx_elements().len(), 3_001);
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Function, Some("function List()"))]);
     }
 
     #[test]
     fn twelve_thousand_self_closing_siblings_are_parsed() {
-        let analysis =
-            analyze_source("List.tsx", &list_of(12_000, |_| "      <li/>\n".to_owned()), AnalysisProfile::Full);
+        let analysis = analyze_source("List.tsx", &list_of(12_000, |_| "      <li/>\n".to_owned()));
         assert_eq!(analysis.degradation, None);
-        assert_eq!(symbols(&analysis), [("List", SymbolKind::Function, 1, Some("function List()"))]);
-        assert_eq!(analysis.jsx_elements().len(), 12_001);
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Function, Some("function List()"))]);
     }
 
     #[test]
     fn siblings_past_the_cap_are_degraded_without_being_parsed() {
         // 5,000 keyed items cost 75,000 units against the cap of 65,536.
-        let analysis = analyze_source("List.tsx", &list_of(5_000, keyed_item), AnalysisProfile::Full);
+        let analysis = analyze_source("List.tsx", &list_of(5_000, keyed_item));
         assert_degraded(&analysis);
         assert_eq!(
             analysis.degradation,
@@ -1276,17 +948,17 @@ export const App = (p) => (
     #[test]
     fn a_long_chain_of_additions_is_parsed_up_to_the_cap() {
         let text = format!("export const x = 1{};\n", "+1".repeat(4_000));
-        let analysis = analyze_source("sum.ts", &text, AnalysisProfile::Full);
+        let analysis = analyze_source("sum.ts", &text);
         assert_eq!(analysis.degradation, None);
-        assert_eq!(symbols(&analysis), [("x", SymbolKind::Variable, 1, None)]);
+        assert_eq!(outline(&analysis), [(1, SymbolKind::Variable, None)]);
     }
 
     #[test]
     fn code_without_semicolons_is_not_charged_for_the_lines_before() {
         let text = "const a = f(1)\n".repeat(20_000);
-        let analysis = analyze_source("nosemi.ts", &text, AnalysisProfile::Structural);
+        let analysis = analyze_source("nosemi.ts", &text);
         assert_eq!(analysis.degradation, None);
-        assert_eq!(analysis.symbols.len(), 20_000);
+        assert_eq!(analysis.blocks.len(), 20_000);
     }
 
     #[test]
@@ -1299,31 +971,20 @@ export const App = (p) => (
             "(".repeat(100_000),
             "(".repeat(100_000),
         );
-        let analysis = analyze_source("long.ts", &text, AnalysisProfile::Structural);
+        let analysis = analyze_source("long.ts", &text);
         assert_eq!(analysis.degradation, None);
-        let names: Vec<_> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["a", "b", "c"]);
-    }
-
-    #[test]
-    fn the_source_closure_error_is_returned_and_the_closure_runs_once() {
-        let calls = Rc::new(Cell::new(0));
-        let counter = Rc::clone(&calls);
-        let source = Box::new(move || {
-            counter.set(counter.get() + 1);
-            Err(MonoklError::TooManyTerms { count: 1, limit: 1 })
-        });
-        let error = TsAnalyzer::new().analyze(Utf8Path::new("a.ts"), source).unwrap_err();
-        assert!(matches!(error, MonoklError::TooManyTerms { count: 1, limit: 1 }));
-        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            outline(&analysis),
+            [(1, SymbolKind::Variable, None), (3, SymbolKind::Variable, None), (5, SymbolKind::Variable, None)]
+        );
     }
 
     #[test]
     fn analyzing_twice_gives_identical_results() {
         let files = ["index.ts", "components/Button.tsx", "hooks/useCart.ts", "utils/format.ts", "utils/validation.ts"];
         for relative in files {
-            let first = analyze_fixture(relative, AnalysisProfile::Full);
-            let second = analyze_fixture(relative, AnalysisProfile::Full);
+            let first = analyze_fixture(relative);
+            let second = analyze_fixture(relative);
             assert_eq!(format!("{first:?}"), format!("{second:?}"));
         }
     }
