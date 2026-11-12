@@ -13,6 +13,7 @@ use ignore::gitignore::Gitignore;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
+use crate::analysis::lang::is_test_path;
 use crate::error::{MonoklError, Result};
 use crate::types::LineHit;
 
@@ -48,9 +49,8 @@ pub const MAX_LINE_BYTES: usize = 4096;
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextSearchOptions {
-    /// Searches test files too. When false, a file is skipped if its path below the root has a `__tests__`, `test`,
-    /// `tests` or `spec` directory, or ends in `.test.ts`, `.test.tsx`, `.test.js`, `.spec.ts`, `.spec.tsx` or
-    /// `.spec.js`. Matching is case-sensitive.
+    /// Searches test files too. When false, a file is skipped if [`is_test_path`] says its path below the root is a
+    /// test file's. Matching is case-sensitive.
     pub allow_tests: bool,
     /// Skips hidden files and what `.gitignore` and `.ignore` files inside the root exclude, with or without a `.git`
     /// directory. When the root lies inside a git repository (the nearest ancestor with a `.git` entry), the
@@ -658,37 +658,6 @@ fn without_line_terminator(line: &[u8]) -> &[u8] {
         Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
         None => line,
     }
-}
-
-/// Classifies a path relative to the search root, so directories above the root never make a file a test.
-fn is_test_path(relative: &Utf8Path) -> bool {
-    let path: String = relative.components().flat_map(|component| ["/", component.as_str()]).collect();
-    path.contains("/__tests__/")
-        || path.contains("/test/")
-        || path.contains("/tests/")
-        || path.contains("/spec/")
-        || path.ends_with(".test.ts")
-        || path.ends_with(".test.tsx")
-        || path.ends_with(".test.js")
-        || path.ends_with(".test.jsx")
-        || path.ends_with(".test.mjs")
-        || path.ends_with(".test.cjs")
-        || path.ends_with(".test.mts")
-        || path.ends_with(".test.cts")
-        || path.ends_with(".spec.ts")
-        || path.ends_with(".spec.tsx")
-        || path.ends_with(".spec.js")
-        || path.ends_with(".spec.jsx")
-        || path.ends_with(".spec.mjs")
-        || path.ends_with(".spec.cjs")
-        || path.ends_with(".spec.mts")
-        || path.ends_with(".spec.cts")
-        // The out-of-line `#[cfg(test)] mod tests;` of Rust: the attribute is in the parent file, so the file itself
-        // can only be recognized by its name.
-        || path.ends_with("/tests.rs")
-        || path.ends_with("/test.rs")
-        || path.ends_with("_tests.rs")
-        || path.ends_with("_test.rs")
 }
 
 #[cfg(test)]

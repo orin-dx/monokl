@@ -1,4 +1,5 @@
 use super::bm25::{as_f64, round6};
+use crate::analysis::Language;
 use crate::tokens::tokenize_source;
 use crate::types::{CodeBlock, SymbolKind};
 
@@ -37,7 +38,7 @@ pub fn name_match_boost(block: &CodeBlock, query_terms: &[&str]) -> f64 {
     }
     let text = block.symbol_signature.as_deref().unwrap_or(&block.code);
     let line = text.lines().map(str::trim).find(|line| !is_comment_or_decorator(line)).unwrap_or_default();
-    let name_tokens = if block.file.extension() == Some("rs") {
+    let name_tokens = if Language::of(&block.file) == Some(Language::Rust) {
         tokenize_source(&unrestricted(line))
     } else {
         tokenize_source(head_of(line))

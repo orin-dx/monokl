@@ -71,7 +71,6 @@ fn candidates(count: usize, layout: Layout) -> Vec<(CodeBlock, Vec<String>)> {
                 code: format!("function handle{index}(input) {{\n  return needle + {index};\n}}"),
                 symbol_signature: Some(format!("function handle{index}(input)")),
                 matched_lines: vec![line_start + 1],
-                matched_keywords: vec!["needle".to_owned()],
                 parent: None,
             };
             let tokens = tokenize_block(&block);

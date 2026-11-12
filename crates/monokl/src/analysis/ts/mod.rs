@@ -7,10 +7,10 @@ use std::sync::Arc;
 use camino::Utf8Path;
 
 use super::file_analysis::FileAnalysis;
-use super::lang::{LanguageAnalyzer, LanguageId};
+use super::lang::{Language, LanguageAnalyzer};
 use crate::error::Result;
 
-const LANGUAGES: [LanguageId; 1] = [LanguageId::TypeScript];
+const LANGUAGES: [Language; 2] = [Language::TypeScript, Language::JavaScript];
 
 /// Analyzes TypeScript and JavaScript files with OXC.
 ///
@@ -47,13 +47,12 @@ impl TsAnalyzer {
 }
 
 impl LanguageAnalyzer for TsAnalyzer {
-    fn languages(&self) -> &[LanguageId] {
+    fn languages(&self) -> &[Language] {
         &LANGUAGES
     }
 
     fn supports(&self, path: &Utf8Path) -> bool {
-        !(path.as_str().ends_with(".d.ts") || path.as_str().ends_with(".d.mts") || path.as_str().ends_with(".d.cts"))
-            && matches!(path.extension(), Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs"))
+        Language::of(path).is_some_and(|language| LANGUAGES.contains(&language))
     }
 
     fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
@@ -124,7 +123,7 @@ mod tests {
 
     #[test]
     fn it_reports_its_language() {
-        assert_eq!(TsAnalyzer::new().languages(), [LanguageId::TypeScript]);
+        assert_eq!(TsAnalyzer::new().languages(), [Language::TypeScript, Language::JavaScript]);
     }
 
     #[test]
