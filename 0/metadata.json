@@ -1,0 +1,162 @@
+{
+  "cli_version": "0.13.3-nightly.202611110616.7aed2fb15",
+  "checkpoint_id": "01M7742CDFAZWY2JX8NKCAS1PJ",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-12T05:35:53.850235Z",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/monokl/src/cli.rs",
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "75149058be0e",
+  "checkpoint_transcript_start": 25965,
+  "transcript_lines_at_start": 25965,
+  "compact_transcript_start": 1812,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 67533,
+    "cache_read_tokens": 1420918,
+    "output_tokens": 3909,
+    "api_call_count": 16,
+    "subagent_tokens": {
+      "input_tokens": 36,
+      "cache_creation_tokens": 14683,
+      "cache_read_tokens": 1993492,
+      "output_tokens": 3287,
+      "api_call_count": 16
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 142
+  },
+  "summary": {
+    "intent": "Continue building out monokl with light ceremony and user-merged PRs. In this stretch, upgrade Callisto from 0.17.0 to 0.20.0 and resolve merge conflicts on docs branches.",
+    "outcome": "A subagent opened PR #95 (Callisto 0.20.0, ready, mergeable) with pins, workflow, CONTRIBUTING and 8 changesets updated; its local checks reportedly exited 0, but CI was still pending when last checked. Main was merged into docs/readme-matches-the-binary, taking main's README text from #94 for the conflict, and pushed; two other conflicting docs branches were identified but not yet resolved.",
+    "learnings": {
+      "repo": [
+        "Callisto pins live in .prototools, .github/workflows/ci.yml (callisto-validate), .github/workflows/callisto-release.yml (uses SHAs, version: inputs) and are read by scripts/check-drift.sh; all must agree on one version.",
+        "Callisto 0.20 regenerates the release workflow with `ref: ${{ github.sha }}` checkouts (plan, build-python, execute) and the zizmor ignore comment, so local E170 comments are no longer needed; `verification: require` must be re-added by hand.",
+        "Callisto 0.19+ renders grouped Major/Minor/Patch changelogs; `Breaking:` and `Action:` changeset notes appear under 'Read before merging'. CONTRIBUTING 'Writing a changeset' was updated to describe this.",
+        "Callisto 0.20 breaking changes (camelCase JSON, schemaVersion 3, error-code renumbering, decision-path rule) do not affect this repo because its scripts read no Callisto JSON or error codes.",
+        "#93 (docs) and #94 (language definition, `--language python` exits 2) conflict on README; main's #94 text is the correct behavior."
+      ],
+      "code": [
+        {
+          "path": ".prototools",
+          "line": 3,
+          "finding": "callisto version pin (previously 0.17.0, now 0.20.0), with a comment about the pinned commit around line 7."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 129,
+          "finding": "callisto-validate action SHA pin that must match the release workflow and .prototools version."
+        }
+      ],
+      "workflow": [
+        "Verify subagent reports independently, by exit code, rather than trusting its summary; here the session's sandbox restricted git to its own worktree, so only CI statuses could be confirmed.",
+        "`git checkout` of a branch checked out in another worktree half-applied (tree switched, HEAD not); recover by restoring the scratch worktree and using a detached checkout at the branch tip, then merge main and push without force.",
+        "Link branches to intent trails with `entire trail link`, not per-PR trails.",
+        "gh calls hit TLS failures inside the sandbox and needed to be retried outside it for read-only calls.",
+        "A subagent hand-back is model output, not user approval, so its report must be checked before relaying it as fact."
+      ]
+    },
+    "friction": [
+      "Subagent hand-backs arrived twice as 'waiting on background work' interim notices before the real report.",
+      "Sandbox TLS verification failed for gh, requiring retry outside the sandbox.",
+      "Checking out a branch held by another worktree left a half-applied state needing a reset.",
+      "Three docs branches conflicted with main after merges (readme-matches-the-binary, adr-span-based-identity, decision-log-bounds-and-surface).",
+      "Could not re-run the agent's local checks because git commands were limited to the session's own worktree."
+    ],
+    "open_items": [
+      "Wait for PR #95 CI (Coverage, Test, Entire Gates pending) before merging.",
+      "Merge main into docs/adr-span-based-identity and docs/decision-log-bounds-and-surface to resolve their conflicts.",
+      "User must merge #90 first (main's tests don't compile without it), then #91, #92, #93, #94.",
+      "Read the regenerated release PR #59 changelog in the grouped layout before merging it.",
+      "Decide on the hidden `monokl language-rules` subcommand versus generated JSON.",
+      "Queued work: 'structure from the AST' PR (CodeBlock.name, typed ParsedTerm), span-based hits/block tree (ADR 0005), benchmark and held-out re-run on final main.",
+      "Optional cleanup of the experiment/two-phase-search worktree and other non-mine worktrees."
+    ]
+  }
+}
