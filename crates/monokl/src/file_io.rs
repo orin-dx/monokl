@@ -6,7 +6,6 @@ use camino::Utf8PathBuf;
 
 /// A filesystem operation that failed, with the path it was operating on.
 #[derive(Debug, thiserror::Error)]
-#[cfg_attr(feature = "miette", derive(miette::Diagnostic))]
 #[non_exhaustive]
 pub enum FileIoError {
     #[error("failed to read {path}")]
