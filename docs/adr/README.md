@@ -13,6 +13,8 @@ One line per ADR, with what it guards. Add a line when you add an ADR.
 - [3. One crate with core and agent modules, not two crates](0003-single-crate-with-core-and-agent-modules.md): `core` never imports `agent`, never serializes result types, never depends on tiktoken or michi; split into crates only for a reason a feature flag can't meet.
 - [4. Search stays stateless and every stage has a stated bound](0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md): no index, cache or daemon; every stage's doc comment states its bound; no input-sized stacks, size checked before reading, global `--timeout`, deterministic fold order.
 
+- [5. Hits and blocks are identified by byte spans, and blocks form a tree](0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md): no stage derives ownership, signatures or names from line numbers or text; analyzers emit spans, parent indices and typed names once.
+
 Changing any of these needs a new ADR.
 
 ## When to write one
