@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
-      - uses: orin-dx/callisto/.github/actions/callisto-action@ff116694c00f08ce7edc3f1b00ed4fa1d6ffd084 # callisto@0.17.0
+      - uses: orin-dx/callisto/.github/actions/callisto-action@aebeedcdaa1dce8f0d9ad1836844ab6be68daf1f # callisto@0.20.0
         with: {mode: version-pr, branch: main}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -34,7 +34,6 @@ jobs:
       has_python: ${{ steps.matrix.outputs.has_python }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # `callisto release plan` needs a detached HEAD (E170), so check out the commit, not the branch.
         with: {ref: "${{ github.sha }}", fetch-depth: 0, persist-credentials: false}
       # Content precondition, not release detection: `release plan` requires this commit to write its decision.
       - name: Check for a release decision
@@ -48,8 +47,8 @@ jobs:
           fi
           echo "release=$release" >> "$GITHUB_OUTPUT"
       - if: steps.decision.outputs.release == 'true'
-        uses: orin-dx/callisto/.github/actions/setup-callisto@ff116694c00f08ce7edc3f1b00ed4fa1d6ffd084 # callisto@0.17.0
-        with: {version: callisto@0.17.0, verification: require}
+        uses: orin-dx/callisto/.github/actions/setup-callisto@aebeedcdaa1dce8f0d9ad1836844ab6be68daf1f # callisto@0.20.0
+        with: {version: callisto@0.20.0, verification: require}
       - name: Plan the release
         if: steps.decision.outputs.release == 'true'
         run: |
@@ -187,9 +186,9 @@ jobs:
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {fetch-depth: 0, persist-credentials: false}
-      - uses: orin-dx/callisto/.github/actions/setup-callisto@ff116694c00f08ce7edc3f1b00ed4fa1d6ffd084 # callisto@0.17.0
-        with: {version: callisto@0.17.0, verification: require}
+        with: {ref: "${{ github.sha }}", fetch-depth: 0, persist-credentials: false}
+      - uses: orin-dx/callisto/.github/actions/setup-callisto@aebeedcdaa1dce8f0d9ad1836844ab6be68daf1f # callisto@0.20.0
+        with: {version: callisto@0.20.0, verification: require}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-intent
@@ -221,10 +220,9 @@ jobs:
     permissions: {contents: write, id-token: write, attestations: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # A detached HEAD, like the plan job: Callisto refuses to release from a branch checkout.
         with: {ref: "${{ github.sha }}", fetch-depth: 0} # zizmor: ignore[artipacked] tag push needs persisted credentials
-      - uses: orin-dx/callisto/.github/actions/setup-callisto@ff116694c00f08ce7edc3f1b00ed4fa1d6ffd084 # callisto@0.17.0
-        with: {version: callisto@0.17.0, verification: require}
+      - uses: orin-dx/callisto/.github/actions/setup-callisto@aebeedcdaa1dce8f0d9ad1836844ab6be68daf1f # callisto@0.20.0
+        with: {version: callisto@0.20.0, verification: require}
       - name: Install twine
         if: needs.plan.outputs.has_python == 'true'
         run: |
