@@ -10,7 +10,6 @@ when the module lands.
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-#[cfg_attr(feature = "miette", derive(miette::Diagnostic))]
 #[non_exhaustive]
 pub enum MonoklError {
     Io(#[from] FileIoError),                                        // transparent
@@ -24,9 +23,7 @@ pub type Result<T> = std::result::Result<T, MonoklError>;
 ```
 
 `#[non_exhaustive]` — every downstream `match` needs a wildcard arm; adding variants later is
-non-breaking. `miette::Diagnostic` derive is present whenever the `miette` feature is on, which
-`cli` always pulls in (`cli = ["dep:clap", "miette"]`) — i.e. every CLI build has it, whether or
-not anything actually renders it (see gap 5).
+non-breaking. The CLI prints a failed search as a structured error on stderr through michi and exits 1.
 
 `FileIoError` (`file_io.rs`, ADR 0001) has its own `#[non_exhaustive]` enum with one variant today:
 `Read { path: Utf8PathBuf, #[source] source: io::Error }`. `MonoklError::Io` wraps it transparently via `#[from]`.
@@ -38,12 +35,12 @@ not anything actually renders it (see gap 5).
 | `Io` | `FileIoError::read` — a file read failed | The text searcher and the analyzer's file read; auto via `#[from]` on any `?` |
 | `Walk` | `ignore::WalkBuilder` iterator yields `Err` mid-traversal (perm denied, loop, etc.) | `text_search::search_files` raises it only for the root itself (missing, not a directory, cannot be listed); errors below the root go in `TextSearchResult::unreadable`/`walk_errors_without_path` (05 §18). Index-build walker (01-core:2206), 03-multi:2033. `path` is the walk root, not the failing entry |
 | `RegexBuild` | `RegexMatcherBuilder::build()` fails to compile a query pattern | `text_search::search_files` compiles each pattern alone, then all together, before walking; auto via `#[from]`/`?`. The per-term highlighting compile must fail the same way (05 §18, #7) — see gap 3 |
-| `NonUtf8Path` | `Utf8PathBuf::from_path_buf` fails at a canonicalization boundary | `search` stage 3 (root canon.), `dependents` (file+root canon.), `pipeline::session::canonicalize_utf8`/`current_dir` fallback (03-multi:1289-1292). NOT raised mid-walk — see gap 4 |
+| `NonUtf8Path` | `Utf8PathBuf::from_path_buf` fails at a canonicalization boundary | The search root's canonicalization in `pipeline`. NOT raised mid-walk — see gap 4 |
 | `TooManyTerms` | Query term count exceeds `LIMIT: usize = 64` | Query parse, `parse(&opts.query)` (01-core:831) |
 
 ## Known contract gaps — must be resolved, not ported as-is
 
-Gaps 1 and 2 concern the disk cache, which is not built: `Json` and `StaleDiskCache` are not in the enum above, and
+Gaps 1 and 2 concern the disk cache, which is planned and not built: `Json` and `StaleDiskCache` are not in the enum above, and
 they return with `persist.rs`.
 
 These are audit findings (`docs/spec/07-edge-cases-and-failure-modes.md`, Part 1) where the
@@ -109,18 +106,9 @@ silently pick one when implementing — spec@1 for this subsystem must state the
    round-trip through the rest of the UTF-8-only type system.
    **Partly resolved (05 §18):** `search_files` no longer drops them silently; it counts them in `TextSearchResult::non_utf8_paths`, and the search pipeline turns a non-zero count into one diagnostic.
 
-5. **Two contradictory error-output mechanisms both defined; only one wired up (07#19).**
-   `output.rs::render_error(err: &MonoklError) -> !` (01-core:2436) prints
-   `{"error": "{err}"}` to stdout and `exit(1)` — JSON-on-stdout, matching `render_output`'s own
-   convention. `main()`'s `run()` (01-core:2453-2515) never calls it: every fallible step is
-   `.into_diagnostic().wrap_err(...)?` against `miette::Result`, so failures print via miette's
-   `fancy` stderr renderer instead. `render_error` is unreachable dead code as specified. Which
-   is the real contract? If JSON-on-stdout (matching the "agent-parseable output" value
-   proposition the audit itself invokes), `main()` must call `render_error`, not miette. If
-   miette-on-stderr, delete `render_error` and correct any doc/agent-facing promise of parseable
-   stdout errors. This also decides whether `#[error(...)]` strings are the real user-facing
-   surface (miette path) or need a distinct structured JSON shape (render_error path) — they
-   can't cleanly serve both at once.
+5. **Error output (07#19). Resolved:** a failed search prints one structured error through michi on stderr
+   (`error`, `message`, `causes`, `exit_code`) and exits 1; a bad command line exits 2. There is no `render_error` and no
+   miette.
 
 ## Removed variants — caller contract
 
@@ -130,7 +118,8 @@ removed because nothing constructs them: parse failures surface via `FileAnalysi
 
 The code also lacks the variants whose only construction sites are in unbuilt modules: `Json`, `StaleDiskCache` and
 `LockPoisoned` (cache), `InvalidGitRef` and `Git` (git-scoped queries), `SymlinkRejected` and `FileTooLarge` (I/O
-safety), `PathOutsideRoot` (`dependents`) and `TokenizerInit` (`tiktoken_rs::o200k_base_singleton` cannot fail), and
+safety; search reports an oversize file as a `Skipped` diagnostic instead), `PathOutsideRoot` (`dependents`) and
+`TokenizerInit` (the token count is a byte estimate, with no tokenizer), and
 `FileIoError`'s `Write`, `CreateDir` and `Remove`. The spec text for each stays the design. Removal is a clean cut,
 because `#[non_exhaustive]` already forces external `match` arms to carry a wildcard.
 

@@ -4,40 +4,40 @@ What monokl believes, and why. See [ARCHITECTURE.md](ARCHITECTURE.md) for how th
 
 ## Design tenets
 
-**Parse once, use everywhere.** A single `FileAnalysis` cache feeds every command — `search`, `symbols`, `refs`, `definition`, all of it. No command re-parses a file another command already analyzed in the same run.
+**Parse once.** Each file is parsed once per run, by one `LanguageAnalyzer`. Later stages read its `FileAnalysis` and never re-parse.
 
-**Aggregate views, not re-scans.** The import graph and symbol index are folded from cached per-file data by `WorkspaceEnricher`s. Building workspace-wide structure never means re-walking the filesystem or re-reading files that are already cached.
+**Every stage is bounded.** File size, line length, nesting, file count and time each have a stated limit, and search keeps no state between runs ([ADR 0004](docs/adr/0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md)).
 
-**Token budget is non-negotiable.** `max_tokens` defaults to 20,000. When output gets truncated, the response says so explicitly — a truncation marker, not silent data loss. An agent consuming monokl's output should never have to guess whether it's seeing everything.
+**Token budget is non-negotiable.** `--max-tokens` defaults to 20,000. When output is cut, a `help` line says how many rows were cut. An agent consuming monokl's output should never have to guess whether it's seeing everything.
 
-**Determinism.** Serialized output uses `BTreeMap` for stable key order. Ties break on `(file, line_start)`. BM25 scores round to 6 decimal places specifically to eliminate floating-point divergence between x86-64 and ARM64 — the same query against the same code should produce byte-identical JSON regardless of what machine ran it.
+**Determinism.** Ties in score break on file path, line range, kind and code, so the order never depends on the walk or the thread schedule. Scores round to 6 decimal places to remove floating-point divergence between x86-64 and ARM64. The same query against the same code prints the same output on any machine. The exception is a partial result after a timeout.
 
-**Arena lifetime containment.** No AST node born from the parser's `Allocator` escapes a per-file `analyze()` call. Every field on `FileAnalysis` is owned. This isn't a style preference — it's what makes caching and cross-thread sharing possible at all.
+**Arena lifetime containment.** No AST node born from the parser's `Allocator` escapes a per-file `analyze()` call. Every field on `FileAnalysis` is owned. This isn't a style preference. It's what lets a `FileAnalysis` cross threads.
 
-**Graceful degradation.** A broken file sets `had_parse_errors = true` and still contributes whatever data survived — it doesn't abort the whole operation. An unsupported language emits a `Skipped` diagnostic — it doesn't crash or silently return nothing.
+**Graceful degradation.** A file with syntax errors still contributes whatever parsed. A file that is too large, too deep or unreadable is reported in a `help` line and does not abort the search. An unsupported `--language` prints a `help` line, not a crash and not silence.
 
-**Tier separation.** Level 1 (`LanguageAnalyzer`, per-file) produces. Level 2 (`WorkspaceEnricher`, per-workspace) folds. Neither layer does the other's job.
+**Planned: aggregate views, not re-scans.** An import graph and a symbol index folded from per-file analyses by a `WorkspaceEnricher`, with `symbols`, `refs` and `definition` on top. Not built. When built, tier 1 (`LanguageAnalyzer`, per file) produces and tier 2 (`WorkspaceEnricher`, per workspace) folds, and neither does the other's job.
 
-**Content hash is authoritative.** `blake3` over file content is the real cache key. `mtime`/ `size` is the cheap fast-path check that avoids reading files that haven't changed — never the source of truth on its own.
+**Planned: content hash is authoritative.** If a parse cache is built, a `blake3` hash of file content is its key, and `mtime` and size are only a fast path. Not built.
 
 ## Non-goals
 
 Deliberately not built, and why:
 
-- **A persistent on-disk search index** (tantivy-style). The cache remembers parses; it doesn't maintain a standing inverted index. Simpler, and the numbers so far say it's fast enough without one below ~50k files — see [`docs/spec/05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md).
+- **A persistent on-disk search index** (tantivy-style). Search is stateless today, and a planned parse cache would remember parses, not maintain a standing inverted index. Simpler, and the numbers so far say it's fast enough without one below ~50k files. See [`docs/spec/05-research-and-decisions.md`](docs/spec/05-research-and-decisions.md).
 - **A full [Salsa](https://github.com/salsa-rs/salsa) incremental-computation framework.** Real precedent exists for using Salsa standalone (Astral's `ty`, Biome), decoupled from rust-analyzer's own query set — this is an open investigation track, not a closed door.
 - **Embedding-based retrieval by default.** No code-specific evidence it beats lexical + structural signals for single-codebase search, and it would mean either bundling a model or calling a cloud API — both in tension with staying local-first and low-latency. Gate behind an explicit opt-in if it's ever added; don't make it the default posture.
 - **Stemming.** Code identifiers aren't prose; stemming rules built for English text don't transfer.
-- **An in-memory trigram index.** Tried, measured, rejected — 600MB–1.2GB resident at scale in an earlier design. The current `WorkspaceIndex` design lands at roughly 90–140MB at 50k files by comparison.
+- **An in-memory trigram index.** Tried, measured, rejected — 600MB–1.2GB resident at scale in an earlier design. The planned `WorkspaceIndex` design lands at roughly 90–140MB at 50k files by comparison.
 - **Tree-sitter for TypeScript/JavaScript.** OXC is the native, arena-owned, actively-maintained alternative already chosen — no reason to trade that for a generic multi-language parser framework on the one language that has a better option.
 - **A running agent loop.** monokl is a tool an agent calls, not an agent itself.
 
 ## Language coverage isn't uniform, and shouldn't pretend to be
 
-A language gets a native parser and full `Structural`/`Exact` precision when it earns that investment — not by default, and not on a fixed roadmap regardless of what the parser ecosystem actually supports.
+A language gets a native parser when it earns that investment — not by default, and not on a fixed roadmap regardless of what the parser ecosystem actually supports.
 
-- **TypeScript/JS and Rust** — real, mature native-Rust parsers (OXC, `ra_ap_syntax`).
-- **Python and Java** — no viable native option exists, checked directly against crates.io, so they use tree-sitter instead.
-- **Go** — `gosyn` is a real, actively-maintained native option.
+- **TypeScript/JS and Rust** — built. Real, mature native-Rust parsers (OXC, `ra_ap_syntax`).
+- **Python and Java** — planned, not built. No viable native option exists, checked directly against crates.io, so they would use tree-sitter.
+- **Go** — planned, not built. `gosyn` is a real, actively-maintained native option.
 
-Precision targets follow from what's achievable per language, declared explicitly via the `CapabilityPrecision` model — never silently assumed uniform across languages that aren't.
+Planned: precision per operation declared through a `CapabilityPrecision` model, so no language is silently assumed to match another.

@@ -9,7 +9,7 @@ Topic docs for monokl's subsystems. Read the one your task touches, not all of t
 | `error.rs`, `file_io.rs`, `MonoklError`, any `Result<T>` return | [error-taxonomy.md](error-taxonomy.md) |
 | `types.rs`, `Language`, `CodeBlock`, `RankedBlock` | [core-types.md](core-types.md) |
 | `query/`, ranking, BM25, tie-breaking, determinism | [query-and-ranking.md](query-and-ranking.md) |
-| The in-memory and disk cache, digest vs. mtime (not built; `digest.rs` was deleted unread) | [cache-architecture.md](cache-architecture.md); `Digest` is ADR 0002 |
+| The in-memory and disk cache, digest vs. mtime (planned, not built; `digest.rs` was deleted unread) | [cache-architecture.md](cache-architecture.md); `Digest` is ADR 0002 |
 | `LanguageAnalyzer`, `AnalyzerRegistry` | [language-analyzer-contract.md](language-analyzer-contract.md) |
 | Daemon and session mode, `PrecisionUpgrader`, `PrecisionLedger` (not v0.1.0) | [daemon-lifetimes.md](daemon-lifetimes.md) |
 

@@ -58,7 +58,7 @@ pub enum Language { TypeScript, JavaScript, Rust }
 pub struct Diagnostic { pub kind: DiagnosticKind, pub path: Option<Utf8PathBuf>, pub message: String }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticKind { Degraded, Skipped, Warning }
+pub enum DiagnosticKind { Degraded, Skipped, Warning, LossyRead }
 ```
 
 Every result type (today only `SearchResponse`) carries a `diagnostics: Vec<Diagnostic>` field. Per the
@@ -72,7 +72,7 @@ When implementing a command that can degrade, check that command's own spec text
 ## Minor types (one line each)
 
 - `SymbolKind` — universal (`Function, Method, Constructor, Class, Struct, Enum, Interface, TypeAlias, Property, Field, Variable, Module`) + Rust-only (`Impl, Macro`) + `Other` catch-all. `Copy`.
-- `SearchResponse { results: Vec<RankedBlock>, total_blocks_before_truncation, truncated, total_bytes, total_tokens, diagnostics }` — top-level `search` command output. Counts only: the output layer words the truncation hint.
+- `SearchResponse { results: Vec<RankedBlock>, total_blocks_before_truncation, truncated, diagnostics }` — top-level `search` command output. Counts only: the output layer words the truncation hint.
 - `LineHit { line_number, text }` — internal grep-hit representation only.
 
 ## Types removed until a command reads them
