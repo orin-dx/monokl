@@ -9,15 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use camino::Utf8PathBuf;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::analysis::lang::{Language, TEST_DIRS};
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::budget::{Budget, apply_budget};
 use crate::error::MonoklError;
 use crate::output::agent::{ToDomainError, render_search, search_row_texts};
 use crate::pipeline::{SearchRequest, search_with_timeout};
 use crate::text_search::DEFAULT_MAX_FILES;
-use crate::types::{Diagnostic, DiagnosticKind, Language};
+use crate::types::{Diagnostic, DiagnosticKind};
 
 /// AST-aware code search for coding agents.
 #[derive(Debug, Parser)]
@@ -31,6 +32,9 @@ struct Cli {
 enum Command {
     /// Searches a directory and prints the matching code blocks, best first.
     Search(SearchArgs),
+    /// Prints the file rules of every language as JSON, for the scripts that compare monokl with ripgrep.
+    #[command(hide = true)]
+    LanguageRules,
 }
 
 #[derive(Debug, Args)]
@@ -90,11 +94,38 @@ where
             return ExitCode::from(u8::try_from(code).unwrap_or(2));
         }
     };
-    let Command::Search(args) = cli.command;
-    match run_search(&args) {
-        Ok(text) => exit_code(writeln!(out, "{text}"), ExitCode::SUCCESS),
-        Err(text) => exit_code(writeln!(err, "{text}"), ExitCode::FAILURE),
+    match cli.command {
+        Command::Search(args) => match run_search(&args) {
+            Ok(text) => exit_code(writeln!(out, "{text}"), ExitCode::SUCCESS),
+            Err(text) => exit_code(writeln!(err, "{text}"), ExitCode::FAILURE),
+        },
+        Command::LanguageRules => exit_code(writeln!(out, "{}", language_rules_json()), ExitCode::SUCCESS),
     }
+}
+
+/// `["a","b"]`. Every string in the rules is plain ASCII with nothing to escape.
+fn json_strings(items: &[&str]) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();
+    format!("[{}]", quoted.join(","))
+}
+
+/// The rules in [`crate::analysis::lang`] as one line of JSON, so a script reads them instead of copying them.
+fn language_rules_json() -> String {
+    let languages: Vec<String> = Language::ALL
+        .into_iter()
+        .filter_map(|language| {
+            let name = language.to_possible_value()?.get_name().to_owned();
+            let rules = language.rules();
+            Some(format!(
+                "{{\"name\":\"{name}\",\"extensions\":{},\"excluded_suffixes\":{},\"test_stem_suffixes\":{},\"test_stems\":{}}}",
+                json_strings(rules.extensions),
+                json_strings(rules.excluded_suffixes),
+                json_strings(rules.test_stem_suffixes),
+                json_strings(rules.test_stems),
+            ))
+        })
+        .collect();
+    format!("{{\"test_dirs\":{},\"languages\":[{}]}}", json_strings(TEST_DIRS), languages.join(","))
 }
 
 /// `ok` unless the write failed. A closed reader (`| head`) is not a failure.
@@ -187,6 +218,32 @@ mod tests {
         assert_eq!(code, ExitCode::SUCCESS);
         assert!(out.contains("Searches a directory"), "got: {out}");
         assert_eq!(err, "");
+    }
+
+    #[test]
+    fn language_rules_are_one_line_of_json_for_every_language() {
+        let (code, out, err) = run_args(&["language-rules"]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(err, "");
+        assert_eq!(
+            out,
+            concat!(
+                r#"{"test_dirs":["__tests__","test","tests","spec"],"languages":["#,
+                r#"{"name":"typescript","extensions":["ts","tsx","mts","cts"],"#,
+                r#""excluded_suffixes":[".d.ts",".d.mts",".d.cts"],"test_stem_suffixes":[".test",".spec"],"test_stems":[]},"#,
+                r#"{"name":"javascript","extensions":["js","jsx","mjs","cjs"],"#,
+                r#""excluded_suffixes":[],"test_stem_suffixes":[".test",".spec"],"test_stems":[]},"#,
+                r#"{"name":"rust","extensions":["rs"],"#,
+                r#""excluded_suffixes":[],"test_stem_suffixes":["_test","_tests"],"test_stems":["test","tests"]}"#,
+                "]}\n"
+            )
+        );
+    }
+
+    #[test]
+    fn language_rules_are_not_listed_in_help() {
+        let (_, out, _) = run_args(&["--help"]);
+        assert!(!out.contains("language-rules"), "got: {out}");
     }
 
     struct FailingWriter(std::io::ErrorKind);

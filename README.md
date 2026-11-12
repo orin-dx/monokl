@@ -90,7 +90,7 @@ search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,fi
 | `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
 | `--tests` | off | Also search test files: anything under `test/`, `tests/`, `__tests__/` or `spec/`, and `*.test.*` and `*.spec.*` in any searchable extension (`ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `mts`, `cts`). Also searches Rust files named `tests.rs`, `test.rs`, `*_tests.rs` or `*_test.rs` (the usual out-of-line `mod tests;`) and Rust items under `#[cfg(test)]` or `#[test]` |
 | `--no-ignore` | off | Also search hidden files and files that `.gitignore` or `.ignore` exclude, in the search path or its parent directories |
-| `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs` (`python` is accepted but matches nothing yet) |
+| `--language L` | all | Search one language only: `typescript`, `javascript` or `rust`, chosen by file extension: `.ts .tsx .mts .cts`, `.js .jsx .mjs .cjs` or `.rs`. Any other value is a usage error (exit 2) that lists these three |
 | `--timeout SECONDS` | 30 | Stop after this many seconds and print what was found so far. `0` means no limit. Fractions are accepted (`0.5`) |
 
 ## Limits
