@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use camino::Utf8Path;
 
-use super::lang::{LanguageAnalyzer, LanguageId};
+use super::lang::{Language, LanguageAnalyzer};
 
 /// Analyzers in registration order.
 ///
@@ -46,12 +46,12 @@ impl AnalyzerRegistry {
     /// # Examples
     ///
     /// ```
-    /// use monokl::analysis::LanguageId;
+    /// use monokl::analysis::Language;
     /// use monokl::analysis::registry::AnalyzerRegistry;
     ///
-    /// assert!(!AnalyzerRegistry::new(Vec::new()).handles(LanguageId::Rust));
+    /// assert!(!AnalyzerRegistry::new(Vec::new()).handles(Language::Rust));
     /// ```
-    pub fn handles(&self, language: LanguageId) -> bool {
+    pub fn handles(&self, language: Language) -> bool {
         self.analyzers.iter().any(|analyzer| analyzer.languages().contains(&language))
     }
 }
@@ -60,17 +60,17 @@ impl AnalyzerRegistry {
 mod tests {
     use super::*;
     use crate::analysis::file_analysis::FileAnalysis;
-    use crate::analysis::lang::LanguageId;
+    use crate::analysis::lang::Language;
     use crate::error::{MonoklError, Result};
 
     /// Claims every path ending in `extension` and reports its one language for it.
     struct ByExtension {
         extension: &'static str,
-        languages: [LanguageId; 1],
+        languages: [Language; 1],
     }
 
     impl LanguageAnalyzer for ByExtension {
-        fn languages(&self) -> &[LanguageId] {
+        fn languages(&self) -> &[Language] {
             &self.languages
         }
         fn supports(&self, path: &Utf8Path) -> bool {
@@ -81,27 +81,61 @@ mod tests {
         }
     }
 
-    fn analyzer(extension: &'static str, language: LanguageId) -> Arc<dyn LanguageAnalyzer> {
+    fn analyzer(extension: &'static str, language: Language) -> Arc<dyn LanguageAnalyzer> {
         Arc::new(ByExtension { extension, languages: [language] })
     }
 
     #[test]
     fn first_registered_match_owns_the_path() {
         let registry = AnalyzerRegistry::new(vec![
-            analyzer("ts", LanguageId::TypeScript),
-            analyzer("rs", LanguageId::Rust),
-            analyzer("ts", LanguageId::Rust),
+            analyzer("ts", Language::TypeScript),
+            analyzer("rs", Language::Rust),
+            analyzer("ts", Language::Rust),
         ]);
         let owner = registry.analyzer_for(Utf8Path::new("src/a.ts")).unwrap();
-        assert_eq!(owner.languages(), [LanguageId::TypeScript]);
+        assert_eq!(owner.languages(), [Language::TypeScript]);
         let owner = registry.analyzer_for(Utf8Path::new("src/lib.rs")).unwrap();
-        assert_eq!(owner.languages(), [LanguageId::Rust]);
+        assert_eq!(owner.languages(), [Language::Rust]);
     }
 
     #[test]
     fn unowned_path_has_no_analyzer() {
-        let registry = AnalyzerRegistry::new(vec![analyzer("ts", LanguageId::TypeScript)]);
+        let registry = AnalyzerRegistry::new(vec![analyzer("ts", Language::TypeScript)]);
         assert!(registry.analyzer_for(Utf8Path::new("README.md")).is_none());
         assert!(AnalyzerRegistry::new(Vec::new()).analyzer_for(Utf8Path::new("a.ts")).is_none());
+    }
+
+    /// The built-in analyzers own a path exactly when `Language::of` names a language, and that language is one of
+    /// the owner's.
+    #[cfg(all(feature = "lang-ts", feature = "lang-rust"))]
+    #[test]
+    fn the_built_in_analyzers_agree_with_the_language_rules() {
+        use crate::analysis::rust::RustAnalyzer;
+        use crate::analysis::ts::TsAnalyzer;
+
+        let registry = AnalyzerRegistry::new(vec![Arc::new(TsAnalyzer::new()), Arc::new(RustAnalyzer::new())]);
+        let mut paths: Vec<String> = Language::ALL
+            .iter()
+            .flat_map(|language| language.rules().extensions)
+            .flat_map(|extension| [format!("a.{extension}"), format!("src/a.test.{extension}")])
+            .collect();
+        paths.extend(
+            ["a.d.ts", "a.d.mts", "a.d.cts", "a.d.js", "a.py", "a.json", "a.TS", "a.ts.map", ".ts", "README.md"]
+                .map(str::to_owned),
+        );
+        for path in &paths {
+            let path = Utf8Path::new(path);
+            let handled = registry.analyzer_for(path).map(|analyzer| analyzer.languages().to_vec());
+            match (handled, Language::of(path)) {
+                (None, None) => {}
+                (Some(handled), Some(language)) => {
+                    assert!(handled.contains(&language), "{path}: {handled:?} vs {language:?}");
+                }
+                (handled, language) => panic!("{path}: analyzer {handled:?} but language {language:?}"),
+            }
+        }
+        for language in Language::ALL {
+            assert!(registry.handles(language), "{language:?}");
+        }
     }
 }

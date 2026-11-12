@@ -50,14 +50,15 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 
 ## Writing a changeset
 
-Each changeset becomes one bullet in the changelog, which is a flat list per version.
+Each changeset becomes one bullet in the changelog. Each version lists its bullets under `Major Changes`, `Minor Changes` and `Patch Changes` headings, below the release date and a compare link. The release PR titles each change by its first line and collapses the rest.
 
 - **One topic per file** in `.changeset/`, with `monokl: minor` for a new capability or `monokl: patch` for a fix.
 - **Lead with what the user sees now,** in one sentence that stands alone. Say what changed, not that something was "improved" or "fixed".
 - **Details go in sub-bullets,** one level deep, each starting with a bold lead-in that ends in a period.
 - **Never use `#` headings** or start the summary with `- `: the changelog supplies the version heading and the bullet.
 - **Put identifiers, flags and syntax in backticks,** and leave out function names, spec IDs and PR numbers.
-- **Entries appear in filename order.** Prefix a filename with `0-` (then `1-`) to make an entry lead its release.
+- **Entries appear in filename order within their bump heading.** Prefix a filename with `0-` (then `1-`) to make an entry lead its heading.
+- **Flag what readers must act on** with a paragraph that starts with `Breaking:` or `Action:`, one sentence, after the list. The release PR lists it under "Read before merging". Use it for a removed or renamed flag, a removed or non-public library item, a changed output shape or value, and a library signature change.
 - `just changesets` validates them. The rendered text only shows in the release PR, so read it there before merging.
 
 ## Filing an issue

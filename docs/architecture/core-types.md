@@ -35,22 +35,22 @@ pub struct ParentContext { pub kind: SymbolKind, pub name: String }
 `CodeBlock.parent` is the enclosing class or object literal of a member block and `None` for a top-level block; the analyzer sets it, and the agent output prints it as the `parent` column (`<kind> <name>`).
 `final_score` is the only score `RankedBlock` carries; see `query-and-ranking.md` for the ranking algorithm itself, not covered here.
 
-## `Language` vs `LanguageId` — do not conflate
+## `Language`
 
-The CLI's `--language` flag is `Option<Language>`:
+One enum names the languages monokl searches, and `analysis/lang.rs` holds every file fact about them:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-pub enum Language { TypeScript, JavaScript, Rust, Python }
+#[non_exhaustive]
+pub enum Language { TypeScript, JavaScript, Rust }
 ```
 
-This is the small, **public-API** enum — 4 variants, also the CLI `--language` flag's
-`ValueEnum`. It is a different type from `LanguageId` (`01-core-architecture.md`, the
-`LanguageAnalyzer`/`AnalyzerRegistry` section), the larger **internal analyzer-dispatch**
-enum (`crates/monokl/src/analysis/lang.rs`; TypeScript and Rust, the languages an analyzer exists for). Full
-treatment of `LanguageId` belongs to `language-analyzer-contract.md`, not here — this note
-exists only so the two aren't reached for interchangeably.
+- `Language::of(path)` is the language of a file, `None` for an unsearched extension and for `.d.ts`, `.d.mts` and `.d.cts`.
+- `Language::rules()` has the extensions, the excluded suffixes and the test-file names; `is_test_path` adds the test directories.
+- The CLI's `--language` flag, the `--language` filter in the pipeline, `LanguageAnalyzer::supports` and `languages`, text search's test-file skip and the rg-compare and bench scripts (through the hidden `monokl language-rules`) all read these rules. Add an extension in `lang.rs` only.
+- `LanguageAnalyzer::languages` is a slice because one analyzer can own several languages: `TsAnalyzer` owns `TypeScript` and `JavaScript`.
+- A variant exists when a language has an analyzer. `Python` was removed because nothing handled it: `--language python` is a usage error (exit 2) that lists the valid values.
 
 ## Diagnostic / DiagnosticKind
 

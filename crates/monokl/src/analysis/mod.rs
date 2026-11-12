@@ -15,4 +15,4 @@ mod soundness_tests;
 pub mod ts;
 
 pub use file_analysis::{Degradation, FileAnalysis};
-pub use lang::{LanguageAnalyzer, LanguageId};
+pub use lang::{Language, LanguageAnalyzer};

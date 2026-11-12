@@ -13,7 +13,7 @@ instead of it, only when available (§2).
 
 ```rust
 pub trait PrecisionUpgrader: Send + Sync {
-    fn languages(&self) -> &[LanguageId];
+    fn languages(&self) -> &[Language];
     /// Cheap, synchronous check — toolchain present, session reachable. Never blocks on a
     /// full backend init.
     fn is_available(&self) -> bool;

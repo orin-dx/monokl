@@ -119,21 +119,6 @@ pub struct LineHit {
     pub text: String,
 }
 
-/// The language filter for the search command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[non_exhaustive]
-pub enum Language {
-    #[cfg_attr(feature = "cli", value(name = "typescript"))]
-    TypeScript,
-    #[cfg_attr(feature = "cli", value(name = "javascript"))]
-    JavaScript,
-    #[cfg_attr(feature = "cli", value(name = "rust"))]
-    Rust,
-    #[cfg_attr(feature = "cli", value(name = "python"))]
-    Python,
-}
-
 /// The search command's response.
 #[derive(Debug, Clone)]
 pub struct SearchResponse {

@@ -8,22 +8,24 @@ Source: `docs/spec/01-core-architecture.md` §11 (`analysis/lang.rs`, the `Langu
 
 ```rust
 pub trait LanguageAnalyzer: Send + Sync {
-    fn languages(&self) -> &[LanguageId];
+    fn languages(&self) -> &[Language];
     fn supports(&self, path: &Utf8Path) -> bool;
     fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>>;
 }
 ```
 
-- `languages` is a slice because one instance can own several languages (`TsAnalyzer` owns TypeScript and JavaScript
-  files under `LanguageId::TypeScript`). Do not collapse it back to one analyzer per language.
+- `languages` is a slice because one instance can own several languages (`TsAnalyzer` owns `Language::TypeScript` and
+  `Language::JavaScript`). Do not collapse it back to one analyzer per language.
+- `supports` asks `Language::of(path)`, so the extensions and the declaration-file exclusion are defined once in
+  `analysis/lang.rs`, not per analyzer.
 - `analyze` takes the text, not a closure: search has already read the file (and replaced invalid UTF-8) before it asks.
   It returns `blocks`, `test_blocks`, `had_parse_errors` and `degradation`, which is all search reads.
-- `LanguageId` has the languages an analyzer exists for: `TypeScript` and `Rust`.
+- `Language` has the languages an analyzer exists for: `TypeScript`, `JavaScript` and `Rust`. It is also the `--language` value.
 
 Removed because no command read them: `language_for`, `capabilities`, `AnalyzerCapabilities`, `CapabilityPrecision`,
 `analyze_with_profile` and `AnalysisProfile` (`Dependencies` and `Structural` were never requested; search always asked
 for `Full`). A command that gates on precision, or needs a cheaper pass, restores the one it uses together with the
-analyzer output it reads. The spec's shapes for them (`languages() -> &[LanguageId]`, a per-language
+analyzer output it reads. The spec's shapes for them (`languages() -> &[Language]`, a per-language
 `capabilities(language)`, `language_for(path)`) are the ones to restore, so an analyzer that owns several languages
 stays expressible.
 
@@ -35,7 +37,7 @@ pub struct AnalyzerRegistry { analyzers: Vec<Arc<dyn LanguageAnalyzer>> }
 impl AnalyzerRegistry {
     pub fn new(analyzers: Vec<Arc<dyn LanguageAnalyzer>>) -> Self;
     pub fn analyzer_for(&self, path: &Utf8Path) -> Option<&dyn LanguageAnalyzer>;
-    pub fn handles(&self, language: LanguageId) -> bool;
+    pub fn handles(&self, language: Language) -> bool;
 }
 ```
 

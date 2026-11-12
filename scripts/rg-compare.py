@@ -59,54 +59,66 @@ QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 UNCAPPED ="1000000"
 HELD_OUT = "held-out"
-# One copy of each rule from `is_test_path` in crates/monokl/src/text_search.rs, which applies every rule to every file.
-TEST_DIRS = ("/__tests__/", "/test/", "/tests/", "/spec/")
-TS_TEST_SUFFIXES = tuple(
-    f".{kind}.{ext}" for kind in ("test", "spec") for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts")
-)
-RUST_TEST_SUFFIXES = ("/tests.rs", "/test.rs", "_tests.rs", "_test.rs")
-
 
 class Lang:
-    def __init__(self, globs, top_level, member_modifiers, test_dirs, test_suffixes, skip_terms=()):
-        self.globs = globs
+    """What this script owns about a language: the declaration shapes and which monokl languages it covers. Which files
+    belong to a language and which are tests is monokl's rule, read from the binary by `configure`."""
+
+    def __init__(self, languages, top_level, member_modifiers, skip_terms=()):
+        self.languages = languages
+        self.globs = []
+        self.rules = []
         self.top_level = top_level
         self.declaration = top_level + r"([A-Za-z_][A-Za-z0-9_]{3,})"
         self.member_modifiers = member_modifiers
-        self.test_dirs = test_dirs
-        self.test_suffixes = test_suffixes
         self.skip_terms = skip_terms
 
 
 LANGS = {
     "ts": Lang(
-        # Declaration files are not searched by design (see `supports` in crates/monokl/src/analysis/ts/mod.rs).
-        globs=["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "!*.d.ts", "!*.d.mts", "!*.d.cts"],
+        languages=["typescript", "javascript"],
         # A top-level declaration starts its line. Indented ones are locals and loop variables, which monokl does not
         # index.
         top_level=r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+",
         # An indented class member: optional modifiers, then the name followed by a call signature or an arrow value.
         member_modifiers=r"^\s+(?:(?:static|async|public|private|protected|readonly|override|get|set)\s+)*\*?",
-        test_dirs=TEST_DIRS,
-        test_suffixes=TS_TEST_SUFFIXES,
     ),
     "rust": Lang(
-        globs=["*.rs"],
+        languages=["rust"],
         # Top-level items start their line; `pub`, `pub(crate)` and the fn qualifiers are optional.
         top_level=r"^(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe|extern(?:\s+\"[A-Za-z]+\")?)\s+)*(?:fn|struct|enum|trait|type|const|static|mod|macro_rules!)\s+",
         # An indented `fn` or `const` inside an impl or trait block.
         member_modifiers=r"^\s+(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe)\s+)*(?:fn|const)\s+",
-        test_dirs=TEST_DIRS,
-        test_suffixes=RUST_TEST_SUFFIXES,
         skip_terms=("tests",),
     ),
 }
+TEST_DIRS = ()
+
+
+def configure(binary):
+    """Reads which files each language owns, and which are tests, from `monokl language-rules`."""
+    global TEST_DIRS
+    rules = json.loads(run([binary, "language-rules"]).stdout)
+    TEST_DIRS = tuple(rules["test_dirs"])
+    by_name = {entry["name"]: entry for entry in rules["languages"]}
+    for lang in LANGS.values():
+        lang.rules = [by_name[name] for name in lang.languages]
+        lang.globs = [f"*.{ext}" for rule in lang.rules for ext in rule["extensions"]]
+        lang.globs += [f"!*{suffix}" for rule in lang.rules for suffix in rule["excluded_suffixes"]]
 
 
 def is_test_path(relative, lang):
-    """Mirrors `is_test_path` in crates/monokl/src/text_search.rs; change both together."""
-    path = "/" + relative
-    return any(d in path for d in lang.test_dirs) or path.endswith(lang.test_suffixes)
+    """Whether monokl treats `relative` as a test file: under a test directory, or named like one of its language."""
+    *directories, name = relative.split("/")
+    if any(directory in TEST_DIRS for directory in directories):
+        return True
+    stem, _, extension = name.rpartition(".")
+    for rule in lang.rules:
+        if extension not in rule["extensions"] or any(name.endswith(s) for s in rule["excluded_suffixes"]):
+            continue
+        if stem in rule["test_stems"] or stem.endswith(tuple(rule["test_stem_suffixes"])):
+            return True
+    return False
 
 
 def run(args, cwd=None, check=True):
@@ -302,6 +314,7 @@ def main():
 
     if not Path(args.binary).exists():
         sys.exit(f"{args.binary} not found; run `cargo build --release` or pass --binary")
+    configure(args.binary)
 
     report = []
     for name, url, sha, lang, held_out in repositories(args.repo):

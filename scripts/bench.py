@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "scripts" / "bench.repos"
 CACHE = ROOT / "target" / "bench"
-# rg-compare.py holds the mirror of monokl's test-path rule; its file name has a hyphen, so load it by path.
+# rg-compare.py reads monokl's file and test rules from the binary; its file name has a hyphen, so load it by path.
 _spec = importlib.util.spec_from_file_location("rg_compare", ROOT / "scripts" / "rg-compare.py")
 RG_COMPARE = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(RG_COMPARE)
@@ -42,16 +42,14 @@ NO_MATCH = "zqxjvkwpnomatchzz"
 DARWIN = sys.platform == "darwin"
 TIME = ["/usr/bin/time", "-l" if DARWIN else "-v"]
 
-TS_GLOBS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "!*.d.ts", "!*.d.mts", "!*.d.cts"]
-# language -> (rg globs, top-level declaration regex, broad word). The first two are copied from rg-compare.py.
+# language -> (top-level declaration regex, broad word). The regex is copied from rg-compare.py; the globs come from
+# monokl itself through rg-compare.py's `configure`.
 LANGS = {
     "ts": (
-        TS_GLOBS,
         r"^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|const|let|var)\s+",
         "string",
     ),
     "rust": (
-        ["*.rs"],
         r"^(?:pub(?:\([a-z:]+\))?\s+)?(?:(?:const|async|unsafe|extern(?:\s+\"[A-Za-z]+\")?)\s+)*(?:fn|struct|enum|trait|type|const|static|mod|macro_rules!)\s+",
         "error",
     ),
@@ -111,7 +109,8 @@ def declaring_dir(term, path, globs, declaration):
 
 def queries(path, language):
     """The six query classes as (class, monokl args, rg argv), all relative to `path`, and the chosen terms."""
-    globs, declaration, broad = LANGS[language]
+    declaration, broad = LANGS[language]
+    globs = RG_COMPARE.LANGS[language].globs
     terms = sample_terms(path, 7, globs, declaration, language)
     if len(terms) < 6:
         sys.exit(f"{path}: fewer than 6 declared identifiers to sample")
@@ -235,6 +234,7 @@ def main():
     args = parser.parse_args()
     if not Path(args.binary).exists():
         sys.exit(f"{args.binary} not found; run `cargo build --release` or pass --binary")
+    RG_COMPARE.configure(args.binary)
     if not os.access(TIME[0], os.X_OK):
         sys.exit(f"{TIME[0]} not found")
 
