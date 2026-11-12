@@ -329,6 +329,7 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Review findings, and why the scan is gone.** The first version kept the 256-deep scan as an early exit. Review showed it rejects valid files, which is worse than the cost it saves: a quoted string continued over backslash and CRLF ended the string at the line feed, so 257 parentheses inside it rejected the file; after postfix `++` it read division as a regex and skipped the closing brackets, so 256 lines of `values.push(count++ / total);` counted 257 deep. Telling a regex from a division is undecidable for a scan, and the stack already bounds recursion, so the scan and its tests were deleted. A size skip was also indistinguishable from a parse error; it now has its own reason (above).
 - **`debug_assertions` stands for "unoptimized".** The per-byte budget is 12 KiB when `cfg!(debug_assertions)` and 4 KiB otherwise, because the unoptimized frames measured above are about 2.7 times larger. The cfg is a proxy: a release profile with debug assertions pays the larger budget and the 85 KiB cap for nothing, and a profile with optimizations off but no debug assertions gets the 4 KiB budget and could overflow on the costliest input. The workspace profiles do not do either today; set the constant by hand if one is added.
 - **Rejected.** A scan that bounds recursion on its own: telling a regex from a division, or JSX text from code, needs the parser's context, so a crafted file can always desynchronise the scan, and then nothing bounds the stack. A fixed large stack with the scan as the bound has the same hole. A child process per file survives any overflow but costs a spawn per file and is not available to library callers. `stacker` cannot reach OXC's recursion. A stack proportional to length with no limit lets a 5 MB file reserve about 20 GB and touch about 8 GB.
+- **Superseded in 36.** The per-byte stack, the 254 KiB and 85 KiB size caps, the 1 GiB limit and the rule that no scan bounds recursion no longer hold: every parse runs on one fixed stack behind a nesting scan, and the size limit is 4 MiB.
 
 ## 24. Queries match the README (2026-11-02)
 
@@ -352,6 +353,7 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **A rule this replaces.** A test asserted that block code must never appear in rows. That assumed a separate `extract` command that does not exist (its hint was removed with the diagnostics rework), so the rule left agents with nothing to read. The whole block is still not printed; only matching lines are.
 - **Rejected.** Printing each block's `code`, as Part 1's snapshot lists: a large block costs more than the question needs, and the budget would have to count printed bytes. A separate `extract` command: a second call for every hit.
 - **Open.** `--max-tokens` and `--max-bytes` still count the blocks the printed rows cover, not the snippets printed. Snippets are at most about 500 bytes a row, so the gap is small; counting printed bytes is the follow-up.
+- **Superseded in 28 and 37.** The open item closed in 28. `--max-bytes` was removed in 37.
 ## 27. Tokens are estimated, not tokenized (2026-11-08)
 
 - **Decision.** `count_tokens` returns the printed text's byte length divided by three, rounded up, and the `tiktoken-rs` dependency is gone. `--max-tokens` keeps its default of 20,000.
@@ -368,6 +370,7 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Core stays cap-free.** Row rendering stays in the output layer; core only receives the function. Rejected: moving row rendering into the budget module.
 - **Rejected.** A tokens-per-byte estimate of the block code: it still measures text nobody prints.
 - **Defaults unchanged.** 50 results, 20,000 tokens, 2 MiB.
+- **Superseded in 37.** `--max-bytes` and its 2 MiB default are gone; `--max-tokens` is the only size cap.
 - **Supersedes.** The open item in §26: the caps now count the snippets printed.
 - **Open.** The document header and hints are not counted. The field docs on `SearchResponse` in `types.rs` do not yet say the totals count printed rows.
 
@@ -414,3 +417,39 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 - **Why.** The declared-name bonus (§32) was tuned and scored on the same 18 questions, so 17 of 18 was optimistic. The held-out set scored 23 of 24 and 12 of 12 on first run, close to the tuned 17 of 18 and 15 of 16, which is evidence the bonus and member rows generalize. Rust scored 22 of 24 (11 of 13 identifiers, 11 of 11 questions, 11 of 11 members) once the analyzer landed.
 - **Rule.** Ranking changes may be tuned on the tuned sets and must be reported on the held-out set. A held-out miss is never fixed by editing the question.
 - **Open.** The sets are small, so one miss moves a rate by 4 points; read them as a regression guard, not an estimate. The one held-out miss is trpc `create websocket client` (answer file at rank 7).
+
+## 35. Reads, hit lines and run time have stated bounds (2026-11-11)
+
+Follows [ADR 0004](../adr/0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md) rules 2 to 4 (PR 88).
+
+- **Decision.** Text search reads at most 4 MiB of a file (`MAX_FILE_BYTES`), checked on the open handle. A larger file is skipped unread and reported as one grouped line. A hit line is kept to 4096 bytes (`MAX_LINE_BYTES`) and the cut lines are counted in a warning. `--timeout SECONDS` defaults to 30, accepts fractions, and 0 disables it. It is checked between files in text search and between batches in analysis. Each stage always finishes its first batch, so a tiny timeout still returns something. An expired run prints `partial result: ... expired after searching|analyzing N of M files` and exits 0. `tests/scaling.rs` takes the fastest of 5 runs at 2,500 and 10,000 inputs for rank and dedup, text search and a whole search, and asserts the time ratio stays under 10 (a quadratic step gives 16). It never asserts absolute times.
+- **Why.** The limit equals the 4 MiB parse cap, so a larger file could only come back as too large to parse after being read whole. On the PR's measurements a directory of forty 5 MB files peaked at 479 MB and one 300 MB line at 752 MB; both are now about 5 MB.
+- **Partial results.** They are the only output that differs between runs, because which files are reached depends on speed. A `-term` exclusion applies only to the files reached. Without a timeout, output is deterministic.
+- **Cost of the line cap.** A term that matches only past byte 4096 of a line is not seen by required-term and keyword checks. The warning says so.
+
+## 36. Parse on a fixed stack behind a nesting scan (2026-11-11)
+
+Replaces §23's per-byte stack and its size caps (PR 83).
+
+- **Decision.** Every parse runs on one 256 MiB stack (`PARSE_STACK_BYTES`). A linear scan (`analysis/nesting.rs`) estimates the recursion a file can cause and rejects it before any parser sees it. The cap is 16,384 levels for TypeScript and 256 for Rust. A rejected file is degraded as too deep and named in the diagnostic with its depth and cap. The post-parse tree-depth check and its leaked trees are gone, because no accepted tree is deeper than the drop thread holds. The size cap is 4 MiB (35).
+- **Why.** §23's stack grew with the input, so whether a file was analyzed depended on its length and the host's memory. A fixed stack makes cost and outcome a function of the file alone. §23 deleted the scan because it rejected valid files; the scan now errs only upward and is tested against the real parsers.
+- **A false rejection, found and fixed.** The first cap (4,096 levels on a 64 MiB stack) rejected a component with 3,000 sibling JSX elements: its true depth is about 3, but closers do not lower the estimate, so it cost about 45,000 units. The cap and the stack grew by 4x together to keep the margin (the worst nesting at the cap needed 96 MiB and overflowed 64 MiB, so 256 MiB is at least 2.6x). End-to-end tests cover 3,000 JSX siblings, a 12,000-term concatenation and a 20,000-row array.
+- **Three soundness bugs found by review, fixed.** `for await (` lost its loop head to `await`. A `;` in JSX text reset what the open elements had charged. Each ambiguous `/` rescanned its whole line. Each has a test that parses the input in a child process on a small stack to show the hazard is real.
+- **A differential fuzzer.** `soundness_tests.rs` generates nesting-heavy token soups, scans them under a cap scaled to an 8 MiB stack, and parses every accepted input in a child process. An abort is a counterexample. It found more under-estimates, all fixed with regression tests: a template `}` inside a possible regex flipped backtick parity; Rust 2024 `#"` is a prefix, not a string; unterminated strings, templates, comments and raw strings hid the rest of the source; and the Rust cap let trees deeper than the drop thread holds (now 256 levels). On the final code the PR run found no counterexample.
+- **Evidence, not proof.** The fuzzer samples inputs; it does not prove the scan never under-estimates. `MONOKL_FUZZ_SECONDS` sets the run length. The estimate stays a deliberate over-estimate wherever the scan cannot tell syntax apart.
+- **Open.** A valid file over the cap loses its results and the user sees it by name.
+
+## 37. Deletions of code nothing reads (2026-11-11)
+
+PRs 84 to 87. Each removed code whose only reader was a test or nothing.
+
+- **Decision.** The query module is crate-private, and tests that scanned source text, probed for absent derives or re-checked exhaustiveness are deleted (PR 84). `coverage_boost` is gone (PR 85): every printed block holds a matching line, so it was a constant 1.0, and `finalScore` is 1.0 lower with the order unchanged. The score breakdown fields and `SearchResponse` totals that only tests read are gone, and `SymbolKind` derives `Ord` instead of mirroring it by hand. `--max-bytes`, `Budget.max_bytes`, the `miette` feature and dependency, and `ToonProjection<N>` are gone (PR 86); `render_search` and `search_row_texts` replace the projection, and `apply_budget` takes the printed row texts. Unread analyzer output is gone (PR 87): symbols, dependencies, exports, JSX, `LangData`, the `Digest` and its `blake3` dependency, `AnalysisProfile`, `AnalyzerCapabilities`, `language_for`, `matched_keywords`, `RankedBlock.parent_context` and `ParentContext.line`. `LanguageAnalyzer` is now `languages`, `supports` and `analyze(path, text)`.
+- **Why.** Search reads only `blocks`, `test_blocks`, `had_parse_errors` and `degradation`. `--max-tokens` is `ceil(bytes / 3)`, so the 2 MiB byte cap bound only above about 700,000 tokens. CLI errors render through michi's `DomainError`, so the `miette` derives had no use. Unique crates in the workspace tree went from 252 to 232. PR 87 removed 2,440 lines and added 308, and the release binary went from 3,762,592 to 3,696,240 bytes. Output was byte-identical on 101 queries (87) and on 93 comparisons (86; only `search --help` differs).
+- **Consequences.** `--max-bytes` is now a usage error (exit 2). A command that needs a removed field restores it with its analyzer output and a reader. [ADR 0002](../adr/0002-digest-lives-in-monokl-until-wisp-contracts.md) stands for whoever re-adds `Digest`. `LanguageId` keeps `TypeScript` and `Rust`.
+- **Open.** The `Language`/`LanguageId` unification. The architecture docs still describe `miette` and `max_bytes`.
+
+## 38. Process lessons (2026-11-11)
+
+- **Decision.** Compile and test the combined state before merging a PR that other PRs touch, and run the soundness tests under plain `cargo test` as well as `nextest`.
+- **Why.** Two merges broke `main` because each PR passed alone. The object-member score tests (PR 70) were written before the name bonus (§32) and failed once both were in. The scaling test (PR 88) constructed a field that a deletion (PR 85) removed; PR 90 fixed it. CI on a branch checks that branch against the `main` it started from, not against what merges beside it.
+- **A real race hid behind one runner.** The soundness tests passed under `nextest` (one process per test) but shared one batch file under `cargo test`, where concurrent child launches overwrote each other's file and removed each other's directory. Each batch now has its own directory (PR 89).
