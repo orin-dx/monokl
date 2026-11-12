@@ -7,10 +7,10 @@ use std::sync::Arc;
 use camino::Utf8Path;
 
 use super::file_analysis::FileAnalysis;
-use super::lang::{LanguageAnalyzer, LanguageId};
+use super::lang::{Language, LanguageAnalyzer};
 use crate::error::Result;
 
-const LANGUAGES: [LanguageId; 1] = [LanguageId::Rust];
+const LANGUAGES: [Language; 1] = [Language::Rust];
 
 /// Analyzes Rust files with rust-analyzer's error-tolerant syntax crate.
 ///
@@ -48,12 +48,12 @@ impl RustAnalyzer {
 }
 
 impl LanguageAnalyzer for RustAnalyzer {
-    fn languages(&self) -> &[LanguageId] {
+    fn languages(&self) -> &[Language] {
         &LANGUAGES
     }
 
     fn supports(&self, path: &Utf8Path) -> bool {
-        path.extension() == Some("rs")
+        Language::of(path).is_some_and(|language| LANGUAGES.contains(&language))
     }
 
     fn analyze(&self, path: &Utf8Path, source: String) -> Result<Arc<FileAnalysis>> {
