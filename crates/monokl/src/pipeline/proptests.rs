@@ -17,6 +17,7 @@ fn block(line_start: usize, marks: &[bool]) -> CodeBlock {
         node_kind: SymbolKind::Function,
         code: code.join("\n"),
         symbol_signature: None,
+        name: None,
         matched_lines: Vec::new(),
         parent: None,
     }

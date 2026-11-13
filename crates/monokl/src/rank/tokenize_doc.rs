@@ -17,6 +17,7 @@ use crate::types::CodeBlock;
 ///     node_kind: SymbolKind::Function,
 ///     code: "return userName;".to_string(),
 ///     symbol_signature: Some("fn userName()".to_string()),
+///     name: None,
 ///     matched_lines: Vec::new(),
 ///     parent: None,
 /// };
@@ -45,6 +46,7 @@ mod tests {
             node_kind: SymbolKind::Function,
             code: code.to_string(),
             symbol_signature: symbol_signature.map(ToString::to_string),
+            name: None,
             matched_lines: Vec::new(),
             parent: None,
         }

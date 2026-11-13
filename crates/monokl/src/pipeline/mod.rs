@@ -595,6 +595,7 @@ mod tests {
             node_kind: SymbolKind::Function,
             code: code.join("\n"),
             symbol_signature: None,
+            name: None,
             matched_lines: Vec::new(),
             parent: None,
         }
@@ -946,6 +947,7 @@ mod tests {
                 node_kind: SymbolKind::Function,
                 code: code.to_owned(),
                 symbol_signature: None,
+                name: None,
                 matched_lines: Vec::new(),
                 parent: None,
             };
@@ -1332,7 +1334,12 @@ class Foo {
             ("tests/auth.test.ts", "login\n"),
         ]);
         let query = "login -deprecated";
-        let result = search(&whole_file_registry(), &request(&root, query)).unwrap();
+        // Only auth.ts declares `login`; session.ts merely mentions it, so the name boost ranks auth.ts first.
+        let declaring_login = registry(|path, source| {
+            let name = (path.file_name() == Some("auth.ts")).then(|| "login".to_owned());
+            Ok((vec![CodeBlock { name, ..block(path, source, 1, source.lines().count().max(1)) }], false))
+        });
+        let result = search(&declaring_login, &request(&root, query)).unwrap();
         assert_eq!(files(&result, &root), ["src/auth.ts", "src/session.ts"]);
         // `src/notes.md` has the word but no analyzer owns it, so it is not counted.
         assert_eq!(result.files_total, 3);

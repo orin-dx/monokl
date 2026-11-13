@@ -130,7 +130,7 @@ impl Walker<'_> {
     fn item(&mut self, item: &ast::Item, holder: Option<&ParentContext>, in_test: bool) {
         let Some((kind, name)) = describe(item) else { return };
         let in_test = in_test || item.attrs().any(|attr| is_test_attr(&attr));
-        self.record(item.syntax(), kind, holder, in_test);
+        self.record(item.syntax(), kind, name.clone(), holder, in_test);
 
         let Some(name) = name else { return };
         let holder = ParentContext { kind, name };
@@ -165,7 +165,7 @@ impl Walker<'_> {
         let Some(list) = list else { return };
         for member in list.assoc_items() {
             let marked = member.attrs().any(|attr| is_test_attr(&attr));
-            let (kind, node) = match &member {
+            let (kind, name, node) = match &member {
                 ast::AssocItem::Fn(function) if function.body().is_some() => {
                     if function.name().is_none() {
                         continue;
@@ -176,22 +176,35 @@ impl Walker<'_> {
                     if !in_test && self.line_of(range.end()) - self.line_of(range.start()) + 1 < MIN_MEMBER_LINES {
                         continue;
                     }
-                    self.record(function.syntax(), SymbolKind::Method, Some(holder), in_test);
+                    self.record(
+                        function.syntax(),
+                        SymbolKind::Method,
+                        declared(function.name()),
+                        Some(holder),
+                        in_test,
+                    );
                     continue;
                 }
-                ast::AssocItem::Fn(function) => (SymbolKind::Method, function.syntax()),
-                ast::AssocItem::Const(item) => (SymbolKind::Variable, item.syntax()),
-                ast::AssocItem::TypeAlias(item) => (SymbolKind::TypeAlias, item.syntax()),
-                ast::AssocItem::MacroCall(call) => (SymbolKind::Macro, call.syntax()),
+                ast::AssocItem::Fn(function) => (SymbolKind::Method, declared(function.name()), function.syntax()),
+                ast::AssocItem::Const(item) => (SymbolKind::Variable, declared(item.name()), item.syntax()),
+                ast::AssocItem::TypeAlias(item) => (SymbolKind::TypeAlias, declared(item.name()), item.syntax()),
+                ast::AssocItem::MacroCall(call) => (SymbolKind::Macro, None, call.syntax()),
             };
             if marked {
-                self.record(node, kind, Some(holder), true);
+                self.record(node, kind, name, Some(holder), true);
             }
         }
     }
 
     /// Records one item's block, with attributes and doc comments, in `test_blocks` when it is test code.
-    fn record(&mut self, node: &SyntaxNode, kind: SymbolKind, holder: Option<&ParentContext>, in_test: bool) {
+    fn record(
+        &mut self,
+        node: &SyntaxNode,
+        kind: SymbolKind,
+        name: Option<String>,
+        holder: Option<&ParentContext>,
+        in_test: bool,
+    ) {
         let signature = self.signature(node);
         let range = node.text_range();
         let block = CodeBlock {
@@ -199,6 +212,8 @@ impl Walker<'_> {
             line_start: self.line_of(range.start()),
             line_end: self.line_of(range.end()),
             node_kind: kind,
+
+            name,
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
             matched_lines: Vec::new(),
@@ -251,20 +266,19 @@ impl Walker<'_> {
 /// out-of-line module). The name is `None` for an item that has none (a macro call, an `extern` block) or that the parse
 /// recovered without one.
 fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
-    let named = |name: Option<ast::Name>| name.map(|name| name.text().to_owned());
     Some(match item {
-        ast::Item::Fn(it) => (SymbolKind::Function, named(it.name())),
-        ast::Item::Struct(it) => (SymbolKind::Struct, named(it.name())),
-        ast::Item::Union(it) => (SymbolKind::Struct, named(it.name())),
-        ast::Item::Enum(it) => (SymbolKind::Enum, named(it.name())),
-        ast::Item::Trait(it) => (SymbolKind::Interface, named(it.name())),
-        ast::Item::TypeAlias(it) => (SymbolKind::TypeAlias, named(it.name())),
-        ast::Item::Const(it) => (SymbolKind::Variable, named(it.name())),
-        ast::Item::Static(it) => (SymbolKind::Variable, named(it.name())),
-        ast::Item::MacroRules(it) => (SymbolKind::Macro, named(it.name())),
-        ast::Item::MacroDef(it) => (SymbolKind::Macro, named(it.name())),
+        ast::Item::Fn(it) => (SymbolKind::Function, declared(it.name())),
+        ast::Item::Struct(it) => (SymbolKind::Struct, declared(it.name())),
+        ast::Item::Union(it) => (SymbolKind::Struct, declared(it.name())),
+        ast::Item::Enum(it) => (SymbolKind::Enum, declared(it.name())),
+        ast::Item::Trait(it) => (SymbolKind::Interface, declared(it.name())),
+        ast::Item::TypeAlias(it) => (SymbolKind::TypeAlias, declared(it.name())),
+        ast::Item::Const(it) => (SymbolKind::Variable, declared(it.name())),
+        ast::Item::Static(it) => (SymbolKind::Variable, declared(it.name())),
+        ast::Item::MacroRules(it) => (SymbolKind::Macro, declared(it.name())),
+        ast::Item::MacroDef(it) => (SymbolKind::Macro, declared(it.name())),
         // A module declared in another file has no body to split.
-        ast::Item::Module(it) => (it.item_list().is_some()).then(|| (SymbolKind::Module, named(it.name())))?,
+        ast::Item::Module(it) => (it.item_list().is_some()).then(|| (SymbolKind::Module, declared(it.name())))?,
         ast::Item::Impl(it) => {
             let target = it.self_ty().map(|ty| collapse(&ty.syntax().text().to_string()));
             let name = match (it.trait_(), target) {
@@ -282,6 +296,11 @@ fn describe(item: &ast::Item) -> Option<(SymbolKind, Option<String>)> {
         ast::Item::ExternBlock(_) => (SymbolKind::Other, None),
         ast::Item::AsmExpr(_) | ast::Item::ExternCrate(_) | ast::Item::Use(_) => return None,
     })
+}
+
+/// The text of a declared name, `None` when the parse recovered the item without one.
+fn declared(name: Option<ast::Name>) -> Option<String> {
+    name.map(|name| name.text().to_owned())
 }
 
 /// `text` on one line: every run of whitespace becomes one space.

@@ -112,6 +112,72 @@ fn each_kind_of_item_is_a_block_with_its_header_as_the_signature() {
     assert!(analysis.test_blocks.is_empty());
 }
 
+fn names(blocks: &[CodeBlock]) -> Vec<Option<&str>> {
+    blocks.iter().map(|b| b.name.as_deref()).collect()
+}
+
+#[test]
+fn each_kind_of_item_names_what_it_declares() {
+    let analysis = analyze_source(KINDS);
+    assert_eq!(
+        names(&analysis.blocks),
+        [
+            Some("add"),
+            Some("Point"),
+            Some("Unit"),
+            Some("Mode"),
+            Some("Shape"),
+            Some("Result"),
+            Some("LIMIT"),
+            Some("COUNT"),
+            Some("twice"),
+            Some("Bits"),
+        ]
+    );
+}
+
+#[test]
+fn impl_and_trait_members_name_themselves_and_an_impl_names_its_target() {
+    let analysis = analyze_source(IMPLS);
+    assert_eq!(
+        names(&analysis.blocks),
+        [
+            Some("Cart"),
+            Some("Cart"),
+            Some("new"),
+            Some("total"),
+            Some("fmt::Display for Wrapper<T>"),
+            Some("fmt"),
+            Some("Cart"),
+        ]
+    );
+    let analysis =
+        analyze_source("pub trait Greet {\n    fn greet(&self) -> String {\n        a();\n        b()\n    }\n}\n");
+    assert_eq!(names(&analysis.blocks), [Some("Greet"), Some("greet")]);
+}
+
+#[test]
+fn modules_and_the_items_in_them_name_themselves() {
+    let analysis =
+        analyze_source("pub mod outer {\n    pub fn one() {}\n\n    mod inner {\n        pub struct Deep;\n    }\n}\n");
+    assert_eq!(names(&analysis.blocks), [Some("outer"), Some("one"), Some("inner"), Some("Deep")]);
+}
+
+#[test]
+fn a_macro_call_and_an_extern_block_declare_no_name() {
+    let analysis =
+        analyze_source("thread_local! {\n    static X: u8 = 1;\n}\n\nextern \"C\" {\n    fn ffi(x: u32);\n}\n");
+    assert_eq!(names(&analysis.blocks), [None, None]);
+}
+
+#[test]
+fn test_code_names_what_it_declares_too() {
+    let analysis = analyze_source(
+        "#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert!(true);\n    }\n\n    #[test]\n    fn short() {}\n}\n",
+    );
+    assert_eq!(names(&analysis.test_blocks), [Some("tests"), Some("adds"), Some("short")]);
+}
+
 #[test]
 fn a_block_keeps_its_attributes_and_doc_comments_but_its_signature_leaves_them_out() {
     let analysis = analyze_source(KINDS);

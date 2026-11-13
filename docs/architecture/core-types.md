@@ -16,6 +16,7 @@ pub struct CodeBlock {
     pub line_start: usize,
     pub line_end: usize,
     pub node_kind: SymbolKind,
+    pub name: Option<String>,
     pub code: String,
     pub symbol_signature: Option<String>,
     pub matched_lines: Vec<usize>,
@@ -32,6 +33,7 @@ pub struct ParentContext { pub kind: SymbolKind, pub name: String }
 ```
 
 `RankedBlock` nests its `CodeBlock`; the output layer picks the columns it prints.
+`CodeBlock.name` is the identifier the block declares, read from the syntax tree by the analyzer (`Trait for Target` for a trait `impl`); it is `None` for a re-export, an anonymous default export, a destructuring declaration, a macro call and an `extern` block. Ranking reads it for the name boost, and nothing prints it.
 `CodeBlock.parent` is the enclosing class or object literal of a member block and `None` for a top-level block; the analyzer sets it, and the agent output prints it as the `parent` column (`<kind> <name>`).
 `final_score` is the only score `RankedBlock` carries; see `query-and-ranking.md` for the ranking algorithm itself, not covered here.
 
