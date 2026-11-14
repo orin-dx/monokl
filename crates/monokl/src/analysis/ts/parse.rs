@@ -2,12 +2,14 @@
 //!
 //! The parse owns its arena. Everything leaving this module is owned data, so no arena-borrowed node escapes.
 
+use std::borrow::Cow;
+
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, Function,
-    MethodDefinition, MethodDefinitionKind, ObjectExpression, ObjectProperty, ObjectPropertyKind, PropertyDefinition,
-    PropertyKind, Statement,
+    BindingIdentifier, BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
+    Function, MethodDefinition, MethodDefinitionKind, ObjectExpression, ObjectProperty, ObjectPropertyKind,
+    PropertyDefinition, PropertyKind, Statement, VariableDeclaration,
 };
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
@@ -145,7 +147,7 @@ impl Extractor<'_> {
             (SymbolKind::Function, Some(function)) => Some(self.function_signature(function)),
             _ => None,
         };
-        self.push_block(statement.span(), node_kind, symbol_signature, None);
+        self.push_block(statement.span(), node_kind, statement_name(statement), symbol_signature, None);
     }
 
     /// Pushes a block over `span`, unless it holds nothing but whitespace.
@@ -153,6 +155,7 @@ impl Extractor<'_> {
         &mut self,
         span: Span,
         node_kind: SymbolKind,
+        name: Option<String>,
         symbol_signature: Option<String>,
         parent: Option<ParentContext>,
     ) {
@@ -165,6 +168,7 @@ impl Extractor<'_> {
             line_start: self.lines.line(span.start),
             line_end: self.lines.line(span.end),
             node_kind,
+            name,
             code: code.to_owned(),
             symbol_signature,
             matched_lines: Vec::new(),
@@ -244,7 +248,7 @@ impl Extractor<'_> {
         };
         let head = Span::new(method.decorators.last().map_or(method.span.start, |d| d.span.end), body.span.start);
         let signature = self.signature_text(head);
-        self.member_block(method.span, node_kind, signature, parent);
+        self.member_block(method.span, node_kind, method.key.name(), signature, parent);
     }
 
     /// A property holding an arrow or function expression: `handle = async (req) => { ... }`. Any other value is data,
@@ -253,7 +257,7 @@ impl Extractor<'_> {
         let Some(body_start) = property.value.as_ref().and_then(function_body_start) else { return };
         let head = Span::new(property.decorators.last().map_or(property.span.start, |d| d.span.end), body_start);
         let signature = self.signature_text(head);
-        self.member_block(property.span, SymbolKind::Property, signature, parent);
+        self.member_block(property.span, SymbolKind::Property, property.key.name(), signature, parent);
     }
 
     /// An object property that is a method (`async f() { ... }`, a getter or a setter) or holds an arrow or function
@@ -266,13 +270,20 @@ impl Extractor<'_> {
             SymbolKind::Property
         };
         let signature = self.signature_text(Span::new(property.span.start, body_start));
-        self.member_block(property.span, node_kind, signature, parent);
+        self.member_block(property.span, node_kind, property.key.name(), signature, parent);
     }
 
-    fn member_block(&mut self, span: Span, node_kind: SymbolKind, signature: String, parent: &ParentContext) {
+    fn member_block(
+        &mut self,
+        span: Span,
+        node_kind: SymbolKind,
+        name: Option<Cow<'_, str>>,
+        signature: String,
+        parent: &ParentContext,
+    ) {
         let lines = self.lines.line(span.end) - self.lines.line(span.start) + 1;
         if lines >= MIN_MEMBER_LINES {
-            self.push_block(span, node_kind, Some(signature), Some(parent.clone()));
+            self.push_block(span, node_kind, name.map(Cow::into_owned), Some(signature), Some(parent.clone()));
         }
     }
 }
@@ -301,6 +312,56 @@ fn statement_kind(statement: &Statement<'_>) -> Option<SymbolKind> {
         | Statement::ExportAllDeclaration(_) => Some(SymbolKind::Other),
         _ => None,
     }
+}
+
+/// The identifier a top-level statement declares: a function's, class's, interface's, type alias's, enum's, namespace's
+/// or variable's, through `export` or `export default`. `None` when it declares none, as for a re-export, an anonymous
+/// default export or a destructuring declaration. A declaration of several variables is named for the first one that
+/// binds a plain identifier.
+fn statement_name(statement: &Statement<'_>) -> Option<String> {
+    match statement {
+        Statement::FunctionDeclaration(function) => binding_name(function.id.as_ref()),
+        Statement::ClassDeclaration(class) => binding_name(class.id.as_ref()),
+        Statement::TSInterfaceDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Statement::TSTypeAliasDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Statement::TSEnumDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Statement::VariableDeclaration(declaration) => variable_name(declaration),
+        Statement::ExportDeclaration(export) => declaration_name(&export.declaration),
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => binding_name(function.id.as_ref()),
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => binding_name(class.id.as_ref()),
+            ExportDefaultDeclarationKind::TSInterfaceDeclaration(declaration) => binding_name(Some(&declaration.id)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn declaration_name(declaration: &Declaration<'_>) -> Option<String> {
+    match declaration {
+        Declaration::FunctionDeclaration(function) => binding_name(function.id.as_ref()),
+        Declaration::ClassDeclaration(class) => binding_name(class.id.as_ref()),
+        Declaration::TSInterfaceDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Declaration::TSTypeAliasDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Declaration::TSEnumDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Declaration::VariableDeclaration(declaration) => variable_name(declaration),
+        Declaration::TSNamespaceDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Declaration::TSImportEqualsDeclaration(declaration) => binding_name(Some(&declaration.id)),
+        Declaration::TSExternalModuleDeclaration(declaration) => Some(declaration.id.value.as_str().to_owned()),
+        Declaration::TSGlobalDeclaration(_) => None,
+    }
+}
+
+fn binding_name(id: Option<&BindingIdentifier<'_>>) -> Option<String> {
+    id.map(|id| id.name.as_str().to_owned())
+}
+
+fn variable_name(declaration: &VariableDeclaration<'_>) -> Option<String> {
+    declaration
+        .declarations
+        .iter()
+        .find_map(|declarator| declarator.id.get_identifier_name())
+        .map(|name| name.as_str().to_owned())
 }
 
 fn declaration_kind(decl: &Declaration<'_>) -> Option<SymbolKind> {

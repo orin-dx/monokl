@@ -57,6 +57,10 @@ pub struct CodeBlock {
     pub line_start: usize,
     pub line_end: usize,
     pub node_kind: SymbolKind,
+    /// The identifier the block declares, as the analyzer read it from the syntax tree: `mergeConfig` for
+    /// `function mergeConfig(a, b)`, `Display for Foo` for `impl Display for Foo`. `None` for a block that declares no
+    /// name, such as a re-export, an anonymous default export or a destructuring declaration.
+    pub name: Option<String>,
     pub code: String,
     pub symbol_signature: Option<String>,
     pub matched_lines: Vec<usize>,

@@ -57,7 +57,7 @@ pub fn rank_blocks(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], 
 
 Per block: `bm25 = bm25::score(...)`,
 `ntype = boost::node_type_boost(block.node_kind)`, `name = boost::name_match_boost(&block, query_terms)`
-(1 + 2 * share of query terms in the block's declared name, so 1.0 to 3.0),
+(1 + 2 * share of query terms in the block's declared name, `CodeBlock.name`, so 1.0 to 3.0; 1.0 for a block with no name),
 **`final_score = round6(bm25 * name * ntype)`**.
 Sorted by `final_score` descending, then file, `line_start`, `line_end`, `node_kind` and `code`; 1-based `rank` is
 assigned after the sort.

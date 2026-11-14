@@ -114,6 +114,7 @@ mod tests {
                 node_kind: SymbolKind::Function,
                 code: code.to_owned(),
                 symbol_signature: None,
+                name: None,
                 matched_lines: Vec::new(),
                 parent: None,
             },

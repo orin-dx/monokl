@@ -589,6 +589,95 @@ export const api = {
         );
     }
 
+    fn names(analysis: &FileAnalysis) -> Vec<Option<&str>> {
+        analysis.blocks.iter().map(|b| b.name.as_deref()).collect()
+    }
+
+    #[test]
+    fn every_top_level_declaration_names_what_it_declares() {
+        let text = "\
+function f(a: number): string {
+  return String(a);
+}
+class C {}
+interface I {}
+type T = string;
+enum E {}
+const v = 1;
+export function g() {}
+export default function h() {}
+export { v };
+export const y = 1;
+export default class {}
+export default () => {};
+export * from './x';
+const { a } = obj;
+const a1 = 1, b1 = () => 2;
+export namespace N {}
+";
+        let analysis = analyze_source("names.ts", text);
+        assert!(!analysis.had_parse_errors);
+        assert_eq!(
+            names(&analysis),
+            [
+                Some("f"),
+                Some("C"),
+                Some("I"),
+                Some("T"),
+                Some("E"),
+                Some("v"),
+                Some("g"),
+                Some("h"),
+                None,
+                Some("y"),
+                None,
+                None,
+                None,
+                None,
+                Some("a1"),
+                Some("N"),
+            ]
+        );
+    }
+
+    #[test]
+    fn class_members_name_themselves() {
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS);
+        assert_eq!(
+            names(&analysis),
+            [
+                Some("Foo"),
+                Some("constructor"),
+                Some("fetch"),
+                Some("create"),
+                Some("handle"),
+                Some("plain"),
+                Some("name")
+            ]
+        );
+    }
+
+    #[test]
+    fn object_literal_members_name_themselves() {
+        let analysis = analyze_source("api.ts", OBJECT_WITH_MEMBERS);
+        assert_eq!(
+            names(&analysis),
+            [Some("api"), Some("load"), Some("save"), Some("fetch"), Some("name"), Some("name")]
+        );
+    }
+
+    #[rstest]
+    #[case::string_key("export const o = {\n  'quoted-key': () => {\n    return 1;\n  },\n};\n", Some("quoted-key"))]
+    #[case::computed_key("export const o = {\n  [key]: () => {\n    return 1;\n  },\n};\n", None)]
+    #[case::private_member("export class C {\n  #hidden() {\n    return 1;\n  }\n}\n", Some("hidden"))]
+    fn a_member_key_that_is_not_an_identifier_is_named_by_its_static_text_or_not_at_all(
+        #[case] source: &str,
+        #[case] name: Option<&str>,
+    ) {
+        let analysis = analyze_source("keys.ts", source);
+        assert_eq!(names(&analysis)[1], name);
+    }
+
     #[test]
     fn javascript_files_may_contain_jsx() {
         let analysis = analyze_source("view.js", "export const v = <div />;\n");

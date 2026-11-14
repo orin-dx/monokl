@@ -70,6 +70,7 @@ fn candidates(count: usize, layout: Layout) -> Vec<(CodeBlock, Vec<String>)> {
                 node_kind: SymbolKind::Function,
                 code: format!("function handle{index}(input) {{\n  return needle + {index};\n}}"),
                 symbol_signature: Some(format!("function handle{index}(input)")),
+                name: None,
                 matched_lines: vec![line_start + 1],
                 parent: None,
             };

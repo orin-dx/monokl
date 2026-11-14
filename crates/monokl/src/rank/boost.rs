@@ -1,15 +1,13 @@
 use super::bm25::{as_f64, round6};
-use crate::analysis::Language;
 use crate::tokens::tokenize_source;
 use crate::types::{CodeBlock, SymbolKind};
 
 /// Returns the multiplier for how many query terms the block's declared name contains, from 1.0 to 3.0.
 ///
-/// The name is the head of the block: its signature, or without one its first line that is not a comment or a
-/// decorator, cut at the first `(`, `<`, `{`, `=` or `:`. So parameters, return types and the body do not count. In a
-/// Rust file the parentheses of a restricted visibility (`pub(crate)`) do not cut the head. The
-/// head is tokenized like a document, and the multiplier is `round6(1 + 2 * matched / query_terms.len())`, where
-/// `matched` counts the query terms, repeats included, that the head contains. Returns 1.0 when `query_terms` is empty.
+/// The name is [`CodeBlock::name`], the identifier the analyzer read from the syntax tree, so parameters, return types
+/// and the body do not count. It is tokenized like a document, and the multiplier is
+/// `round6(1 + 2 * matched / query_terms.len())`, where `matched` counts the query terms, repeats included, that the
+/// name contains. Returns 1.0 when `query_terms` is empty or the block declares no name.
 ///
 /// A body can mention every query word without the block being about them; a name that holds them says what it is.
 ///
@@ -25,6 +23,7 @@ use crate::types::{CodeBlock, SymbolKind};
 ///     line_start: 1,
 ///     line_end: 3,
 ///     node_kind: SymbolKind::Function,
+///     name: Some("mergeConfig".to_string()),
 ///     code: String::new(),
 ///     symbol_signature: Some("function mergeConfig(a: Config, b: Config)".to_string()),
 ///     matched_lines: Vec::new(),
@@ -36,43 +35,9 @@ pub fn name_match_boost(block: &CodeBlock, query_terms: &[&str]) -> f64 {
     if query_terms.is_empty() {
         return 1.0;
     }
-    let text = block.symbol_signature.as_deref().unwrap_or(&block.code);
-    let line = text.lines().map(str::trim).find(|line| !is_comment_or_decorator(line)).unwrap_or_default();
-    let name_tokens = if Language::of(&block.file) == Some(Language::Rust) {
-        tokenize_source(&unrestricted(line))
-    } else {
-        tokenize_source(head_of(line))
-    };
+    let name_tokens = block.name.as_deref().map(tokenize_source).unwrap_or_default();
     let matched = query_terms.iter().filter(|term| name_tokens.iter().any(|token| token == *term)).count();
     round6(1.0 + 2.0 * as_f64(matched) / as_f64(query_terms.len()))
-}
-
-fn head_of(line: &str) -> &str {
-    line.split(['(', '<', '{', '=', ':']).next().unwrap_or_default()
-}
-
-/// The head of a Rust declaration line with a restricted visibility (`pub(crate)`, `pub(super)`, `pub(in path)`) read as
-/// a plain `pub`, whose `(` would otherwise end the head before the name. The other modifiers (`async`, `const`,
-/// `unsafe`, `extern "C"`, `default`) hold no cut character and stay in the head.
-fn unrestricted(line: &str) -> String {
-    let restriction = line
-        .strip_prefix("pub")
-        .map(str::trim_start)
-        .filter(|rest| rest.starts_with('('))
-        .and_then(|rest| rest.split_once(')'));
-    match restriction {
-        Some((_, rest)) => format!("pub {}", head_of(rest)),
-        None => head_of(line).to_owned(),
-    }
-}
-
-/// Whether a trimmed line carries no declaration: it is blank, a comment or comment continuation, or a decorator.
-fn is_comment_or_decorator(line: &str) -> bool {
-    line.is_empty()
-        || line.starts_with("//")
-        || line.starts_with("/*")
-        || line.starts_with('*')
-        || line.starts_with('@')
 }
 
 /// Returns the score multiplier for a block's symbol kind.
@@ -109,71 +74,48 @@ mod tests {
 
     use super::*;
 
-    fn block(line_start: usize, line_end: usize, matched_lines: Vec<usize>) -> CodeBlock {
+    /// A block in `file` with the given declared name, a signature and a body that both mention `parse`.
+    fn declaring(file: &str, name: Option<&str>) -> CodeBlock {
         CodeBlock {
-            file: Utf8PathBuf::from("src/a.ts"),
-            line_start,
-            line_end,
+            file: Utf8PathBuf::from(file),
+            line_start: 1,
+            line_end: 9,
             node_kind: SymbolKind::Function,
-            code: String::new(),
-            symbol_signature: None,
-            matched_lines,
+            name: name.map(ToString::to_string),
+            code: "function other(parse: string) { return parse(); }".to_string(),
+            symbol_signature: Some("function other(parse: string)".to_string()),
+            matched_lines: Vec::new(),
             parent: None,
         }
     }
 
-    fn rust(symbol_signature: &str) -> CodeBlock {
-        CodeBlock { file: Utf8PathBuf::from("src/a.rs"), ..named("", Some(symbol_signature)) }
-    }
-
-    fn named(code: &str, symbol_signature: Option<&str>) -> CodeBlock {
-        CodeBlock {
-            code: code.to_string(),
-            symbol_signature: symbol_signature.map(ToString::to_string),
-            ..block(1, 9, vec![])
-        }
-    }
-
-    // The head of the block (up to its first `(`, `<`, `{`, `=` or `:`) is tokenized and compared with the terms:
-    // the multiplier is round6(1 + 2 * matched_terms / total_terms).
+    // The declared name is tokenized and compared with the terms: the multiplier is
+    // round6(1 + 2 * matched_terms / total_terms).
     #[rstest]
-    // Head "function toJSONSchema" tokenizes to function, to, json, schema: 2 of 3 terms, 1 + 2 * 2/3.
-    #[case::signature_head(named("", Some("function toJSONSchema<T>(schema: T): Json")), &["json", "schema", "convert"], 2.333_333)]
-    // No signature: the first line, "export const safeParse", gives safe, parse; `export` and `const` are stop words.
-    #[case::first_code_line(named("export const safeParse: $SafeParse = _safeParse(x);", None), &["safe", "parse", "result"], 2.333_333)]
-    #[case::every_term_in_the_name(named("", Some("mergeConfig(a, b)")), &["merge", "config"], 3.0)]
-    #[case::one_of_two_terms(named("", Some("mergeConfig(a, b)")), &["merge", "other"], 2.0)]
-    #[case::no_term_in_the_name(named("", Some("mergeConfig(a, b)")), &["other"], 1.0)]
-    #[case::the_body_is_not_the_name(named("function f() { return parse(); }", None), &["parse"], 1.0)]
-    #[case::the_parameters_are_not_the_name(named("", Some("function f(parse: string)")), &["parse"], 1.0)]
-    #[case::comment_lines_are_skipped(named("// parse it\n/* more */\n * parse\nclass Parser {}", None), &["parser", "it"], 2.0)]
-    #[case::decorator_lines_are_skipped(named("@Injectable()\nclass Foo {}", None), &["foo", "injectable"], 2.0)]
-    #[case::the_signature_wins_over_the_code(named("function other() {}", Some("function wanted()")), &["wanted"], 3.0)]
-    #[case::repeated_query_terms_count_per_occurrence(named("", Some("parse()")), &["parse", "parse", "other", "other"], 2.0)]
-    #[case::no_terms(named("", Some("parse()")), &[], 1.0)]
-    #[case::rust_plain_pub(rust("pub fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_pub_crate(rust("pub(crate) fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_pub_super(rust("pub(super) fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_pub_self(rust("pub(self) fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_pub_in_path(rust("pub(in crate::config) fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_space_before_the_restriction(rust("pub (crate) fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_restriction_and_async(rust("pub(crate) async fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_restriction_and_const_fn(rust("pub(crate) const fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_restriction_and_unsafe_extern(rust("pub(crate) unsafe extern \"C\" fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_modifiers_without_visibility(rust("async unsafe fn load_config()"), &["load", "config"], 3.0)]
-    #[case::rust_default_method(rust("default fn load_config(&self)"), &["load", "config"], 3.0)]
-    #[case::rust_restricted_struct(rust("pub(crate) struct LoadConfig<T>"), &["load", "config"], 3.0)]
-    #[case::rust_restricted_const(rust("pub(crate) const LOAD_CONFIG: u32"), &["load", "config"], 3.0)]
-    #[case::rust_restricted_parameters_are_not_the_name(rust("pub(crate) fn run(load_config: u32)"), &["load"], 1.0)]
-    #[case::rust_restricted_generics_are_not_the_name(rust("pub(crate) fn run<LoadConfig>()"), &["load"], 1.0)]
-    #[case::only_rust_reads_a_restriction(named("", Some("pub(crate) load_config()")), &["load", "config"], 1.0)]
-    #[case::empty_block(named("", None), &["parse"], 1.0)]
+    // "toJSONSchema" tokenizes to to, json, schema: 2 of 3 terms, 1 + 2 * 2/3.
+    #[case::partial_match(Some("toJSONSchema"), &["json", "schema", "convert"], 2.333_333)]
+    #[case::every_term_in_the_name(Some("mergeConfig"), &["merge", "config"], 3.0)]
+    #[case::snake_case(Some("load_config"), &["load", "config"], 3.0)]
+    #[case::one_of_two_terms(Some("mergeConfig"), &["merge", "other"], 2.0)]
+    #[case::no_term_in_the_name(Some("mergeConfig"), &["other"], 1.0)]
+    #[case::repeated_query_terms_count_per_occurrence(Some("parse"), &["parse", "parse", "other", "other"], 2.0)]
+    #[case::an_impl_name_holds_its_trait_and_target(Some("fmt::Display for Wrapper<T>"), &["display", "wrapper"], 3.0)]
+    #[case::no_terms(Some("parse"), &[], 1.0)]
+    #[case::a_block_without_a_name_gets_no_boost(None, &["parse", "other"], 1.0)]
     fn name_match_boost_rewards_query_terms_in_the_declared_name(
-        #[case] block: CodeBlock,
+        #[case] name: Option<&str>,
         #[case] terms: &[&str],
         #[case] expected: f64,
     ) {
-        assert_eq!(name_match_boost(&block, terms), expected);
+        // The block's signature and body mention `other` and `parse` as well, and neither counts.
+        for file in ["src/a.ts", "src/a.rs"] {
+            assert_eq!(name_match_boost(&declaring(file, name), terms), expected, "{file}");
+        }
+    }
+
+    #[test]
+    fn the_signature_and_the_body_are_not_the_name() {
+        assert_eq!(name_match_boost(&declaring("src/a.ts", Some("wanted")), &["parse", "other"]), 1.0);
     }
 
     #[rstest]

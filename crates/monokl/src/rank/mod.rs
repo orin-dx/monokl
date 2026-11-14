@@ -40,6 +40,7 @@ use crate::types::{CodeBlock, RankedBlock};
 ///     node_kind: SymbolKind::Function,
 ///     code: code.to_string(),
 ///     symbol_signature: None,
+///     name: None,
 ///     matched_lines: Vec::new(),
 ///     parent: None,
 /// };
@@ -126,6 +127,7 @@ mod tests {
             node_kind,
             code: String::new(),
             symbol_signature: None,
+            name: None,
             matched_lines,
             parent: None,
         }
@@ -401,17 +403,18 @@ mod tests {
         // Both terms have document frequency 2 in a corpus of 2, and the average length is (2 + 7) / 2 = 4.5. The
         // repeating block has the higher bm25 (0.556235 against 0.437572), so it would win without the name multiplier.
         // The name holds both terms, so its multiplier is 3.0.
-        let function = |file: &str, code: &str| {
+        let function = |file: &str, name: &str, code: &str| {
             let mut b = block(file, 1, 3, SymbolKind::Function, vec![]);
+            b.name = Some(name.to_string());
             b.code = code.to_string();
             b
         };
         let blocks = vec![
             (
-                function("a.ts", "function load() { parse(); config(); }"),
+                function("a.ts", "load", "function load() { parse(); config(); }"),
                 tokens(&["parse", "parse", "parse", "config", "config", "config", "load"]),
             ),
-            (function("b.ts", "function parseConfig() {}"), tokens(&["parse", "config"])),
+            (function("b.ts", "parseConfig", "function parseConfig() {}"), tokens(&["parse", "config"])),
         ];
         let df = HashMap::from([("parse".to_string(), 2), ("config".to_string(), 2)]);
         let ranked = rank_blocks(blocks, &["parse", "config"], &df);
