@@ -53,13 +53,17 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 Each changeset becomes one bullet in the changelog. Each version lists its bullets under `Major Changes`, `Minor Changes` and `Patch Changes` headings, below the release date and a compare link. The release PR titles each change by its first line and collapses the rest.
 
 - **One topic per file** in `.changeset/`, with `monokl: minor` for a new capability or `monokl: patch` for a fix.
-- **Lead with what the user sees now,** in one sentence that stands alone. Say what changed, not that something was "improved" or "fixed".
-- **Details go in sub-bullets,** one level deep, each starting with a bold lead-in that ends in a period.
-- **Never use `#` headings** or start the summary with `- `: the changelog supplies the version heading and the bullet.
-- **Put identifiers, flags and syntax in backticks,** and leave out function names, spec IDs and PR numbers.
 - **Entries appear in filename order within their bump heading.** Prefix a filename with `0-` (then `1-`) to make an entry lead its heading.
-- **Flag what readers must act on** with a paragraph that starts with `Breaking:` or `Action:`, one sentence, after the list. The release PR lists it under "Read before merging". Use it for a removed or renamed flag, a removed or non-public library item, a changed output shape or value, and a library signature change.
+- **Put identifiers, flags and syntax in backticks.**
 - `just changesets` validates them. The rendered text only shows in the release PR, so read it there before merging.
+
+Changesets become the project's changelog, so write them for the people who use it, not for the implementer.
+
+- Open with a bold lead-in naming the change as the user sees it, then one line on its value: what they can now do or what changed for them.
+- When there is more to say, add short bullets in this order: why it matters, how to adopt it (commands, configuration, migration), and limits they will hit. Use sub-bullets for detail.
+- Group a longer entry under bold labels such as **Upgrading** or **Scripting**. Do not use `#` headings; the changelog supplies those.
+- Mark a breaking change with a **Breaking** label that states the old behavior, the new behavior and what to do. A removed or renamed flag, a removed or non-public library item, a changed output shape or value and a library signature change are breaking.
+- One idea per bullet. Leave out internals unless the user must know them.
 
 ## Filing an issue
 

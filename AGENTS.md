@@ -60,9 +60,11 @@ Start work through these commands so their checks run:
 
 - Options before deciding: `/guide:explore`. Does it work: `/guide:spike`.
 - Bug or review findings: `/guide:fix`. Real feature or shared change: `/guide:build`.
-- Verify or find bugs: `/guide:check`. Commit and PR: `/guide:ship`.
+- Verify or find bugs: `/guide:check`. Commit: `/guide:ship`.
 
-Changesets follow `CONTRIBUTING.md`, which is stricter than the plugin's default: no headings, bold lead-ins, `Breaking:` and `Action:` paragraphs.
+Changesets follow the convention in `CONTRIBUTING.md` ("Writing a changeset").
+
+Pull requests are opened by Entire from the branch's trail: push the branch and create or link its trail (`entire trail create`). Do not open the PR with `gh`.
 
 ## Fixing bugs
 
