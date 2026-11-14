@@ -54,6 +54,18 @@ Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (co
 - Sibling-path parity: a function that mirrors an already-tested one gets a test asserting the same contract.
 - CI gates line coverage; the threshold is the `coverage` recipe's default in the justfile.
 
+## Plugins
+
+Start work through these commands so their checks run:
+
+- Options before deciding: `/guide:explore`. Does it work: `/guide:spike`.
+- Bug or review findings: `/guide:fix`. Real feature or shared change: `/guide:build`.
+- Verify or find bugs: `/guide:check`. Commit: `/guide:ship`.
+
+Changesets follow the convention in `CONTRIBUTING.md` ("Writing a changeset").
+
+Pull requests are opened by Entire from the branch's trail: push the branch and create or link its trail (`entire trail create`). Do not open the PR with `gh`.
+
 ## Fixing bugs
 
 Look for structurally identical siblings and fix them in the same change. If one is deliberately left, say where and why.
