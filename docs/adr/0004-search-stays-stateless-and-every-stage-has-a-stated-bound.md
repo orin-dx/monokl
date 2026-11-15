@@ -29,6 +29,7 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 4. No step is super-linear in match count. A scaling test in CI asserts the time ratio between two input sizes.
 5. Results are deterministic regardless of thread timing: fold in walk order.
 6. A file no analyzer owns is never opened.
+7. A search starts threads only for work it has. The parse threads (256 MiB stack each) are started when there is a file to analyze and number `min(CPUs, files to analyze)`: none for no files. A thread count is not looked up before there is work, because asking rayon for it starts its shared pool.
 
 ## Consequences
 
@@ -41,6 +42,7 @@ Rules 2 to 4 are done:
 - Rule 4: `tests/scaling.rs` asserts that 4 times the blocks or files takes under 10 times as long, for ranking and dedup (three layouts), text search and a whole search.
 - Rule 5 is what the ordered batch fold already does.
 - Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
+- Rule 7 holds for the parse threads, which a search starts once and no wider than its files, and for rayon's shared pool, which text search, ranking and the thread count read touch only when there is something to search or rank. Text search and ranking still use all of that pool for one file: it is shared, started once per process with default stacks, and not sized per search.
 
 The trade-off: a stateless search pays the cold cost on every run, and the bounds reject or skip some inputs (deeply nested or oversized files) that analysis would otherwise attempt. Each skip is reported, not silent.
 

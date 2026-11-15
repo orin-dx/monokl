@@ -245,12 +245,14 @@ fn search_with_ceiling(
         allow_tests,
         max_file_bytes: MAX_FILE_BYTES,
     };
-    let batch_size = rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD;
+    // Asking rayon for its width starts its pool, which a search with nothing to analyze must not do.
+    let batch_size = if survivors.is_empty() { 1 } else { rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD };
     let mut candidates: Vec<Candidate> = Vec::new();
-    // The threads that analyze are started once with the stack a parse needs, instead of one thread per file.
-    with_parse_threads(|| {
+    // The threads that analyze are started once with the stack a parse needs, instead of one thread per file, and
+    // only as many as there are files to give them.
+    with_parse_threads(survivors.len(), || {
         let mut analyzed = 0_usize;
-        for batch in survivors.chunks(batch_size.max(1)) {
+        for batch in survivors.chunks(batch_size) {
             if analyzed > 0 && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let reached = Incomplete { reached: analyzed as u64, total: survivors.len() as u64 };
                 partial = partial.take().or_else(|| Some(incomplete_diagnostic(timeout, "analyzing", reached, "")));

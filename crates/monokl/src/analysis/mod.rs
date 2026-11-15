@@ -22,6 +22,6 @@ pub(crate) use parse_stack::with_parse_threads;
 
 /// With no analyzer built in there is no parse to give a stack to.
 #[cfg(not(any(feature = "lang-rust", feature = "lang-ts")))]
-pub(crate) fn with_parse_threads<T: Send>(run: impl FnOnce() -> T + Send) -> T {
+pub(crate) fn with_parse_threads<T: Send>(_files: usize, run: impl FnOnce() -> T + Send) -> T {
     run()
 }

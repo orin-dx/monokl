@@ -90,6 +90,17 @@ fn a_query_with_no_match_prints_an_empty_result() {
 }
 
 #[test]
+fn a_query_that_matches_no_file_of_a_populated_tree_exits_zero_with_the_empty_result() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.ts"), "export const alpha = 1;\n").unwrap();
+    let output = monokl_in(dir.path(), &["search", "zzzqqqxx", "."]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).starts_with("search: []\n"), "got: {}", stdout(&output));
+    assert!(!stdout(&output).contains("totalCount"), "got: {}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
+
+#[test]
 fn an_invalid_regex_fails_with_a_structured_error() {
     let output = monokl(&["search", "regex:(", "."]);
     assert_eq!(output.status.code(), Some(1));

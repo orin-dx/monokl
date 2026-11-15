@@ -45,25 +45,40 @@ pub(crate) fn on_parse_stack<T: Send>(run: impl FnOnce() -> T + Send) -> Result<
     })
 }
 
-/// Runs `run` on a pool of threads that each have [`PARSE_STACK_BYTES`] of stack, so an [`on_parse_stack`] made by a
-/// rayon task inside it parses where it stands instead of starting a thread. The pool is as wide as the one `run` is
-/// called from. When it cannot be started, `run` goes ahead on the calling thread and every parse starts its own thread,
-/// as it does outside this function.
-pub(crate) fn with_parse_threads<T: Send>(run: impl FnOnce() -> T + Send) -> T {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(rayon::current_num_threads())
+/// Starts the threads for analyzing `files` files, as many as the files can use: none for no files, otherwise
+/// `min(cpus(), files)`. `cpus` is not asked for when there are no files, because asking rayon starts its own pool.
+/// `None` when no thread is needed or the pool could not be started.
+fn parse_pool(files: usize, cpus: impl FnOnce() -> usize) -> Option<rayon::ThreadPool> {
+    if files == 0 {
+        return None;
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cpus().min(files))
         .stack_size(PARSE_STACK_BYTES)
         .thread_name(|index| format!("monokl-parse-{index}"))
         .start_handler(|_| HAS_PARSE_STACK.set(true))
-        .build();
-    match pool {
-        Ok(pool) => pool.install(run),
-        Err(_) => run(),
+        .build()
+        .ok()
+}
+
+/// Runs `run`, which analyzes `files` files, on threads that each have [`PARSE_STACK_BYTES`] of stack, so an
+/// [`on_parse_stack`] made by a rayon task inside it parses where it stands instead of starting a thread.
+///
+/// The threads are started when there is a file to analyze, and no more than the files or the CPUs of the pool `run`
+/// is called from: a search that analyzes nothing starts no thread, and one that analyzes three files starts three.
+/// When they cannot be started, `run` goes ahead on the calling thread and every parse starts its own thread, as it
+/// does outside this function.
+pub(crate) fn with_parse_threads<T: Send>(files: usize, run: impl FnOnce() -> T + Send) -> T {
+    match parse_pool(files, rayon::current_num_threads) {
+        Some(pool) => pool.install(run),
+        None => run(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -108,14 +123,14 @@ mod tests {
         let here = thread::current().id();
         assert_ne!(on_parse_stack(|| thread::current().id()), Ok(here));
         let (pool_thread, parse_thread) =
-            with_parse_threads(|| (thread::current().id(), on_parse_stack(|| thread::current().id())));
+            with_parse_threads(1, || (thread::current().id(), on_parse_stack(|| thread::current().id())));
         assert_ne!(pool_thread, here);
         assert_eq!(parse_thread, Ok(pool_thread));
     }
 
     #[test]
     fn a_pool_thread_has_the_fixed_stack_and_survives_a_panic() {
-        let results = with_parse_threads(|| {
+        let results = with_parse_threads(1, || {
             (
                 on_parse_stack(|| recurse(8 << 10)),
                 on_parse_stack(|| -> () { panic!("boom") }),
@@ -126,8 +141,31 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_is_as_wide_as_the_pool_it_is_started_from() {
+    fn no_files_start_no_pool_and_do_not_even_ask_for_the_cpu_count() {
+        let pool = parse_pool(0, || panic!("the cpu count is not needed for no files"));
+        assert!(pool.is_none());
+        assert_eq!(with_parse_threads(0, || 7), 7);
+    }
+
+    #[rstest]
+    #[case::one_file(1, 8, 1)]
+    #[case::two_files(2, 8, 2)]
+    #[case::as_many_files_as_cpus(8, 8, 8)]
+    #[case::many_files(1_000, 8, 8)]
+    #[case::one_cpu(1_000, 1, 1)]
+    fn the_pool_is_as_wide_as_the_cpus_or_the_files_whichever_is_fewer(
+        #[case] files: usize,
+        #[case] cpus: usize,
+        #[case] width: usize,
+    ) {
+        let pool = parse_pool(files, || cpus).unwrap();
+        assert_eq!(pool.current_num_threads(), width);
+    }
+
+    #[test]
+    fn the_pool_is_sized_from_the_pool_it_is_started_from() {
         let two = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
-        assert_eq!(two.install(|| with_parse_threads(rayon::current_num_threads)), 2);
+        assert_eq!(two.install(|| with_parse_threads(100, rayon::current_num_threads)), 2);
+        assert_eq!(two.install(|| with_parse_threads(1, rayon::current_num_threads)), 1);
     }
 }
