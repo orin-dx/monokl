@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XTkoqjZDSF9CBcg8jGxKkt",
+  "agent_id": "aaf58560194f40a23",
+  "subagent_type": "general-purpose",
+  "task_description": "Span invariants checked on real repos",
+  "token_usage": {
+    "input_tokens": 120,
+    "cache_creation_tokens": 179955,
+    "cache_read_tokens": 9391161,
+    "output_tokens": 71112,
+    "api_call_count": 60
+  },
+  "started_at": "2026-11-14T18:00:15.797293-08:00",
+  "completed_at": "2026-11-14T18:18:11.092654-08:00"
+}
