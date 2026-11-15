@@ -154,6 +154,18 @@ fn search_with_ceiling(
     max_files: usize,
     timeout: Option<Duration>,
 ) -> Result<SearchResult> {
+    search_reading(registry, request, max_files, timeout, &read_source)
+}
+
+/// [`search_with_ceiling`] with the function that reads a surviving file's source as a parameter, so tests can count
+/// the reads.
+fn search_reading(
+    registry: &AnalyzerRegistry,
+    request: &SearchRequest<'_>,
+    max_files: usize,
+    timeout: Option<Duration>,
+    read: &(dyn Fn(&Utf8Path) -> io::Result<Source> + Sync),
+) -> Result<SearchResult> {
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let SearchRequest { root, query, exact, allow_tests, respect_ignore_files, language } = *request;
     if let Some(language) = language
@@ -262,7 +274,7 @@ fn search_with_ceiling(
                 .par_iter()
                 .map(|&(path, hits)| {
                     let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
-                    retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
+                    retrieve_blocks(&ctx, path, hits, read, &mut blocks, &mut file_diagnostics);
                     (blocks, file_diagnostics)
                 })
                 .collect();
@@ -1379,6 +1391,27 @@ class Foo {
     fn tree_of(files: &[(String, &'static str)]) -> (tempfile::TempDir, Utf8PathBuf) {
         let borrowed: Vec<(&str, &str)> = files.iter().map(|(name, text)| (name.as_str(), *text)).collect();
         tree(&borrowed)
+    }
+
+    /// A search reads each surviving file once, whatever the number of files, so reading, parsing and extraction grow
+    /// linearly with them. Counting the reads gives the same answer on every machine and load.
+    #[rstest]
+    #[case::few(250)]
+    #[case::four_times_as_many(1000)]
+    fn a_search_reads_each_matching_file_exactly_once(#[case] count: usize) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let (_dir, root) = tree_of(&numbered_files(count));
+        let reads = AtomicU64::new(0);
+        let read = |path: &Utf8Path| {
+            reads.fetch_add(1, Ordering::Relaxed);
+            read_source(path)
+        };
+        let result =
+            search_reading(&whole_file_registry(), &request(&root, "alpha"), DEFAULT_MAX_FILES, None, &read).unwrap();
+        assert_eq!(result.files_total, count as u64);
+        assert_eq!(result.ranked.len(), count);
+        assert_eq!(reads.load(Ordering::Relaxed), count as u64);
     }
 
     #[test]

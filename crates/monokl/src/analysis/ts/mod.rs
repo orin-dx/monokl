@@ -1015,11 +1015,13 @@ export namespace N {}
     #[case::jsx_containers("a.tsx", "<a>{", "}</a>")]
     fn a_hundred_thousand_levels_are_degraded_at_once(#[case] path: &str, #[case] open: &str, #[case] close: &str) {
         let text = expr(100_000, open, "1", close);
-        let started = std::time::Instant::now();
         let analysis = analyze_source(path, &text);
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
         assert_degraded(&analysis);
-        assert!(matches!(analysis.degradation, Some(Degradation::TooDeep { cap: parse::MAX_NESTING_LEVELS, .. })));
+        // The scan stops one level over the cap, which is what "at once" means: it never reads on to the 100,000th.
+        assert_eq!(
+            analysis.degradation,
+            Some(Degradation::TooDeep { depth: parse::MAX_NESTING_LEVELS + 1, cap: parse::MAX_NESTING_LEVELS })
+        );
     }
 
     #[rstest]
