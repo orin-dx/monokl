@@ -110,6 +110,12 @@ impl LineIndex {
     }
 }
 
+/// The block a member block belongs to: where it is in the block list, and the context its `parent` field carries.
+struct Holder {
+    context: ParentContext,
+    block: usize,
+}
+
 struct Extractor<'s> {
     path: &'s Utf8Path,
     source: &'s str,
@@ -123,8 +129,9 @@ impl Extractor<'_> {
     }
 
     fn statement(&mut self, statement: &Statement<'_>) {
-        self.block(statement);
-        self.member_blocks(statement);
+        if let Some(block) = self.block(statement) {
+            self.member_blocks(statement, block);
+        }
     }
 
     /// The function's text up to its body, on one line: `function f(a: A): B`.
@@ -138,53 +145,59 @@ impl Extractor<'_> {
         self.text(span).split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';').trim_end().to_owned()
     }
 
-    fn block(&mut self, statement: &Statement<'_>) {
-        let Some(node_kind) = statement_kind(statement) else { return };
+    /// Pushes the block of a top-level statement and returns its position in the block list, or `None` when the
+    /// statement makes none.
+    fn block(&mut self, statement: &Statement<'_>) -> Option<usize> {
+        let node_kind = statement_kind(statement)?;
         if matches!(statement, Statement::ImportDeclaration(_)) {
-            return;
+            return None;
         }
         let symbol_signature = match (node_kind, statement_function(statement)) {
             (SymbolKind::Function, Some(function)) => Some(self.function_signature(function)),
             _ => None,
         };
-        self.push_block(statement.span(), node_kind, statement_name(statement), symbol_signature, None);
+        self.push_block(statement.span(), node_kind, statement_name(statement), symbol_signature, None)
     }
 
-    /// Pushes a block over `span`, unless it holds nothing but whitespace.
+    /// Pushes a block over `span` and returns its position in the block list, unless it holds nothing but whitespace.
     fn push_block(
         &mut self,
         span: Span,
         node_kind: SymbolKind,
         name: Option<String>,
         symbol_signature: Option<String>,
-        parent: Option<ParentContext>,
-    ) {
+        parent: Option<&Holder>,
+    ) -> Option<usize> {
         let code = self.text(span);
         if code.trim().is_empty() {
-            return;
+            return None;
         }
         let block = CodeBlock {
             file: self.path.to_owned(),
             line_start: self.lines.line(span.start),
             line_end: self.lines.line(span.end),
             node_kind,
+            span: span.start as usize..span.end as usize,
+            parent_index: parent.map(|holder| holder.block),
             name,
             code: code.to_owned(),
             symbol_signature,
             matched_lines: Vec::new(),
-            parent,
+            parent: parent.map(|holder| holder.context.clone()),
         };
         self.out.blocks.push(block);
+        Some(self.out.blocks.len() - 1)
     }
 
     /// Pushes a block for each long member of the named class or object literal that a top-level or exported statement
-    /// holds, after the statement's own block. An anonymous class has no name to give its members as a parent, so it
-    /// gets none.
-    fn member_blocks(&mut self, statement: &Statement<'_>) {
+    /// holds, after the statement's own block, which is at `block` in the block list. An anonymous class has no name to
+    /// give its members as a parent, so it gets none.
+    fn member_blocks(&mut self, statement: &Statement<'_>, block: usize) {
         if let Some(class) = statement_class(statement) {
-            self.class_member_blocks(class);
+            self.class_member_blocks(class, block);
         }
-        for (parent, object) in Self::statement_objects(statement) {
+        for (context, object) in Self::statement_objects(statement) {
+            let parent = Holder { context, block };
             for property in &object.properties {
                 match property {
                     ObjectPropertyKind::ObjectProperty(property) => self.object_property_block(property, &parent),
@@ -224,9 +237,10 @@ impl Extractor<'_> {
     }
 
     /// A method, constructor or function-valued property of a named class.
-    fn class_member_blocks(&mut self, class: &Class<'_>) {
+    fn class_member_blocks(&mut self, class: &Class<'_>, block: usize) {
         let Some(id) = &class.id else { return };
-        let parent = ParentContext { kind: SymbolKind::Class, name: id.name.as_str().to_owned() };
+        let context = ParentContext { kind: SymbolKind::Class, name: id.name.as_str().to_owned() };
+        let parent = Holder { context, block };
         for element in &class.body.body {
             match element {
                 ClassElement::MethodDefinition(method) => self.method_block(method, &parent),
@@ -240,7 +254,7 @@ impl Extractor<'_> {
 
     /// A method with a body: `async f(a: A): B { ... }`. Getters and setters are methods; a signature without a body
     /// (an overload or an abstract method) is not.
-    fn method_block(&mut self, method: &MethodDefinition<'_>, parent: &ParentContext) {
+    fn method_block(&mut self, method: &MethodDefinition<'_>, parent: &Holder) {
         let Some(body) = &method.value.body else { return };
         let node_kind = match method.kind {
             MethodDefinitionKind::Constructor => SymbolKind::Constructor,
@@ -253,7 +267,7 @@ impl Extractor<'_> {
 
     /// A property holding an arrow or function expression: `handle = async (req) => { ... }`. Any other value is data,
     /// which the class block shows well enough.
-    fn property_block(&mut self, property: &PropertyDefinition<'_>, parent: &ParentContext) {
+    fn property_block(&mut self, property: &PropertyDefinition<'_>, parent: &Holder) {
         let Some(body_start) = property.value.as_ref().and_then(function_body_start) else { return };
         let head = Span::new(property.decorators.last().map_or(property.span.start, |d| d.span.end), body_start);
         let signature = self.signature_text(head);
@@ -262,7 +276,7 @@ impl Extractor<'_> {
 
     /// An object property that is a method (`async f() { ... }`, a getter or a setter) or holds an arrow or function
     /// expression (`f: () => { ... }`). Any other value is data, which the object's block shows well enough.
-    fn object_property_block(&mut self, property: &ObjectProperty<'_>, parent: &ParentContext) {
+    fn object_property_block(&mut self, property: &ObjectProperty<'_>, parent: &Holder) {
         let Some(body_start) = function_body_start(&property.value) else { return };
         let node_kind = if property.method || property.kind != PropertyKind::Init {
             SymbolKind::Method
@@ -279,11 +293,11 @@ impl Extractor<'_> {
         node_kind: SymbolKind,
         name: Option<Cow<'_, str>>,
         signature: String,
-        parent: &ParentContext,
+        parent: &Holder,
     ) {
         let lines = self.lines.line(span.end) - self.lines.line(span.start) + 1;
         if lines >= MIN_MEMBER_LINES {
-            self.push_block(span, node_kind, name.map(Cow::into_owned), Some(signature), Some(parent.clone()));
+            self.push_block(span, node_kind, name.map(Cow::into_owned), Some(signature), Some(parent));
         }
     }
 }

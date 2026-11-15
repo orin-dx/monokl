@@ -352,6 +352,87 @@ export class Foo {
         );
     }
 
+    const OBJECTS: &str = "\
+// \u{e9}\u{1f980}
+export function first() {
+  return 1;
+}
+const api = {
+  async load(id) {
+    return id;
+  },
+  save: (a) => {
+    return a;
+  },
+  data: 1,
+};
+export default {
+  run() {
+    return 1;
+  },
+};
+";
+
+    #[test]
+    fn a_block_span_slices_the_source_to_its_code() {
+        for (name, source) in [("class.ts", CLASS_WITH_MEMBERS), ("objects.ts", OBJECTS)] {
+            let analysis = analyze_source(name, source);
+            assert!(analysis.blocks.len() > 1);
+            for block in &analysis.blocks {
+                assert_eq!(&source[block.span.clone()], block.code);
+            }
+        }
+    }
+
+    #[test]
+    fn a_block_span_counts_bytes_not_characters() {
+        let analysis = analyze_source("objects.ts", OBJECTS);
+        assert_eq!(analysis.blocks[0].span.start, 10);
+        assert_eq!(&OBJECTS[10..16], "export");
+    }
+
+    /// Each block's name with the position of its parent.
+    fn parent_indices(analysis: &FileAnalysis) -> Vec<(Option<&str>, Option<usize>)> {
+        analysis.blocks.iter().map(|b| (b.name.as_deref(), b.parent_index)).collect()
+    }
+
+    #[test]
+    fn a_member_points_at_the_block_of_its_class_or_object() {
+        let analysis = analyze_source("members.ts", CLASS_WITH_MEMBERS);
+        let mut expected = vec![(Some("Foo"), None)];
+        expected.extend(["constructor", "fetch", "create", "handle", "plain", "name"].map(|m| (Some(m), Some(0))));
+        assert_eq!(parent_indices(&analysis), expected);
+
+        let analysis = analyze_source("objects.ts", OBJECTS);
+        assert_eq!(
+            parent_indices(&analysis),
+            [
+                (Some("first"), None),
+                (Some("api"), None),
+                (Some("load"), Some(1)),
+                (Some("save"), Some(1)),
+                (None, None),
+                (Some("run"), Some(4)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_parent_index_is_set_exactly_when_the_parent_is_and_points_at_an_enclosing_earlier_block() {
+        for (name, source) in [("class.ts", CLASS_WITH_MEMBERS), ("objects.ts", OBJECTS)] {
+            let analysis = analyze_source(name, source);
+            for (index, block) in analysis.blocks.iter().enumerate() {
+                assert_eq!(block.parent_index.is_some(), block.parent.is_some());
+                let Some(parent_index) = block.parent_index else { continue };
+                let parent = &analysis.blocks[parent_index];
+                assert!(parent_index < index);
+                assert!(parent.span.start <= block.span.start && block.span.end <= parent.span.end);
+                let context = block.parent.as_ref().unwrap();
+                assert_eq!(context.name, parent.name.clone().unwrap_or_else(|| "default".to_owned()));
+            }
+        }
+    }
+
     #[rstest]
     #[case("export class Foo {\n  m() {\n  }\n}\n", 0)]
     #[case("export class Foo {\n  m() {\n    return 1;\n  }\n}\n", 1)]

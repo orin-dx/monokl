@@ -588,12 +588,15 @@ mod tests {
     /// Lines `start..=end` (1-based) of `source` as a function block.
     fn block(path: &Utf8Path, source: &str, start: usize, end: usize) -> CodeBlock {
         let code: Vec<&str> = source.lines().skip(start - 1).take(end - start + 1).collect();
+        let code = code.join("\n");
         CodeBlock {
             file: path.to_owned(),
             line_start: start,
             line_end: end,
             node_kind: SymbolKind::Function,
-            code: code.join("\n"),
+            span: 0..code.len(),
+            parent_index: None,
+            code,
             symbol_signature: None,
             name: None,
             matched_lines: Vec::new(),
@@ -945,6 +948,8 @@ mod tests {
                 line_start: 1,
                 line_end: 1,
                 node_kind: SymbolKind::Function,
+                span: 0..code.len(),
+                parent_index: None,
                 code: code.to_owned(),
                 symbol_signature: None,
                 name: None,

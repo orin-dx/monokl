@@ -1,4 +1,6 @@
 //! Monokl's core data types: code blocks, ranked results and diagnostics.
+use std::ops::Range;
+
 use camino::Utf8PathBuf;
 
 /// The classification of a symbol.
@@ -57,6 +59,15 @@ pub struct CodeBlock {
     pub line_start: usize,
     pub line_end: usize,
     pub node_kind: SymbolKind,
+    /// The bytes of the analyzed source this block covers, so `source[span] == code`. Offsets count bytes of the text the
+    /// analyzer received, which is the file's lossy UTF-8 decoding and differs from the file's own bytes after any
+    /// invalid sequence.
+    pub span: Range<usize>,
+    /// The position of the enclosing block in the file's block list, which is
+    /// [`FileAnalysis::blocks`](crate::analysis::FileAnalysis::blocks) followed by
+    /// [`FileAnalysis::test_blocks`](crate::analysis::FileAnalysis::test_blocks). `Some` exactly when `parent` is, the
+    /// enclosing block's span contains this one's, and its position is lower, so the blocks of a file form a forest.
+    pub parent_index: Option<usize>,
     /// The identifier the block declares, as the analyzer read it from the syntax tree: `mergeConfig` for
     /// `function mergeConfig(a, b)`, `Display for Foo` for `impl Display for Foo`. `None` for a block that declares no
     /// name, such as a re-export, an anonymous default export or a destructuring declaration.
