@@ -90,6 +90,17 @@ fn a_query_with_no_match_prints_an_empty_result() {
 }
 
 #[test]
+fn a_query_that_matches_no_file_of_a_populated_tree_exits_zero_with_the_empty_result() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.ts"), "export const alpha = 1;\n").unwrap();
+    let output = monokl_in(dir.path(), &["search", "zzzqqqxx", "."]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).starts_with("search: []\n"), "got: {}", stdout(&output));
+    assert!(!stdout(&output).contains("totalCount"), "got: {}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
+
+#[test]
 fn an_invalid_regex_fails_with_a_structured_error() {
     let output = monokl(&["search", "regex:(", "."]);
     assert_eq!(output.status.code(), Some(1));
@@ -454,8 +465,8 @@ fn a_tiny_timeout_returns_a_partial_result_that_says_so_and_still_succeeds() {
     let dir = project_of_many_matching_files(20_000);
     let output = monokl_in(dir.path(), &["search", "needle", ".", "--timeout", "0.001", "--max-results", "1"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    // Text search always finishes its first batch, which is 16 files per thread.
-    let reached = rayon::current_num_threads() * 16;
+    // Text search always finishes its first batch, which is 64 files per thread.
+    let reached = rayon::current_num_threads() * 64;
     let expected = format!("partial result: 0.001 s timeout expired after searching {reached} of 20000 files");
     assert!(stdout(&output).contains(&expected), "wanted `{expected}` in: {}", stdout(&output));
     assert_eq!(stderr(&output), "");

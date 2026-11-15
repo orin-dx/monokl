@@ -19,7 +19,7 @@ use crate::types::LineHit;
 
 /// How many files each thread searches per batch. A batch ends in a wait for its slowest file, so a small batch costs
 /// speed; a large one holds more hits at once.
-const BATCH_FILES_PER_THREAD: usize = 16;
+pub(crate) const BATCH_FILES_PER_THREAD: usize = 64;
 
 /// The default for [`TextSearchOptions::max_files`].
 pub const DEFAULT_MAX_FILES: usize = 100_000;
@@ -197,17 +197,18 @@ pub fn search_files_where(
     opts: &TextSearchOptions,
     wanted: &dyn Fn(&Utf8Path) -> bool,
 ) -> Result<TextSearchResult> {
-    search_in_batches(root, patterns, opts, wanted, rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
+    search_in_batches(root, patterns, opts, wanted, || rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
 }
 
 /// [`search_files`] with the number of files searched before their outcomes are folded into the result. The result does
-/// not depend on it; it bounds how many files' hits are held beyond the kept ones.
+/// not depend on it; it bounds how many files' hits are held beyond the kept ones. `batch_size` is asked for only when
+/// there is a file to search, because it comes from the thread count and looking that up starts rayon's pool.
 fn search_in_batches(
     root: &Utf8Path,
     patterns: &[&str],
     opts: &TextSearchOptions,
     wanted: &dyn Fn(&Utf8Path) -> bool,
-    batch_size: usize,
+    batch_size: impl FnOnce() -> usize,
 ) -> Result<TextSearchResult> {
     let matcher = compile(patterns)?;
     let root_error = |source| MonoklError::Walk { path: root.to_owned(), source };
@@ -282,7 +283,7 @@ fn search_in_batches(
     // Files are searched on separate threads a batch at a time and folded in walk order, so the result and the ceiling
     // never depend on which thread finished first. A file's hits are dropped as soon as it is past the ceiling, so one
     // batch's hits are held beyond the kept files, however many files match.
-    let batch_size = batch_size.max(1);
+    let batch_size = if items.is_empty() { 1 } else { batch_size().max(1) };
     let total = items.iter().filter(|item| matches!(item, WalkItem::File(_))).count() as u64;
     let mut reached = 0_u64;
     let mut first = true;
@@ -1113,7 +1114,7 @@ mod tests {
             ("i.ts", b"alpha\n"),
         ]);
         let opts = with_max_files(max_files);
-        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, batch_size).unwrap();
+        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, || batch_size).unwrap();
         let kept = ["a.ts", "c/d.ts", "f.ts", "h.ts", "i.ts"].into_iter().take(max_files).collect::<Vec<_>>();
         assert_eq!(hit_files(&root, &result), kept);
         assert_eq!((result.files_total, result.ceiling_hit), (5, max_files < 5));
@@ -1735,7 +1736,7 @@ mod tests {
             seen.lock().unwrap().push(path.to_owned());
             ts_only(path)
         };
-        let result = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &wanted, 1).unwrap();
+        let result = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &wanted, || 1).unwrap();
         assert_eq!(hit_files(&root, &result), ["b.ts", "src/a.ts"]);
         assert_eq!(result.files_total, 2);
         assert_eq!(*seen.lock().unwrap(), [root.join("b.ts"), root.join("src/a.ts"), root.join("src/a.txt")]);
@@ -1919,7 +1920,7 @@ mod tests {
         let files: Vec<(&str, &[u8])> = names.iter().map(|name| (*name, b"alpha\n".as_slice())).collect();
         let (_dir, root) = tree(&files);
         let opts = TextSearchOptions { deadline: Some(Instant::now()), ..TextSearchOptions::default() };
-        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, 2).unwrap();
+        let result = search_in_batches(&root, &["alpha"], &opts, &|_| true, || 2).unwrap();
         assert_eq!(
             result,
             TextSearchResult {
@@ -1936,9 +1937,18 @@ mod tests {
         let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.ts", b"alpha\n"), ("c.ts", b"alpha\n")]);
         let far = Instant::now() + std::time::Duration::from_secs(3600);
         let with_deadline = TextSearchOptions { deadline: Some(far), ..TextSearchOptions::default() };
-        let timed = search_in_batches(&root, &["alpha"], &with_deadline, &|_| true, 1).unwrap();
-        let untimed = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &|_| true, 1).unwrap();
+        let timed = search_in_batches(&root, &["alpha"], &with_deadline, &|_| true, || 1).unwrap();
+        let untimed = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &|_| true, || 1).unwrap();
         assert_eq!(timed, untimed);
         assert_eq!(timed.incomplete, None);
+    }
+
+    #[test]
+    fn the_batch_size_is_not_asked_for_when_no_file_is_wanted() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.txt", b"alpha\n")]);
+        let ask =
+            || -> usize { panic!("the batch size depends on the thread count, whose lookup starts rayon's pool") };
+        let result = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &|_| false, ask).unwrap();
+        assert_eq!(result, TextSearchResult::default());
     }
 }
