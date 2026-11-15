@@ -11,3 +11,12 @@ fd https://github.com/sharkdp/fd.git b2a287b3993768e0ec52f0852916917f23fb2a38 ru
 fastify https://github.com/fastify/fastify.git 0c7413a8332a7892e12dcc351c27a190fefc0053 ts held-out
 trpc https://github.com/trpc/trpc.git 705f8e44c84aab8420a1d16ea2705557566878c7 ts held-out
 date-fns https://github.com/date-fns/date-fns.git cd53d2538cfa318404eff7ade6449b49bf34562e ts held-out
+# Widened held-out set, added to measure generalization. A `report-only` repository is scored and printed but never
+# gates; the marker comes off once it passes 0.9. tokio 16/16, axum 18/20 and commander 19/19 passed at the first run, so
+# they gate with the other held-out rows; react-hook-form scored 12/14 and stays report-only.
+# tokio is v1.54.1 (macro-heavy: cfg_* wrapper macros), axum is v0.8.9 (trait and impl heavy), react-hook-form is v7.92.0
+# (React hooks library), commander is v15.1.0 (JavaScript CLI classes). Each pin is the commit the release tag points to.
+tokio https://github.com/tokio-rs/tokio.git b53b2001ed2ccfd9b87e32a0c6da1a1eebdc80b8 rust held-out
+axum https://github.com/tokio-rs/axum.git c59208c86fded335cd85e388030ad59347b0e5ae rust held-out
+react-hook-form https://github.com/react-hook-form/react-hook-form.git 6864846a29076d83d9d15c0925d0e71d9046d020 ts held-out report-only
+commander https://github.com/tj/commander.js.git a5a7dc084d4d2b7932e85ca049c5204e50a2c721 ts held-out

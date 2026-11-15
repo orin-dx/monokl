@@ -69,7 +69,8 @@ pub fn node_type_boost(kind: SymbolKind) -> f64 {
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "scores are rounded to 6 places, so exact equality is the contract under test")]
+// `allow`, not `expect`: clippy 1.99 stopped flagging float `assert_eq!`, so an expectation is unfulfilled there.
+#[allow(clippy::float_cmp, reason = "scores are rounded to 6 places, so exact equality is the contract under test")]
 mod tests {
     use camino::Utf8PathBuf;
     use rstest::rstest;

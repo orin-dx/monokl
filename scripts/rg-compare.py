@@ -41,6 +41,10 @@ like the tuned questions and members but on their own `held-out questions` and `
 `--min-heldout-recall` and `--min-heldout-member-recall`, both 0.9, set from the first measured scores (23/24 and 12/12). Ranking changes may be tuned
 on the other rows and must be reported on these.
 
+A repository whose options also include `report-only` is scored and printed per repository but never gates; the marker
+comes off once the repository passes 0.9. Gated held-out Rust rows are pooled on a `held-out rust` line, gated by
+`--min-heldout-rust-recall`.
+
 Wall time is reported. Repositories are cloned on demand into target/rg-compare.
 """
 
@@ -59,6 +63,7 @@ QUESTIONS = ROOT / "scripts" / "rg-compare.questions"
 CACHE = ROOT / "target" / "rg-compare"
 UNCAPPED ="1000000"
 HELD_OUT = "held-out"
+REPORT_ONLY = "report-only"
 
 class Lang:
     """What this script owns about a language: the declaration shapes and which monokl languages it covers. Which files
@@ -130,8 +135,19 @@ def repositories(only):
         if line.strip() and not line.startswith("#"):
             name, url, sha, *options = line.split()
             if not only or name in only:
-                language = options[0] if options and options[0] != HELD_OUT else "ts"
+                language = options[0] if options and options[0] not in (HELD_OUT, REPORT_ONLY) else "ts"
                 yield name, url, sha, LANGS[language], HELD_OUT in options
+
+
+def report_only_repositories():
+    """Names of repositories whose options include `report-only`: scored and printed, never gated."""
+    names = set()
+    for line in MANIFEST.read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            name, _url, _sha, *options = line.split()
+            if REPORT_ONLY in options:
+                names.add(name)
+    return names
 
 
 def checkout(name, url, sha):
@@ -244,6 +260,7 @@ def question_rows(only):
 
 def score_questions(binary, only):
     """Runs every question and returns one row each. Fails if the answer's declaration is not in the pinned checkout."""
+    report_only = report_only_repositories()
     checkouts = {name: (checkout(name, url, sha), lang, held) for name, url, sha, lang, held in repositories(only)}
     rows = []
     for repo, words, file, symbol, member, held_out in question_rows(only):
@@ -276,6 +293,7 @@ def score_questions(binary, only):
                 "symbol": symbol,
                 "member": member,
                 "held_out": held_out,
+                "report_only": repo in report_only,
                 "rank": non_test.index(file) + 1 if file in non_test else None,
                 "declaration_in_output": bare_declaration[:40].translate(bare) in output.translate(bare),
                 "rg_any_files": len(set.union(*per_word)),
@@ -307,6 +325,8 @@ def main():
                              "0.9 by default")
     parser.add_argument("--min-heldout-member-recall", type=float, default=0.9,
                         help="fail when the share of held-out member questions is lower; 0.9 by default")
+    parser.add_argument("--min-heldout-rust-recall", type=float, default=0.9,
+                        help="fail when the share of gated held-out Rust rows is lower; 0.9 by default")
     parser.add_argument("--no-questions", action="store_true", help="skip the question set")
     parser.add_argument("--tests", action="store_true", help="also score test files, ungated")
     parser.add_argument("--json", help="write the full result to this path")
@@ -404,6 +424,8 @@ def main():
 
     scored_questions = [] if args.no_questions else score_questions(args.binary, args.repo)
     held_questions = [q for q in scored_questions if q["held_out"]]
+    report_only_questions = [q for q in held_questions if q["report_only"]]
+    held_questions = [q for q in held_questions if not q["report_only"]]
     scored_questions = [q for q in scored_questions if not q["held_out"]]
     ts_questions = [q for q in scored_questions if q["language"] == "ts"]
     rust_questions = [q for q in scored_questions if q["language"] == "rust"]
@@ -469,9 +491,12 @@ def main():
 
     # Held-out rows are scored like their tuned counterparts but on their own lines and gates.
     held_pass = True
+    ts_held = [q for q in held_questions if q["language"] == "ts"]
+    rust_held = [q for q in held_questions if q["language"] == "rust"]
     for label, rows, gate in (
-        ("held-out questions", [q for q in held_questions if not q["member"]], args.min_heldout_recall),
-        ("held-out members", [q for q in held_questions if q["member"]], args.min_heldout_member_recall),
+        ("held-out questions", [q for q in ts_held if not q["member"]], args.min_heldout_recall),
+        ("held-out members", [q for q in ts_held if q["member"]], args.min_heldout_member_recall),
+        ("held-out rust", rust_held, args.min_heldout_rust_recall),
     ):
         hit_count = 0
         for q in rows:
@@ -490,10 +515,25 @@ def main():
             print(f"{label}: {hit_count}/{len(rows)} = {rate:.2%} (gate {gate:.2%})")
         else:
             print(f"{label}: none to score, gate skipped")
+    # Report-only repositories are the widened corpus: every row is printed and scored per repository, none gates.
+    for repo in sorted({q["repo"] for q in report_only_questions}):
+        rows = [q for q in report_only_questions if q["repo"] == repo]
+        hit_count = 0
+        for q in rows:
+            hit = q["rank"] is not None and q["rank"] <= args.top and (q["declaration_in_output"] or not q["member"])
+            hit_count += hit
+            print(
+                f"  {'ok  ' if hit else 'MISS'} {q['repo']}: {q['words']!r} -> {'member ' if q['member'] else ''}"
+                f"{q['symbol']} file_rank={q['rank'] or 'absent'} "
+                f"declaration_in_output={'yes' if q['declaration_in_output'] else 'no'} "
+                f"rg_files any={q['rg_any_files']} all={q['rg_all_files']} rg_n_bytes={q['rg_n_bytes']} "
+                f"monokl_bytes={q['monokl_bytes']}"
+            )
+        print(f"report-only {repo}: {hit_count}/{len(rows)} = {hit_count / len(rows):.2%} (not gated)")
     if args.json:
         Path(args.json).write_text(json.dumps(
             {"identifiers": report, "questions": questions, "members": members, "rust_questions": rust_questions,
-             "held_out": held_questions},
+             "held_out": held_questions, "report_only": report_only_questions},
             indent=2))
     sys.exit(0 if identifiers_pass and questions_pass and members_pass and rust_pass and held_pass else 1)
 
