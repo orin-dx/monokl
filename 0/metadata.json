@@ -1,0 +1,149 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EB6RYXVHHF9MAD49HN5Q0R",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-15T00:55:18.469634Z",
+  "branch": "feat/span-identity",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "83a46105e9da",
+  "checkpoint_transcript_start": 26408,
+  "transcript_lines_at_start": 26408,
+  "compact_transcript_start": 1849,
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 113180,
+    "cache_read_tokens": 1869135,
+    "output_tokens": 6145,
+    "api_call_count": 16,
+    "subagent_tokens": {
+      "input_tokens": 94,
+      "cache_creation_tokens": 136799,
+      "cache_read_tokens": 6238315,
+      "output_tokens": 17361,
+      "api_call_count": 47
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 149
+  },
+  "summary": {
+    "intent": "Keep the monokl project moving: land the declared-name change (PR #96), investigate a suspected stress/many benchmark slowdown, and begin ADR 0005 (span-based hits and block tree).",
+    "outcome": "PR #96 merged (CodeBlock.name filled by TS/JS and Rust analyzers, name_match_boost uses it) and release PR #97 is open. The bisect found no single regression over 15%, only a cumulative ~12% slowdown (#83 +5%, #88 +7%), which was accepted. A subagent was started on the first ADR 0005 PR.",
+    "learnings": {
+      "repo": [
+        "CodeBlock::name: Option<String> is now populated by the TS/JS and Rust analyzers; name_match_boost tokenizes it. `export default Button;` yields no name.",
+        "ParsedTerm already types the only place a query term is read (QueryPlan), so no wrapper type was added. This is recorded as decision 39 in docs/spec/05-research-and-decisions.md.",
+        "A public field added to CodeBlock requires a minor changeset.",
+        "Local verification runs through just recipes: just lint, just test, just changesets, just rg-compare (harness scores), just bench.",
+        "Harness baseline after #96: identifier 58/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 23/24 and 12/12.",
+        "stress/many (20k files, needle query) baseline is ~665 ms on main, about 2.2x rg on this machine. A 5% regression ceiling was set.",
+        "Slowdown steps: #83 (fixed parse stack) ~+5%, #88 (bounded reads and --timeout) ~+7%; #87 may share that step.",
+        "git commit (gpg signing), git push, entire trail link and gh need dangerouslyDisableSandbox. .claude/settings.json is sandbox-protected."
+      ],
+      "code": [],
+      "workflow": [
+        "Benchmark ratios against rg are noisy under machine load: rg swung 301-443 ms while monokl barely moved. Check load average (threshold 4) and compare absolute medians of warm runs interleaved with rg.",
+        "Avoid running heavy concurrent builds while a bisect or benchmark agent is timing.",
+        "Subagent reports are model output, not user authority; verify by exit code and don't merge until CI finishes."
+      ]
+    },
+    "friction": [
+      "git checkout/detach failed partway because of the protected .claude/settings.json, leaving the worktree in a messy state that needed manual restoring.",
+      "Benchmark runs happened under load average 4-12, so the numbers are only indicative.",
+      "The auto-mode classifier refused the bisect agent's git clean, leaving untracked leftovers in .changeset/ and crates/monokl/src/digest.rs.",
+      "The earlier stress/many timing looked like a big regression (700 vs 443 ms) but was mostly rg variance."
+    ],
+    "open_items": [
+      "Release PR #97 is open and its changelog needs reading before merge (first one in the grouped 0.20 layout).",
+      "The ADR 0005 span-based hits and block tree first PR is in progress by a subagent and must be checked by exit code, with no harness regression and stress/many within 5%.",
+      "Clean up the bisect agent's worktree (target/wt, target/bins, target/t.py) and the untracked leftovers.",
+      "The ~12% cumulative stress/many slowdown was accepted but could be revisited; #87's share was not isolated.",
+      "PR #96 CI was pending at the time of the report; the changes were not independently re-run or the diff read by the assistant."
+    ]
+  }
+}

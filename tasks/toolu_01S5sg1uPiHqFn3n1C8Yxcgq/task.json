@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01S5sg1uPiHqFn3n1C8Yxcgq",
+  "agent_id": "a651248c77d110dd5",
+  "subagent_type": "general-purpose",
+  "task_description": "Bisect stress/many slowdown",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 69258,
+    "cache_read_tokens": 1087914,
+    "output_tokens": 6787,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-14T16:38:50.28998-08:00",
+  "completed_at": "2026-11-14T16:45:44.029076-08:00"
+}

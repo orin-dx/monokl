@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EB6RYXVHHF9MAD49HN5Q0R",
+  "strategy": "manual-commit",
+  "branch": "feat/span-identity",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 113180,
+    "cache_read_tokens": 1869135,
+    "output_tokens": 6145,
+    "api_call_count": 16,
+    "subagent_tokens": {
+      "input_tokens": 94,
+      "cache_creation_tokens": 136799,
+      "cache_read_tokens": 6238315,
+      "output_tokens": 17361,
+      "api_call_count": 47
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
