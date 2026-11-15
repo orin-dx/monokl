@@ -2124,6 +2124,27 @@ mod tests {
         assert_eq!(result.truncated_lines, 1);
     }
 
+    /// Text search asks `wanted` once for each file and no more, however many files there are, so the walk and the
+    /// filter cost linear work. Counting the calls gives the same answer on every machine and load.
+    #[rstest]
+    #[case::few(250)]
+    #[case::four_times_as_many(1000)]
+    fn the_filter_is_asked_once_for_each_file(#[case] count: usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let names: Vec<String> = (0..count).map(|index| format!("d{:02}/f{index:04}.ts", index % 20)).collect();
+        let files: Vec<(&str, &[u8])> = names.iter().map(|name| (name.as_str(), b"alpha\n".as_slice())).collect();
+        let (_dir, root) = tree(&files);
+        let asked = AtomicUsize::new(0);
+        let wanted = |_: &Utf8Path| {
+            asked.fetch_add(1, Ordering::Relaxed);
+            true
+        };
+        let result = search_in_batches(&root, &["alpha"], &TextSearchOptions::default(), &wanted, || 16).unwrap();
+        assert_eq!(result.files_total, count as u64);
+        assert_eq!(asked.load(Ordering::Relaxed), count);
+    }
+
     #[test]
     fn a_deadline_that_has_passed_still_searches_the_first_batch_and_reports_how_far_it_got() {
         let names = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];

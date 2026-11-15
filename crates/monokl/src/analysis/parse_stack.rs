@@ -108,14 +108,18 @@ mod tests {
     }
 
     #[test]
-    fn a_thousand_parse_threads_in_a_row_start_without_a_pool() {
-        let started = std::time::Instant::now();
+    fn every_parse_runs_on_a_thread_of_its_own_that_no_other_parse_reuses() {
+        let mut seen = std::collections::HashSet::new();
         for _ in 0..1000 {
-            assert_eq!(on_parse_stack(|| 1), Ok(1));
+            let (id, name) = on_parse_stack(|| {
+                let current = thread::current();
+                (current.id(), current.name().map(str::to_owned))
+            })
+            .unwrap();
+            assert_eq!(name.as_deref(), Some("monokl-parse"));
+            assert!(seen.insert(id), "a thread ran two parses, so something pools them");
         }
-        // Not an assertion about speed: it only fails if starting a thread is so slow that a search of many files is
-        // not viable, which a second per thousand would be.
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(seen.len(), 1000);
     }
 
     #[test]

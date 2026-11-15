@@ -829,10 +829,11 @@ fn a_regex_lookahead_that_fails_is_paid_for_once_in_total() {
     // Every `of /` could start a regular expression, and none ends on its line, which is 3 MiB long.
     let source =
         format!("export const x = {}1{}{};\n", "of / [".repeat(10_000), "]".repeat(10_000), " ".repeat(3 << 20));
-    let started = Instant::now();
-    let accepted = scan_accepts(Kind::Ts, &source);
-    assert!(started.elapsed() < Duration::from_secs(2), "the scan took {:?}", started.elapsed());
-    assert!(!accepted);
+    // The failed lookaheads share one budget of read bytes, and spending it ends the scan with a cost over the limit.
+    // The limit is far above anything the nesting could reach, so only the budget can end this scan: each lookahead
+    // alone reads 3 MiB, and 10,000 of them would read 30 GiB if each were paid for separately.
+    let limit = 1 << 30;
+    assert_eq!(nesting::peak_cost(&source, Kind::Ts.syntax(), limit), limit + 1);
 }
 
 #[test]
