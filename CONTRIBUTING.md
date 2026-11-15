@@ -44,7 +44,7 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 
 ## Pull requests
 
-- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, and audit.
+- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, and audit. The same checks run on the merge queue's combined commit and again on every push to main; a red main opens or updates a `ci-red` issue.
 - Keep a PR to one topic.
 - A change users can see needs a changeset. Internal changes (tests, CI, docs, refactors) do not.
 
