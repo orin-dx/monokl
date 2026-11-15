@@ -28,6 +28,7 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just changesets` | Check Callisto config and pending changesets |
 | `just bench [--repo NAME] [--json PATH]` | p50/p95 wall time, peak RSS and output bytes of `monokl search` against `rg` for six query classes on pinned repos (one large) plus a synthetic stress set; warm cache only, no gates (on demand, needs network) |
 | `just rg-compare [--terms N] [--min-recall R]` | Whether `monokl search` puts a symbol's declaration in the top files, and how much output it costs against `rg -n`, on pinned public repos, plus 18 multi-word questions with known answers (`scripts/rg-compare.questions`, gated by `--min-question-recall`), 36 held-out questions on fastify, trpc and date-fns scored apart (`--min-heldout-recall`, `--min-heldout-member-recall`, both 0.9), and Rust rows on pinned `fd` (24 pooled, gated by `--min-rust-recall`, 0.9) (on demand, needs network) |
+| `just agent-cost [--detail] [--json PATH]` | Bytes, estimated tokens and turns of one `monokl search` against a fixed rg-only agent policy on the `rg-compare` rows, and whether the answer is in the first 3 rows; deterministic, report only, no model (on demand, needs network) |
 | `just verify-release <version>` | Check a published release: tag, assets, crates.io, attestation, binary |
 
 ## Where things stand

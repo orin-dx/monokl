@@ -99,6 +99,11 @@ rg-compare *args:
     cargo build --release -q
     python3 -I scripts/rg-compare.py {{ args }}
 
+# Bytes, estimated tokens and turns of one `monokl search` against a fixed rg-only agent policy on the rg-compare questions; deterministic, no model. Report only. Needs network and `rg`; on demand.
+agent-cost *args:
+    cargo build --release -q
+    python3 -I scripts/agent-cost.py {{ args }}
+
 # Time and peak memory of `monokl search` against ripgrep on pinned repos and a stress set. Warm cache; needs network and `rg`; on demand.
 bench *args:
     cargo build --release -q
