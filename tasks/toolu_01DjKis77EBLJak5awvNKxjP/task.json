@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01DjKis77EBLJak5awvNKxjP",
+  "agent_id": "ac79a35658711f100",
+  "subagent_type": "general-purpose",
+  "task_description": "Prototype stop-word-aware name matching",
+  "started_at": "2026-11-14T18:00:15.757487-08:00"
+}
