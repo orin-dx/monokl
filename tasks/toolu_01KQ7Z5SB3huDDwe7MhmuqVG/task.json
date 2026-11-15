@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KQ7Z5SB3huDDwe7MhmuqVG",
+  "agent_id": "a49a231684cd4f5be",
+  "subagent_type": "general-purpose",
+  "task_description": "ADR 0005 spans: first PR",
+  "token_usage": {
+    "input_tokens": 124,
+    "cache_creation_tokens": 137226,
+    "cache_read_tokens": 7626991,
+    "output_tokens": 39286,
+    "api_call_count": 62
+  },
+  "started_at": "2026-11-14T16:45:52.472012-08:00",
+  "completed_at": "2026-11-14T16:56:03.010005-08:00"
+}

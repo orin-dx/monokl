@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01QfHFEJbmDNCyabsrNDuwC2",
+  "agent_id": "a3f673a53d0186c7c",
+  "subagent_type": "general-purpose",
+  "task_description": "ADR 0005 PR 2: match ranges",
+  "started_at": "2026-11-14T17:33:40.973112-08:00"
+}
