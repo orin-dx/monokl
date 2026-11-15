@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UMXxyZyPCWaR7DzVq84YNv",
+  "agent_id": "a4fcd6337464747ea",
+  "subagent_type": "general-purpose",
+  "task_description": "Widen eval corpus for generalization",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 111071,
+    "cache_read_tokens": 5371156,
+    "output_tokens": 27407,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-14T17:34:59.755781-08:00",
+  "completed_at": "2026-11-14T17:41:30.116716-08:00"
+}

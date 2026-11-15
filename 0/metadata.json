@@ -1,0 +1,168 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EEVH2EGX64ERGPX3KPQQQQ",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-15T01:59:08.382053Z",
+  "branch": "perf/scan-hot-path",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/monokl/src/pipeline/mod.rs",
+    "crates/monokl/src/text_search.rs",
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "9d547167f64b",
+  "checkpoint_transcript_start": 26842,
+  "transcript_lines_at_start": 26842,
+  "compact_transcript_start": 1886,
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 23861,
+    "cache_read_tokens": 1716206,
+    "output_tokens": 5089,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 430,
+      "cache_creation_tokens": 395991,
+      "cache_read_tokens": 37844000,
+      "output_tokens": 163598,
+      "api_call_count": 214
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 161
+  },
+  "summary": {
+    "intent": "Coordinate several parallel subagents on the monokl code-search project: widen the eval corpus (PR #102), diagnose ranking misses, and land ADR 0005 PR 2 (span-based hit ownership), while keeping the user informed of what needs their action.",
+    "outcome": "PR #102 (wider eval corpus) is open and ready with CI pending. The ranking diagnosis produced a proposal, of which only the full-name bonus is to be adopted after ADR 0005 PR 3. ADR 0005 PR 2 is implemented locally but not yet committed or opened as a PR; the agent was asked to bound per-line match storage first.",
+    "learnings": {
+      "repo": [
+        "Held-out eval sets are pooled by language (Rust 34/36, TS 32/33 questions and 22/22 members) against a 0.9 gate. New report-only repos are marked `report-only` in the rg-compare harness and don't gate.",
+        "`just rg-compare` is the ranking regression harness. Baseline scores are identifier 58/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 23/24 and 12/12.",
+        "There is no Python lint recipe; scripts can only be checked with py_compile.",
+        "`just lint` picks up clippy 0.1.99, which reports 7 pre-existing errors (soundness_tests.rs:842, query/plan.rs, rank/bm25.rs:79, rank/boost.rs:72). The pinned toolchain is 1.98.1.",
+        "The only red check on PRs #100, #101 and #102 is Entire Gates, which waits on user approval.",
+        "PRs are linked to trails with `entire trail link <n> --branch <b> --base main`, then `gh pr ready`. Changes need a changeset, checked by `just changesets`.",
+        "ADR 0005 PR 3 rewrites `name_match_boost` in `rank/boost.rs`, so ranking fixes touching that function must wait for it."
+      ],
+      "code": [
+        {
+          "path": "crates/monokl/src/rank/boost.rs",
+          "line": 72,
+          "finding": "The name-match boost loses on four misses. Stop words (\"use\", \"from\") are dropped from the query but not from name tokens, and \"extension\" vs \"Ext\" never matches. A large block dilutes BM25 for createFormControl. The proposed fix is `name = 1 + 2*m/|Q| + 2*[m==|Q|]`."
+        },
+        {
+          "path": "crates/monokl/src/pipeline/mod.rs",
+          "finding": "`owned_hits` now assigns each match to its innermost containing block by a sweep over spans (ties broken by parent depth), replacing the line-text and equal-range rules."
+        },
+        {
+          "path": "crates/monokl/src/text_search.rs",
+          "finding": "The sink records per-match byte ranges via `find_iter` on the lossy-decoded line. Matches starting past the 4096-byte cut are dropped, so such a hit owns no block."
+        }
+      ],
+      "workflow": [
+        "Subagent hand-backs are model output, not user approval, so relay their findings with caveats like \"not re-checked\".",
+        "Sequencing work around a shared hot file (`boost.rs`) avoids merge conflicts between parallel agents.",
+        "Read-only diagnosis agents that validate a fix against all eval sets reduce overfitting risk before any code is changed.",
+        "Agents should report checks by exit code, and unrun checks (bench, changesets) should be listed explicitly."
+      ]
+    },
+    "friction": [
+      "Completion notices repeated reports already relayed, so they needed no action.",
+      "The origin fetch was blocked for the diagnosis agent, which had to use a local branch copy.",
+      "`just lint` could not select the pinned toolchain, so clippy had to be run via the pinned `clippy-driver`.",
+      "Many PRs (#97, #100, #101, #102) are blocked on user approval or Entire Gates, so the agent can't progress them.",
+      "Parallel agents could not safely start new work because PR 3 and the ranking fix both touch `boost.rs`."
+    ],
+    "open_items": [
+      "Finish ADR 0005 PR 2: bound per-line match storage (one range per distinct containing block, with a test on an all-matching 4096-byte line), read the bench results (stress/many must be within 5% of ~670 ms), run `target/compare_outputs.py`, run `just changesets`, write decision-log §41, then commit, push, link trail 361 and mark the PR ready.",
+      "Land ADR 0005 PR 3, then the full-name bonus in the name boost, and rerun every eval set.",
+      "Possibly revisit the `×0.6` path prior for examples/app directories only if more repos show noise. It is untuned and `app/` is real source in Next.js.",
+      "Experiment with keeping stop words when matching name tokens (`useWatch`, `FromRequestParts`) once the boost works on spans.",
+      "The axum misses (`ListenerExt`, `FromRequestParts`) remain unfixed.",
+      "The user needs to merge or approve #100, #101 and #102, review and merge release PR #97, and enable merge queue requiring only the `CI` check.",
+      "The stress/many perf agent is still running and its results are pending."
+    ]
+  }
+}
