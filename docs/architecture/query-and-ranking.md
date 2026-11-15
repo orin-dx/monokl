@@ -81,7 +81,22 @@ Both read the byte spans the analyzers fill ([ADR 0005](../adr/0005-hits-and-blo
 
 `dedup_blocks` (`dedup.rs`) walks the ranked blocks best first and drops a block that shares more than half of the smaller span's bytes with a block already kept in the same file, then renumbers `rank`. The spans of one analyzed file nest or are disjoint, so this drops a block inside a kept block, equal to it, or holding it, and keeps two blocks that share a line but no byte (`const a = 1; const b = 2;`). A member (a block with a `parent`) never duplicates the top-level block that strictly encloses it, in either rank order. A block with an empty span overlaps nothing. A segment tree over the kept spans' ends keeps the walk near-linear (`tests/scaling.rs`).
 
-The snippet (`output/agent.rs`) shows the matched lines of a block, at most three, each cut to 160 characters, with the rest counted. A matched line is left out when its text lies wholly inside the block's `signature_span`, because the signature column already shows it.
+The snippet (`output/agent.rs`) shows the matched lines of a block, at most `--snippet-lines` (default 1, up to 3), each cut to 160 characters, with the rest counted (`...and 2 more matching lines`). A matched line is left out when its text lies wholly inside the block's `signature_span`, because the signature column already shows it. With `--snippet-lines 0` the column is `null`, so a variable or type alias row, which has no signature, shows no declaration text.
+
+## Which rows are printed
+
+`budget.rs` cuts the ranked, deduplicated list in three steps, in this order. Core holds none of them; it returns every ranked block.
+
+1. **Relevance cut** (`--min-score`, default 0.3). Keep the leading rows whose `final_score` is at least `min_score * top`, where `top` is the first row's score. The scores fall down the list, so the kept rows are a prefix. A score equal to the threshold is kept, so rows that tie with the top survive `--min-score 1`. A top score of 0 keeps every row (the threshold is 0). `--min-score 0` turns the cut off.
+2. **Floor.** The first eight rows are kept whatever their score, or all of them when there are fewer. The floor lifts the relevance cut only.
+3. **Row cap** (`--max-results`, default 20). Applies to what is left and wins over the floor: `--max-results 1` prints one row.
+4. **Token cap** (`--max-tokens`, default 20,000). The longest prefix whose printed rows fit; a row larger than the whole cap leaves no rows. It counts the printed rows, so it sees the snippet length.
+
+When any rule dropped rows the response is truncated: `totalCount` is the number of ranked blocks and the help line names the flag for each rule that cut: `showing 4 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`, or `--max-tokens N` when the tokens ran out before the rows. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation` and `blocks_cut_by_relevance` only.
+
+Why these defaults: [05 §46](../spec/05-research-and-decisions.md). To get the output of versions before the change, run `--min-score 0 --max-results 50 --snippet-lines 3`.
+
+Known gap: there is no `--offset`, so rows past the cap or the cut are reached by `--min-score 0` and `--max-results N`, or by a narrower query (`+term`, `-term`, a path), not by paging.
 
 ## Determinism and bounds
 
@@ -92,7 +107,7 @@ Resolved findings, kept so they are not reopened:
 2. **#9 — total-order tie-break.** The six sort keys above leave no ties, so the order never depends on input order.
 3. **#10 — the file walk is sorted by file name**, so the set of files reached under the file ceiling is reproducible.
 4. **#11 — resource bounds.** The text search examines at most 100,000 files and keeps counting past it, reads at most
-   4 MiB per file and keeps 4096 bytes per line; `--max-results` and `--max-tokens` cut the output; `--timeout` stops
+   4 MiB per file and keeps 4096 bytes per line; `--min-score`, `--max-results` and `--max-tokens` cut the output; `--timeout` stops
    the work. See [ADR 0004](../adr/0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md).
 
 Open:
