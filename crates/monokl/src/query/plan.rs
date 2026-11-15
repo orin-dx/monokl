@@ -42,9 +42,9 @@ mod tests {
     fn from_terms_on_empty_vec_produces_all_empty_fields() {
         let qp = QueryPlan::from_terms(Vec::new());
         assert!(qp.terms.is_empty());
-        assert!(qp.required.is_empty());
-        assert!(qp.excluded.is_empty());
-        assert!(qp.scored.is_empty());
+        assert_eq!(qp.required, Vec::<usize>::new());
+        assert_eq!(qp.excluded, Vec::<usize>::new());
+        assert_eq!(qp.scored, Vec::<usize>::new());
     }
 
     fn term(modifier: Modifier, pattern: &str) -> ParsedTerm {
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn exclusion_only_plan_has_no_search_patterns() {
         let qp = QueryPlan::from_terms(vec![term(Modifier::Excluded, "e0"), term(Modifier::Excluded, "e1")]);
-        assert!(qp.search_patterns().is_empty());
+        assert_eq!(qp.search_patterns(), Vec::<&str>::new());
     }
 
     #[test]

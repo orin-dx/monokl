@@ -839,7 +839,10 @@ fn a_regex_lookahead_that_fails_is_paid_for_once_in_total() {
 fn nothing_the_scan_accepts_overflows_a_stack_sized_for_the_cap() {
     // The check is only worth anything if the child can run: an ordinary file must not count as a crash.
     assert!(crashing(&[(Kind::Ts, "export const a = 1;\n".to_owned())]).is_empty(), "the child process does not run");
-    assert!(!crashing(&[(Kind::Ts, format!("{}1{}", "(".repeat(1_000_000), ")".repeat(1_000_000)))]).is_empty());
+    assert_ne!(
+        crashing(&[(Kind::Ts, format!("{}1{}", "(".repeat(1_000_000), ")".repeat(1_000_000)))]),
+        Vec::<usize>::new()
+    );
     let fixed = std::env::var("MONOKL_FUZZ_SEED").ok().and_then(|value| value.parse().ok()).unwrap_or(0x5eed_u64);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let random = u64::try_from(nanos % u128::from(u64::MAX)).unwrap();
