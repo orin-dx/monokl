@@ -9,10 +9,11 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel their own superseded runs. A push to main or a merge group gets a group per commit: GitHub keeps
+# one pending run per group and cancels the rest, which would leave a merged commit unchecked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Every commit on main keeps its own run, so a red one is never hidden by the next merge.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
