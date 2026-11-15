@@ -1,0 +1,22 @@
+{
+  "tool_use_id": "toolu_01XBBh9S5qmMEBMwwxApSMRA",
+  "agent_id": "a26b382a3617839f4",
+  "subagent_type": "general-purpose",
+  "task_description": "Blind review of 48 changed top rows",
+  "files": [
+    "blind/collect.py",
+    "blind/dem.py",
+    "blind/mk.py",
+    "blind/unblind.py",
+    "blind/verdicts.json"
+  ],
+  "token_usage": {
+    "input_tokens": 68,
+    "cache_creation_tokens": 105646,
+    "cache_read_tokens": 2630893,
+    "output_tokens": 17559,
+    "api_call_count": 34
+  },
+  "started_at": "2026-11-14T19:31:12.026632-08:00",
+  "completed_at": "2026-11-14T19:35:23.406833-08:00"
+}

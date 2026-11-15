@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LsqemkbpW5oqk32wnAtMVZ",
+  "agent_id": "abf7a6f9b35358254",
+  "subagent_type": "general-purpose",
+  "task_description": "Name boost: exact-declaration formula",
+  "token_usage": {
+    "input_tokens": 210,
+    "cache_creation_tokens": 167416,
+    "cache_read_tokens": 14364192,
+    "output_tokens": 50248,
+    "api_call_count": 105
+  },
+  "started_at": "2026-11-14T19:14:53.947331-08:00",
+  "completed_at": "2026-11-14T19:30:58.417676-08:00"
+}

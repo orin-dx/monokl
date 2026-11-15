@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CPg4T6Vzn2nmk1FyQqvMfW",
+  "agent_id": "acf53a379d2e3861a",
+  "subagent_type": "general-purpose",
+  "task_description": "Experiment: fix 4 name-boost regressions",
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 284789,
+    "cache_read_tokens": 5102057,
+    "output_tokens": 40385,
+    "api_call_count": 51
+  },
+  "started_at": "2026-11-14T19:35:41.000398-08:00",
+  "completed_at": "2026-11-14T22:05:56.966082-08:00"
+}
