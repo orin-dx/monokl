@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DjKis77EBLJak5awvNKxjP",
+  "agent_id": "ac79a35658711f100",
+  "subagent_type": "general-purpose",
+  "task_description": "Prototype stop-word-aware name matching",
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 146400,
+    "cache_read_tokens": 9853373,
+    "output_tokens": 33577,
+    "api_call_count": 86
+  },
+  "started_at": "2026-11-14T18:00:15.757487-08:00",
+  "completed_at": "2026-11-14T18:19:25.798394-08:00"
+}
