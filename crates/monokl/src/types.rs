@@ -132,6 +132,11 @@ pub struct Diagnostic {
 pub struct LineHit {
     pub line_number: usize,
     pub text: String,
+    /// The byte offsets in `text` at which a match starts, in ascending order, as ranges of consecutive offsets: a match
+    /// at offset 4 is `4..5` and one at each of 4, 5 and 6 is `4..7`. Where a match ends is not recorded. A line cut to
+    /// the searcher's length limit records only the matches that start before the cut, so a hit whose matches all lie
+    /// past it has none.
+    pub match_starts: Vec<Range<usize>>,
 }
 
 /// The search command's response.

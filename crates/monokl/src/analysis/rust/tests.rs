@@ -980,6 +980,87 @@ fn a_test_function_on_the_line_of_its_module_does_not_leak_to_the_module() {
     assert_eq!(with, [("l.rs".to_owned(), 1, 1, SymbolKind::Function, Some("m".to_owned()), vec![1])]);
 }
 
+/// Two methods that share the line `} fn b() {`: `a` ends where `b` starts.
+const SHARED_LINE_RS: &str = "impl C {\n    fn a() {\n        one();\n    } fn b() {\n        two();\n    }\n}\n";
+
+#[test]
+fn a_match_on_a_line_two_methods_share_goes_to_the_method_that_holds_it() {
+    let (_dir, root) = tree(&[("l.rs", SHARED_LINE_RS)]);
+    let method = |first, last, matched: Vec<usize>| {
+        ("l.rs".to_owned(), first, last, SymbolKind::Method, Some("C".to_owned()), matched)
+    };
+    assert_eq!(found(&find(&root, "regex:b\\(\\)", false, None), &root), [method(4, 6, vec![4])]);
+    assert_eq!(found(&find(&root, "one", false, None), &root), [method(2, 4, vec![3])]);
+}
+
+#[test]
+fn a_match_before_a_method_on_the_impl_header_line_stays_with_the_impl() {
+    let (_dir, root) = tree(&[("l.rs", "impl C { fn a() {\n    one();\n}\n    fn b() {\n        two();\n    }\n}\n")]);
+    assert_eq!(
+        found(&find(&root, "impl", false, None), &root),
+        [("l.rs".to_owned(), 1, 7, SymbolKind::Impl, None, vec![1])]
+    );
+}
+
+#[test]
+fn a_comment_after_the_last_methods_closing_brace_stays_with_the_impl() {
+    let source = "impl Svc {\n    fn load() {\n        one();\n    } // zebra note\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    assert_eq!(
+        found(&find(&root, "zebra", false, None), &root),
+        [("l.rs".to_owned(), 1, 5, SymbolKind::Impl, None, vec![4])]
+    );
+}
+
+#[test]
+fn a_comment_after_a_methods_closing_brace_belongs_to_the_method_that_follows_it() {
+    // The analyzer starts a method at the comments before it, so the match is inside `save`'s span.
+    let source =
+        "impl Svc {\n    fn load() {\n        one();\n    } // zebra note\n    fn save() {\n        two();\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    assert_eq!(
+        found(&find(&root, "zebra", false, None), &root),
+        [("l.rs".to_owned(), 4, 7, SymbolKind::Method, Some("Svc".to_owned()), vec![4])]
+    );
+}
+
+#[test]
+fn of_items_sharing_a_line_the_one_holding_the_match_is_returned() {
+    let (_dir, root) = tree(&[("l.rs", "const A: u32 = 1; const NEEDLE: u32 = 2;\n")]);
+    let result = find(&root, "needle", false, None);
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(rows, [("const NEEDLE: u32 = 2;", vec![1])]);
+}
+
+#[test]
+fn a_holder_keeps_a_match_outside_its_method_even_when_the_method_matches_another_term() {
+    let source =
+        "impl C { const LABEL: &str = \"beta\"; fn m() {\n    one();\n}\n    fn other() {\n        two();\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let rows = |query| {
+        let mut rows: Vec<_> = find(&root, query, false, None)
+            .ranked
+            .iter()
+            .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone()))
+            .collect();
+        rows.sort();
+        rows
+    };
+    // `beta` is only in the impl's own part of line 1 and `m` only in the method's.
+    assert_eq!(rows("beta m"), [(1, 3, vec![1]), (1, 7, vec![1])]);
+    assert_eq!(rows("beta"), [(1, 7, vec![1])]);
+}
+
+#[test]
+fn a_match_after_invalid_utf8_on_the_same_line_goes_to_the_function_it_is_in() {
+    // The invalid byte is one byte in the file and a three-byte U+FFFD in the text the analyzer sees.
+    let (_dir, root) = tree(&[]);
+    std::fs::write(root.join("l.rs"), b"/* \xff */ fn a() {} fn b_needle() {}\n").unwrap();
+    let result = find(&root, "b_needle", false, None);
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(rows, [("fn b_needle() {}", vec![1])]);
+}
+
 #[test]
 fn a_syntax_error_reports_a_degraded_file_and_still_returns_blocks() {
     let (_dir, root) = tree(&[("src/bad.rs", "fn fine() {\n    alpha();\n}\n\nstruct Oops {\n    a: ,\n")]);

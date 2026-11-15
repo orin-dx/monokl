@@ -1,11 +1,14 @@
 //! The first search stage: walks a root and returns, per file, the lines that match any query pattern.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
@@ -546,18 +549,16 @@ fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path,
     }
 }
 
-/// Collects matching lines, and stops at the first sign of binary data so the caller can discard the whole file,
-/// including lines matched before the NUL byte was reached. A matching line that is not UTF-8 is kept with its invalid
-/// bytes replaced by U+FFFD, and does not stop the search, so a NUL later in the file still marks it binary.
+/// Collects matching lines with the byte offsets at which their matches start, and stops at the first sign of binary data so the caller
+/// can discard the whole file, including lines matched before the NUL byte was reached. A matching line that is not
+/// UTF-8 is kept with its invalid bytes replaced by U+FFFD, and does not stop the search, so a NUL later in the file
+/// still marks it binary.
 ///
-/// The searcher strips only the `\n` before matching, so a line ending in `\r\n` is matched again here against its
-/// text without the terminator: a pattern always sees exactly the text a hit reports.
+/// The searcher reports a whole line, so where each match starts comes from a second pass of the matcher over the line. The
+/// searcher strips only the `\n` before matching, so a line ending in `\r\n` is matched here against its text without
+/// the terminator: a pattern always sees exactly the text a hit reports.
 struct LineCollector<'m> {
     matcher: &'m RegexMatcher,
-    /// Matches one CRLF line's text, which holds no `\n`, so it searches it as a single line.
-    line_searcher: Searcher,
-    /// Reused to hold the text [`Self::line_searcher`] searches.
-    line_buf: Vec<u8>,
     hits: Vec<LineHit>,
     binary: bool,
     /// The most bytes of a line's text a hit keeps.
@@ -566,45 +567,73 @@ struct LineCollector<'m> {
     truncated: u64,
 }
 
+/// Where the matches of one line's text start.
+struct LineMatches {
+    /// The offsets at which a match starts before the cut, as ranges of consecutive offsets.
+    starts: Vec<Range<usize>>,
+    /// Whether the text holds any match, before or past the cut.
+    any: bool,
+}
+
 impl<'m> LineCollector<'m> {
     fn new(matcher: &'m RegexMatcher, max_line_bytes: usize) -> Self {
-        Self {
-            matcher,
-            line_searcher: SearcherBuilder::new().bom_sniffing(false).build(),
-            line_buf: Vec::new(),
-            hits: Vec::new(),
-            binary: false,
-            max_line_bytes,
-            truncated: 0,
-        }
+        Self { matcher, hits: Vec::new(), binary: false, max_line_bytes, truncated: 0 }
     }
 
     /// Records `line` as a hit when it matches. `searcher_matched` is the searcher's verdict, which is final unless the
     /// line ends in `\r\n`.
     fn line(&mut self, line_number: Option<u64>, line: &[u8], searcher_matched: bool) -> io::Result<()> {
-        let text = without_line_terminator(line);
-        let matched = if line.ends_with(b"\r\n") { self.text_matches(text)? } else { searcher_matched };
-        if !matched {
+        let crlf = line.ends_with(b"\r\n");
+        if !searcher_matched && !crlf {
             return Ok(());
+        }
+        let text = without_line_terminator(line);
+        let kept = cut_at_char_boundary(text, self.max_line_bytes);
+        let found = self.find_matches(text, kept.len())?;
+        if !found.any {
+            // The searcher matched this line, so the matcher must find the match again.
+            return if crlf { Ok(()) } else { Err(io::Error::other("matched line has no match")) };
         }
         let line_number = line_number
             .and_then(|line_number| usize::try_from(line_number).ok())
             .ok_or_else(|| io::Error::other("matched line has no usable line number"))?;
-        let kept = cut_at_char_boundary(text, self.max_line_bytes);
         self.truncated += u64::from(kept.len() < text.len());
-        self.hits.push(LineHit { line_number, text: String::from_utf8_lossy(kept).into_owned() });
+        let lossy = String::from_utf8_lossy(kept);
+        let match_starts = match lossy {
+            Cow::Borrowed(_) => found.starts,
+            Cow::Owned(_) => found
+                .starts
+                .into_iter()
+                .map(|run| lossy_offset(kept, run.start)..lossy_offset(kept, run.end - 1) + 1)
+                .collect(),
+        };
+        self.hits.push(LineHit { line_number, text: lossy.into_owned(), match_starts });
         Ok(())
     }
 
-    fn text_matches(&mut self, text: &[u8]) -> io::Result<bool> {
-        // An empty slice has no lines to match, so the text is searched as one `\n`-terminated line, which the
-        // searcher strips again before matching.
-        self.line_buf.clear();
-        self.line_buf.extend_from_slice(text);
-        self.line_buf.push(b'\n');
-        let mut found = AnyMatch(false);
-        self.line_searcher.search_slice(self.matcher, &self.line_buf, &mut found)?;
-        Ok(found.0)
+    /// Finds where the matches in `text` start, `cut` being how many of its first bytes a hit keeps. The search stops at
+    /// the first match that starts past the cut, so a line of many matches costs only what is kept. Starts at
+    /// consecutive offsets are one range, so a pattern that matches every byte of a line stores one range, not one per
+    /// byte, and at most every other byte can begin a range of its own.
+    fn find_matches(&self, text: &[u8], cut: usize) -> io::Result<LineMatches> {
+        let cut_short = cut < text.len();
+        let mut found = LineMatches { starts: Vec::new(), any: false };
+        self.matcher
+            .find_iter(text, |found_match| {
+                found.any = true;
+                let start = found_match.start();
+                if cut_short && start >= cut {
+                    return false;
+                }
+                match found.starts.last_mut() {
+                    Some(run) if start < run.end => {}
+                    Some(run) if run.end == start => run.end += 1,
+                    _ => found.starts.push(start..start + 1),
+                }
+                true
+            })
+            .map_err(io::Error::other)?;
+        Ok(found)
     }
 }
 
@@ -627,16 +656,28 @@ impl Sink for LineCollector<'_> {
     }
 }
 
-/// Records whether a search found any match, stopping at the first.
-struct AnyMatch(bool);
-
-impl Sink for AnyMatch {
-    type Error = io::Error;
-
-    fn matched(&mut self, _searcher: &Searcher, _mat: &SinkMatch<'_>) -> io::Result<bool> {
-        self.0 = true;
-        Ok(false)
+/// Where byte `offset` of `raw` falls in `String::from_utf8_lossy(raw)`, which replaces each invalid sequence with one
+/// U+FFFD. An offset inside an invalid sequence lands at the start of its replacement.
+fn lossy_offset(raw: &[u8], offset: usize) -> usize {
+    let (mut raw_at, mut lossy_at) = (0, 0);
+    for chunk in raw.utf8_chunks() {
+        let valid = chunk.valid().len();
+        if offset <= raw_at + valid {
+            return lossy_at + (offset - raw_at);
+        }
+        raw_at += valid;
+        lossy_at += valid;
+        let invalid = chunk.invalid().len();
+        if invalid > 0 {
+            let replacement = char::REPLACEMENT_CHARACTER.len_utf8();
+            if offset < raw_at + invalid {
+                return lossy_at;
+            }
+            raw_at += invalid;
+            lossy_at += replacement;
+        }
     }
+    lossy_at
 }
 
 /// The first `max` bytes of `text`, or fewer so that a multi-byte character is never split.
@@ -685,8 +726,21 @@ mod tests {
         }
     }
 
+    /// A hit on `text` for the pattern `alpha`: a start at each occurrence, ASCII case aside. Occurrences are five
+    /// bytes wide, so no two starts are consecutive.
     fn hit(line_number: usize, text: &str) -> LineHit {
-        LineHit { line_number, text: text.to_string() }
+        let lower = text.to_ascii_lowercase();
+        let match_starts = lower.match_indices("alpha").map(|(start, _)| start..start + 1).collect();
+        LineHit { line_number, text: text.to_string(), match_starts }
+    }
+
+    fn hit_at(line_number: usize, text: &str, match_starts: &[Range<usize>]) -> LineHit {
+        LineHit { line_number, text: text.to_string(), match_starts: match_starts.to_vec() }
+    }
+
+    /// A hit whose match starts form one run of consecutive offsets.
+    fn hit_in(line_number: usize, text: &str, run: Range<usize>) -> LineHit {
+        LineHit { line_number, text: text.to_string(), match_starts: std::iter::once(run).collect() }
     }
 
     fn hits(root: &Utf8Path, files: &[(&str, Vec<LineHit>)]) -> BTreeMap<Utf8PathBuf, Vec<LineHit>> {
@@ -735,35 +789,154 @@ mod tests {
     fn patterns_are_alternatives() {
         let (_dir, root) = tree(&[("a.ts", b"alpha\nbeta\ngamma\n")]);
         let result = search_files(&root, &["alpha", "gamma"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "alpha"), hit(3, "gamma")])]));
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "alpha"), hit_in(3, "gamma", 0..1)])]));
     }
 
     #[test]
     fn patterns_are_regexes() {
         let (_dir, root) = tree(&[("a.ts", b"foo1\nfoo\nfooX2\n")]);
         let result = search_files(&root, &[r"foo\w?\d"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "foo1"), hit(3, "fooX2")])]));
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "foo1", 0..1), hit_in(3, "fooX2", 0..1)])]));
     }
 
     #[test]
     fn a_dot_matches_any_character_rather_than_a_literal_dot() {
         let (_dir, root) = tree(&[("a.ts", b"abc\nac\na.c\n")]);
         let result = search_files(&root, &["a.c"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "abc"), hit(3, "a.c")])]));
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "abc", 0..1), hit_in(3, "a.c", 0..1)])]));
     }
 
     #[test]
     fn case_folding_covers_non_ascii_letters() {
         let (_dir, root) = tree(&[("a.ts", "\u{e9}t\u{e9}\n\u{c9}T\u{c9}\nete\n".as_bytes())]);
         let result = search_files(&root, &["\u{e9}t\u{e9}"], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "\u{e9}t\u{e9}"), hit(2, "\u{c9}T\u{c9}")])]));
+        assert_eq!(
+            result.hits,
+            hits(&root, &[("a.ts", vec![hit_in(1, "\u{e9}t\u{e9}", 0..1), hit_in(2, "\u{c9}T\u{c9}", 0..1)])])
+        );
     }
 
     #[test]
     fn an_empty_pattern_matches_every_line() {
         let (_dir, root) = tree(&[("a.ts", b"alpha\n\nbeta\n")]);
         let result = search_files(&root, &[""], &TextSearchOptions::default()).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "alpha"), hit(2, ""), hit(3, "beta")])]));
+        assert_eq!(
+            result.hits,
+            hits(&root, &[("a.ts", vec![hit_in(1, "alpha", 0..6), hit_in(2, "", 0..1), hit_in(3, "beta", 0..5),])])
+        );
+    }
+
+    #[test]
+    fn a_hit_records_the_offset_where_each_match_starts() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha beta ALPHA\nbeta\ngamma alpha\n")]);
+        let result = search_files(&root, &["alpha", "gamma"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            result.hits,
+            hits(
+                &root,
+                &[(
+                    "a.ts",
+                    vec![hit_at(1, "alpha beta ALPHA", &[0..1, 11..12]), hit_at(3, "gamma alpha", &[0..1, 6..7])]
+                )]
+            )
+        );
+    }
+
+    #[test]
+    fn match_starts_count_bytes_not_characters() {
+        let (_dir, root) = tree(&[("a.ts", "\u{e9}\u{e9} alpha \u{4e2d} alpha\n".as_bytes())]);
+        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            result.hits,
+            hits(&root, &[("a.ts", vec![hit_at(1, "\u{e9}\u{e9} alpha \u{4e2d} alpha", &[5..6, 15..16])])])
+        );
+    }
+
+    #[test]
+    fn match_starts_count_the_bytes_of_the_text_with_invalid_sequences_replaced() {
+        // Each invalid byte becomes a three-byte U+FFFD, so the starts differ from the offsets in the file's own bytes.
+        let (_dir, root) = tree(&[("a.ts", b"\xff alpha \xfe\xfe alpha\n")]);
+        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            result.hits,
+            hits(&root, &[("a.ts", vec![hit_at(1, "\u{FFFD} alpha \u{FFFD}\u{FFFD} alpha", &[4..5, 17..18])])])
+        );
+    }
+
+    #[test]
+    fn starts_at_consecutive_offsets_are_one_range() {
+        let (_dir, root) = tree(&[("a.ts", b"aaa a aa\nabab ab\n")]);
+        let result = search_files(&root, &["a"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            result.hits,
+            hits(
+                &root,
+                &[(
+                    "a.ts",
+                    vec![hit_at(1, "aaa a aa", &[0..3, 4..5, 6..8]), hit_at(2, "abab ab", &[0..1, 2..3, 5..6])]
+                )]
+            )
+        );
+        let result = search_files(&root, &["ab"], &TextSearchOptions::default()).unwrap();
+        // `ab` is two bytes wide, so its starts at 0, 2 and 5 are not consecutive.
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_at(2, "abab ab", &[0..1, 2..3, 5..6])])]));
+    }
+
+    #[test]
+    fn a_pattern_matching_every_byte_of_a_line_stores_one_run() {
+        // One range per match would be 4096 ranges of 16 bytes each, 16 times the bytes of the line.
+        let line = "x".repeat(MAX_LINE_BYTES);
+        let (_dir, root) = tree(&[("a.ts", format!("{line}\n").as_bytes())]);
+        let result = search_files(&root, &["."], &TextSearchOptions::default()).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, &line, 0..MAX_LINE_BYTES)])]));
+    }
+
+    #[test]
+    fn a_crlf_line_reports_starts_in_its_text_without_the_terminator() {
+        let (_dir, root) = tree(&[("a.ts", b"beta alpha\r\nalpha alpha$\r\n")]);
+        let result = search_files(&root, &["alpha$"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "beta alpha", 5..6)])]));
+        let result = search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(
+            result.hits,
+            hits(&root, &[("a.ts", vec![hit_in(1, "beta alpha", 5..6), hit_at(2, "alpha alpha$", &[0..1, 6..7])])])
+        );
+    }
+
+    #[test]
+    fn a_line_cut_to_the_limit_keeps_the_matches_that_start_before_the_cut() {
+        // The limit is 8 bytes: the first match ends at the cut, the second starts past it.
+        let (_dir, root) = tree(&[("a.ts", b"ab alpha alpha\n")]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(8)).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "ab alpha", 3..4)])]));
+        assert_eq!(result.truncated_lines, 1);
+    }
+
+    #[test]
+    fn a_match_that_starts_before_the_cut_and_ends_after_it_is_kept() {
+        let (_dir, root) = tree(&[("a.ts", b"ab alpha alpha\n")]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(6)).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "ab alp", 3..4)])]));
+    }
+
+    #[test]
+    fn a_line_whose_matches_all_start_past_the_cut_is_a_hit_with_no_starts() {
+        let (_dir, root) = tree(&[("a.ts", b"0123456789 alpha\n")]);
+        let result = search_files(&root, &["alpha"], &with_max_line_bytes(4)).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_at(1, "0123", &[])])]));
+        assert_eq!(result.truncated_lines, 1);
+    }
+
+    /// `ab\xe2\x82cd` reads `ab`, one truncated three-byte sequence of two bytes, and `cd`; lossily it is `ab\u{FFFD}cd`.
+    #[rstest]
+    #[case::before_the_sequence(2, 2)]
+    #[case::inside_it(3, 2)]
+    #[case::after_it(4, 5)]
+    #[case::in_the_text_after_it(5, 6)]
+    #[case::at_the_end(6, 7)]
+    fn an_offset_in_raw_bytes_maps_to_the_same_place_in_the_lossy_text(#[case] offset: usize, #[case] expected: usize) {
+        assert_eq!(String::from_utf8_lossy(b"ab\xe2\x82cd"), "ab\u{FFFD}cd");
+        assert_eq!(lossy_offset(b"ab\xe2\x82cd", offset), expected);
     }
 
     #[test]
@@ -822,13 +995,13 @@ mod tests {
     /// `\r` that is line content is not.
     #[rstest]
     #[case::crlf_terminator_is_not_seen(b"alpha\r\n", r"\r", vec![])]
-    #[case::empty_crlf_line(b"alpha\r\n\r\n", "^$", vec![hit(2, "")])]
-    #[case::end_anchor_before_crlf(b"alpha\r\nbeta\r\n", "ta$", vec![hit(2, "beta")])]
-    #[case::lone_carriage_return_is_content(b"a\rc\n", r"a\rc$", vec![hit(1, "a\rc")])]
-    #[case::dot_matches_a_lone_carriage_return(b"a\rc\r\n", "^a.c$", vec![hit(1, "a\rc")])]
+    #[case::empty_crlf_line(b"alpha\r\n\r\n", "^$", vec![hit_in(2, "", 0..1)])]
+    #[case::end_anchor_before_crlf(b"alpha\r\nbeta\r\n", "ta$", vec![hit_in(2, "beta", 2..3)])]
+    #[case::lone_carriage_return_is_content(b"a\rc\n", r"a\rc$", vec![hit_in(1, "a\rc", 0..1)])]
+    #[case::dot_matches_a_lone_carriage_return(b"a\rc\r\n", "^a.c$", vec![hit_in(1, "a\rc", 0..1)])]
     #[case::lone_carriage_return_is_not_a_line_boundary(b"alpha\rbeta\r\n", "^beta", vec![])]
-    #[case::carriage_return_before_crlf_is_content(b"alpha\r\r\n", r"^alpha\r$", vec![hit(1, "alpha\r")])]
-    #[case::carriage_return_at_end_of_file_is_content(b"alpha\r", r"^alpha\r$", vec![hit(1, "alpha\r")])]
+    #[case::carriage_return_before_crlf_is_content(b"alpha\r\r\n", r"^alpha\r$", vec![hit_in(1, "alpha\r", 0..1)])]
+    #[case::carriage_return_at_end_of_file_is_content(b"alpha\r", r"^alpha\r$", vec![hit_in(1, "alpha\r", 0..1)])]
     fn a_pattern_sees_the_line_text_without_its_terminator(
         #[case] contents: &[u8],
         #[case] pattern: &str,
@@ -1894,13 +2067,6 @@ mod tests {
         let result = search_files(&root, &["alpha"], &with_max_line_bytes(10)).unwrap();
         assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "alpha 1234"), hit(2, "alpha 1234")])]));
         assert_eq!(result.truncated_lines, 1);
-    }
-
-    #[test]
-    fn a_match_past_the_line_limit_still_selects_the_line() {
-        let (_dir, root) = tree(&[("a.ts", b"0123456789 alpha\n")]);
-        let result = search_files(&root, &["alpha"], &with_max_line_bytes(4)).unwrap();
-        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit(1, "0123")])]));
     }
 
     #[test]

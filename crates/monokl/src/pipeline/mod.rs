@@ -237,14 +237,7 @@ fn search_with_ceiling(
         .collect();
     // Files are analyzed on separate threads a batch at a time, but each result is kept in path order, so the output
     // never depends on which thread finished first. The deadline is checked between batches, never before the first.
-    let ctx = FileContext {
-        registry,
-        plan: &plan,
-        matchers: &matchers,
-        language,
-        allow_tests,
-        max_file_bytes: MAX_FILE_BYTES,
-    };
+    let ctx = FileContext { registry, language, allow_tests, max_file_bytes: MAX_FILE_BYTES };
     let batch_size = rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD;
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut analyzed = 0_usize;
@@ -371,8 +364,6 @@ fn text_search_diagnostics(found: &TextSearchResult) -> Vec<Diagnostic> {
 /// What block retrieval needs besides the file itself.
 struct FileContext<'a> {
     registry: &'a AnalyzerRegistry,
-    plan: &'a QueryPlan,
-    matchers: &'a [RegexMatcher],
     language: Option<Language>,
     allow_tests: bool,
     /// The largest source file that is read.
@@ -417,6 +408,7 @@ fn retrieve_blocks(
             message: "invalid UTF-8 replaced with U+FFFD".to_owned(),
         });
     }
+    let line_starts = hit_line_starts(&text, hits);
     let analysis = match analyzer.analyze(path, text) {
         Ok(analysis) => analysis,
         Err(err) => {
@@ -430,21 +422,12 @@ fn retrieve_blocks(
             .map_or_else(|| "parse errors; blocks may be incomplete".to_owned(), |reason| reason.to_string());
         diagnostics.push(Diagnostic { kind: DiagnosticKind::Degraded, path: Some(path.to_owned()), message });
     }
-    let positive: Vec<&RegexMatcher> = ctx
-        .plan
-        .terms
-        .iter()
-        .zip(ctx.matchers)
-        .filter(|(term, _)| term.modifier != Modifier::Excluded)
-        .map(|(_, matcher)| matcher)
-        .collect();
-    let line_matches = |text: &str| positive.iter().any(|matcher| matches_text(matcher, text));
     // Test blocks always take part in deciding which block owns a hit, so a test method inside a regular `impl` or trait
     // does not leak its matches to the holder; they are returned only when asked for. Only references are collected, so
     // no block is copied.
     let blocks: Vec<&CodeBlock> = analysis.blocks.iter().chain(&analysis.test_blocks).collect();
     let returned = if ctx.allow_tests { blocks.len() } else { analysis.blocks.len() };
-    for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_matches)).take(returned) {
+    for (block, inside) in blocks.iter().zip(owned_hits(&blocks, hits, &line_starts)).take(returned) {
         if inside.is_empty() {
             continue;
         }
@@ -455,50 +438,76 @@ fn retrieve_blocks(
     }
 }
 
-/// Splits `hits` among `blocks`: a hit goes to every block whose own text on that line matches, except one that holds
-/// a smaller such block. A class or object therefore keeps only the matches outside its members, and a block with
-/// none is dropped by the caller. A block can start or end in the middle of a line (`} b() {`, `}, // note`), so only
-/// the part of the line inside the block counts, which sends the match to the member or holder that actually contains
-/// the text. Where no block's own text matches (a match across the edge of every block on the line) every block on the
-/// line keeps the hit, so a match is never lost. Blocks that only share a line are not nested, so each keeps it: blocks
-/// with the same line range (`mod m { #[cfg(test)] fn f() {} }` on one line) are nested only when the larger one's text
-/// contains the other's.
-/// `hits` must be in line order; each block's hits are too.
-fn owned_hits<'h>(
-    blocks: &[&CodeBlock],
-    hits: &'h [LineHit],
-    line_matches: &dyn Fn(&str) -> bool,
-) -> Vec<Vec<&'h LineHit>> {
-    let mut containing: Vec<Vec<usize>> = vec![Vec::new(); hits.len()];
-    for (index, block) in blocks.iter().enumerate() {
-        let first = hits.partition_point(|hit| hit.line_number < block.line_start);
-        let inside = hits[first..].iter().take_while(|hit| hit.line_number <= block.line_end).count();
-        for slot in &mut containing[first..first + inside] {
-            slot.push(index);
+/// Returns the byte offset in `text` of the start of each hit's line, or `None` for a line `text` does not have, as when
+/// the file changed after it was searched. `hits` must be in line order.
+///
+/// `text` is the source the analyzer sees, so the offsets agree with the blocks' spans. A hit's own ranges are relative
+/// to its line and already count the bytes of that text, so no offset here depends on the file's raw bytes.
+fn hit_line_starts(text: &str, hits: &[LineHit]) -> Vec<Option<usize>> {
+    let mut starts = Vec::with_capacity(hits.len());
+    let (mut line, mut start) = (1, Some(0));
+    for hit in hits {
+        while let Some(from) = start.filter(|_| line < hit.line_number) {
+            start = text.get(from..).and_then(|rest| rest.find('\n')).map(|newline| from + newline + 1);
+            line += 1;
         }
+        starts.push(start);
     }
-    let own_text_matches = |index: usize, line: usize| {
-        let block = blocks[index];
-        block.code.split('\n').nth(line - block.line_start).is_some_and(line_matches)
-    };
-    let holds = |outer: usize, inner: usize| {
-        let (outer, inner) = (blocks[outer], blocks[inner]);
-        let within = inner.line_start >= outer.line_start && inner.line_end <= outer.line_end;
-        let same_lines = (inner.line_start, inner.line_end) == (outer.line_start, outer.line_end);
-        within && (!same_lines || (inner.code.len() < outer.code.len() && outer.code.contains(&inner.code)))
-    };
-    let mut per_block = vec![Vec::new(); blocks.len()];
-    for (hit, containing_all) in hits.iter().zip(&containing) {
-        let matching: Vec<usize> =
-            containing_all.iter().copied().filter(|&index| own_text_matches(index, hit.line_number)).collect();
-        let candidates = if matching.is_empty() { containing_all } else { &matching };
-        for &outer in candidates {
-            if !candidates.iter().any(|&inner| holds(outer, inner)) {
-                per_block[outer].push(hit);
+    starts
+}
+
+/// Splits `hits` among `blocks`: each match goes to the innermost block whose span holds the match's first byte, and a
+/// hit goes once to every block that holds one of its matches. A class or object therefore keeps only the matches
+/// outside its members, a block with none is dropped by the caller, and blocks that only share a line are told apart
+/// by where on it a match starts. Blocks with the same span are told apart by depth in the block tree, and a match
+/// outside every block belongs to none.
+///
+/// A hit lists where its matches start as ranges of consecutive offsets, so a range of several bytes stands for a match
+/// at each of them and is credited to the innermost block at each byte.
+///
+/// `line_starts` holds, for each hit, the offset at which its line starts in the text the spans index (see
+/// [`hit_line_starts`]). `hits` must be in line order and each hit's starts in ascending order, so each block's hits
+/// are in line order too. Each block's `parent_index` is lower than its own position.
+fn owned_hits<'h>(blocks: &[&CodeBlock], hits: &'h [LineHit], line_starts: &[Option<usize>]) -> Vec<Vec<&'h LineHit>> {
+    let mut depth: Vec<usize> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let level = block.parent_index.and_then(|parent| depth.get(parent).copied()).map_or(0, |parent| parent + 1);
+        depth.push(level);
+    }
+    // Sweeping the matches in order while the blocks enter in order of start (an outer block before the blocks it holds,
+    // even when they start at the same byte) keeps the open blocks in a stack whose top is the innermost one.
+    let mut entering: Vec<usize> = (0..blocks.len()).collect();
+    entering.sort_by_key(|&index| (blocks[index].span.start, depth[index]));
+    let mut entering = entering.into_iter().peekable();
+    let mut open: Vec<usize> = Vec::new();
+    let mut owned: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
+    for (hit_index, (hit, line_start)) in hits.iter().zip(line_starts).enumerate() {
+        let Some(line_start) = *line_start else { continue };
+        for run in &hit.match_starts {
+            let (mut at, end) = (line_start + run.start, line_start + run.end);
+            loop {
+                while let Some(index) = entering.next_if(|&index| blocks[index].span.start <= at) {
+                    open.push(index);
+                }
+                while open.last().is_some_and(|&index| blocks[index].span.end <= at) {
+                    open.pop();
+                }
+                let holder = open.last().copied().filter(|&holder| owned[holder].last() != Some(&hit_index));
+                if let Some(holder) = holder {
+                    owned[holder].push(hit_index);
+                }
+                // Every byte of a run starts a match, so the innermost block is looked up again wherever it can
+                // change inside the run.
+                let next_start = entering.peek().map(|&index| blocks[index].span.start);
+                let next_end = open.last().map(|&index| blocks[index].span.end);
+                match next_start.into_iter().chain(next_end).filter(|&boundary| boundary > at).min() {
+                    Some(boundary) if boundary < end => at = boundary,
+                    _ => break,
+                }
             }
         }
     }
-    per_block
+    owned.into_iter().map(|indices| indices.into_iter().map(|index| &hits[index]).collect()).collect()
 }
 
 /// Returns the text the user typed for `term`: a regex as written, a literal with its escaping undone.
@@ -544,6 +553,7 @@ fn document_frequencies(blocks: &[(CodeBlock, Vec<String>)], terms: &[String]) -
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
     use std::sync::Arc;
 
     use rstest::rstest;
@@ -587,14 +597,16 @@ mod tests {
 
     /// Lines `start..=end` (1-based) of `source` as a function block.
     fn block(path: &Utf8Path, source: &str, start: usize, end: usize) -> CodeBlock {
-        let code: Vec<&str> = source.lines().skip(start - 1).take(end - start + 1).collect();
-        let code = code.join("\n");
+        let mut lines = source.split_inclusive('\n');
+        let from: usize = lines.by_ref().take(start - 1).map(str::len).sum();
+        let body: String = lines.take(end - start + 1).collect();
+        let code = body.strip_suffix('\n').unwrap_or(&body).to_owned();
         CodeBlock {
             file: path.to_owned(),
             line_start: start,
             line_end: end,
             node_kind: SymbolKind::Function,
-            span: 0..code.len(),
+            span: from..from + code.len(),
             parent_index: None,
             code,
             symbol_signature: None,
@@ -997,6 +1009,7 @@ class Foo {
             let member = |start, end| CodeBlock {
                 node_kind: SymbolKind::Method,
                 parent: Some(parent.clone()),
+                parent_index: Some(0),
                 ..block(path, source, start, end)
             };
             let class = CodeBlock { node_kind: SymbolKind::Class, ..block(path, source, 1, 9) };
@@ -1033,27 +1046,324 @@ class Foo {
         assert_eq!(nested_rows(&result), [(1, 9, SymbolKind::Class, vec![1], None)]);
     }
 
-    fn owned_counts(blocks: &[CodeBlock]) -> Vec<usize> {
+    /// The span of the first `text` in `source`.
+    fn span_of(source: &str, text: &str) -> Range<usize> {
+        let start = source.find(text).unwrap();
+        start..start + text.len()
+    }
+
+    /// A block over `span`, nested in the block at `parent_index`. Ownership reads nothing else.
+    fn spanned(span: Range<usize>, parent_index: Option<usize>) -> CodeBlock {
+        CodeBlock { span, parent_index, ..block(Utf8Path::new("a.ts"), "", 1, 1) }
+    }
+
+    /// One hit for each line of `source` that holds any of `needles`, with the offset where each occurrence starts, and
+    /// the byte offset at which each of those lines starts.
+    fn hits_of(source: &str, needles: &[&str]) -> (Vec<LineHit>, Vec<Option<usize>>) {
+        let (mut hits, mut line_starts, mut offset) = (Vec::new(), Vec::new(), 0);
+        for (index, line) in source.split_inclusive('\n').enumerate() {
+            let text = line.strip_suffix('\n').unwrap_or(line);
+            let mut at: Vec<usize> =
+                needles.iter().flat_map(|needle| text.match_indices(needle).map(|(at, _)| at)).collect();
+            at.sort_unstable();
+            at.dedup();
+            let mut match_starts: Vec<Range<usize>> = Vec::new();
+            for start in at {
+                match match_starts.last_mut() {
+                    Some(run) if run.end == start => run.end += 1,
+                    _ => match_starts.push(start..start + 1),
+                }
+            }
+            if !match_starts.is_empty() {
+                hits.push(LineHit { line_number: index + 1, text: text.to_owned(), match_starts });
+                line_starts.push(Some(offset));
+            }
+            offset += line.len();
+        }
+        (hits, line_starts)
+    }
+
+    /// One hit on the line of `source` that holds `text`, with a match starting at every byte of `text`, as a pattern
+    /// matching every character would record it, and the offset at which the line starts.
+    fn hit_on_every_byte(source: &str, text: &str) -> (Vec<LineHit>, Vec<Option<usize>>) {
+        let at = source.find(text).unwrap();
+        let line_start = source[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        let line_number = source[..at].matches('\n').count() + 1;
+        let (first, last) = (at - line_start, at - line_start + text.len());
+        let hit = LineHit { line_number, text: String::new(), match_starts: std::iter::once(first..last).collect() };
+        (vec![hit], vec![Some(line_start)])
+    }
+
+    /// The line numbers of the hits each block owns for `needles` in `source`.
+    fn owned(source: &str, needles: &[&str], blocks: &[CodeBlock]) -> Vec<Vec<usize>> {
         let refs: Vec<&CodeBlock> = blocks.iter().collect();
-        let hits = [LineHit { line_number: 1, text: String::new() }];
-        owned_hits(&refs, &hits, &|text| text.contains("needle")).iter().map(Vec::len).collect()
+        let (hits, starts) = hits_of(source, needles);
+        owned_hits(&refs, &hits, &starts)
+            .iter()
+            .map(|owned| owned.iter().map(|hit| hit.line_number).collect())
+            .collect()
+    }
+
+    /// Two methods that share the line `} b() {`: `a` ends where `b` starts.
+    const SHARED_LINE: &str = "class C { a() {\n  one();\n} b() {\n  two();\n} }\n";
+
+    fn shared_line_blocks() -> [CodeBlock; 3] {
+        [
+            spanned(span_of(SHARED_LINE, "class C { a() {\n  one();\n} b() {\n  two();\n} }"), None),
+            spanned(span_of(SHARED_LINE, "a() {\n  one();\n}"), Some(0)),
+            spanned(span_of(SHARED_LINE, "b() {\n  two();\n}"), Some(0)),
+        ]
+    }
+
+    #[rstest]
+    #[case::the_member_that_starts_on_the_line("b()", [vec![], vec![], vec![3]])]
+    #[case::the_blocks_that_end_on_the_lines_it_is_on("}", [vec![5], vec![3], vec![5]])]
+    #[case::a_match_that_spans_both_goes_to_the_one_it_starts_in("} b", [vec![], vec![3], vec![]])]
+    #[case::the_class_header("class", [vec![1], vec![], vec![]])]
+    #[case::a_line_inside_one_member("one", [vec![], vec![2], vec![]])]
+    fn a_match_on_a_line_two_members_share_goes_to_the_block_containing_its_start(
+        #[case] needle: &str,
+        #[case] expected: [Vec<usize>; 3],
+    ) {
+        assert_eq!(owned(SHARED_LINE, &[needle], &shared_line_blocks()), expected);
+    }
+
+    /// An object whose first member is followed by a comment after its closing brace.
+    const NOTE: &str = "const svc = {\n  load() {\n    one();\n  }, // zebra note\n  save() {\n    two();\n  },\n};\n";
+
+    fn note_blocks() -> [CodeBlock; 3] {
+        [
+            spanned(
+                span_of(
+                    NOTE,
+                    "const svc = {\n  load() {\n    one();\n  }, // zebra note\n  save() {\n    two();\n  },\n};",
+                ),
+                None,
+            ),
+            spanned(span_of(NOTE, "load() {\n    one();\n  }"), Some(0)),
+            spanned(span_of(NOTE, "save() {\n    two();\n  }"), Some(0)),
+        ]
+    }
+
+    #[rstest]
+    #[case::the_comment_after_a_members_brace("zebra", [vec![4], vec![], vec![]])]
+    #[case::the_brace_the_comment_follows("}, //", [vec![], vec![4], vec![]])]
+    #[case::the_object_header("svc", [vec![1], vec![], vec![]])]
+    #[case::the_closing_of_the_object("};", [vec![8], vec![], vec![]])]
+    fn a_match_after_a_members_closing_brace_goes_to_the_block_containing_its_start(
+        #[case] needle: &str,
+        #[case] expected: [Vec<usize>; 3],
+    ) {
+        assert_eq!(owned(NOTE, &[needle], &note_blocks()), expected);
     }
 
     #[test]
-    fn a_block_on_the_same_lines_as_the_block_that_contains_it_takes_the_hit() {
-        let path = Utf8Path::new("a.rs");
-        let line = "mod m { #[cfg(test)] fn hidden() { needle(); } }";
-        let blocks = [block(path, line, 1, 1), block(path, "#[cfg(test)] fn hidden() { needle(); }", 1, 1)];
-        assert_eq!(owned_counts(&blocks), [0, 1]);
-        let reversed = [blocks[1].clone(), blocks[0].clone()];
-        assert_eq!(owned_counts(&reversed), [1, 0]);
+    fn of_two_blocks_that_share_a_line_the_one_holding_the_match_gets_it() {
+        let source = "const a = 1; const needle = 2;\n";
+        let blocks =
+            [spanned(span_of(source, "const a = 1;"), None), spanned(span_of(source, "const needle = 2;"), None)];
+        assert_eq!(owned(source, &["needle"], &blocks), [vec![], vec![1]]);
+        assert_eq!(owned(source, &["const"], &blocks), [vec![1], vec![1]]);
     }
 
     #[test]
-    fn blocks_on_the_same_lines_that_do_not_contain_each_other_each_keep_the_hit() {
-        let path = Utf8Path::new("a.rs");
-        let blocks = [block(path, "fn a() { needle(); }", 1, 1), block(path, "fn b() { needle(); }", 1, 1)];
-        assert_eq!(owned_counts(&blocks), [1, 1]);
+    fn a_holder_keeps_a_match_outside_its_member_even_when_the_member_matches_another_term() {
+        let source = "class C { label = 'beta'; m() { return alpha; } }\n";
+        let blocks = [
+            spanned(span_of(source, "class C { label = 'beta'; m() { return alpha; } }"), None),
+            spanned(span_of(source, "m() { return alpha; }"), Some(0)),
+        ];
+        assert_eq!(owned(source, &["beta", "alpha"], &blocks), [vec![1], vec![1]]);
+        assert_eq!(owned(source, &["beta"], &blocks), [vec![1], vec![]]);
+        assert_eq!(owned(source, &["alpha"], &blocks), [vec![], vec![1]]);
+    }
+
+    #[test]
+    fn a_block_with_the_same_span_as_its_parent_takes_the_match_by_depth() {
+        let source = "mod m { #[cfg(test)] fn hidden() { needle(); } }\n";
+        let module = span_of(source, "mod m { #[cfg(test)] fn hidden() { needle(); } }");
+        let blocks = [spanned(module.clone(), None), spanned(module.clone(), Some(0)), spanned(module, Some(1))];
+        assert_eq!(owned(source, &["needle"], &blocks), [vec![], vec![], vec![1]]);
+    }
+
+    #[test]
+    fn a_test_function_inside_its_module_on_one_line_takes_the_match_and_the_module_keeps_the_rest() {
+        let source = "mod m { #[cfg(test)] fn hidden() { needle(); } }\n";
+        let blocks = [
+            spanned(span_of(source, "mod m { #[cfg(test)] fn hidden() { needle(); } }"), None),
+            spanned(span_of(source, "#[cfg(test)] fn hidden() { needle(); }"), Some(0)),
+        ];
+        assert_eq!(owned(source, &["needle"], &blocks), [vec![], vec![1]]);
+        assert_eq!(owned(source, &["mod"], &blocks), [vec![1], vec![]]);
+    }
+
+    #[test]
+    fn a_match_goes_to_the_innermost_of_nested_blocks() {
+        let source = "a {\n  b {\n    c {\n      deep\n    }\n    middle\n  }\n  top\n}\n";
+        let blocks = [
+            spanned(span_of(source, "a {\n  b {\n    c {\n      deep\n    }\n    middle\n  }\n  top\n}"), None),
+            spanned(span_of(source, "b {\n    c {\n      deep\n    }\n    middle\n  }"), Some(0)),
+            spanned(span_of(source, "c {\n      deep\n    }"), Some(1)),
+        ];
+        assert_eq!(owned(source, &["deep"], &blocks), [vec![], vec![], vec![4]]);
+        assert_eq!(owned(source, &["middle"], &blocks), [vec![], vec![6], vec![]]);
+        assert_eq!(owned(source, &["top"], &blocks), [vec![8], vec![], vec![]]);
+    }
+
+    #[test]
+    fn a_hit_with_matches_in_two_blocks_goes_to_both_once_each() {
+        let source = "a { b { needle needle } needle }\n";
+        let blocks = [
+            spanned(span_of(source, "a { b { needle needle } needle }"), None),
+            spanned(span_of(source, "b { needle needle }"), Some(0)),
+        ];
+        assert_eq!(owned(source, &["needle"], &blocks), [vec![1], vec![1]]);
+        let only_inner = "a { b { needle needle } }\n";
+        let blocks = [
+            spanned(span_of(only_inner, "a { b { needle needle } }"), None),
+            spanned(span_of(only_inner, "b { needle needle }"), Some(0)),
+        ];
+        assert_eq!(owned(only_inner, &["needle"], &blocks), [vec![], vec![1]]);
+    }
+
+    /// `hits` with each run of starts split into one range per offset.
+    fn per_offset(hits: &[LineHit]) -> Vec<LineHit> {
+        let split = |hit: &LineHit| LineHit {
+            match_starts: hit.match_starts.iter().flat_map(|run| run.clone().map(|byte| byte..byte + 1)).collect(),
+            ..hit.clone()
+        };
+        hits.iter().map(split).collect()
+    }
+
+    #[test]
+    fn a_run_of_starts_goes_to_the_same_blocks_as_a_range_for_each_offset() {
+        let nested = "a {\n  b {\n    c {\n      deep\n    }\n    middle\n  }\n  top\n}\n";
+        let cases: [(&str, Vec<CodeBlock>); 3] = [
+            (SHARED_LINE, shared_line_blocks().to_vec()),
+            (NOTE, note_blocks().to_vec()),
+            (
+                nested,
+                vec![
+                    spanned(span_of(nested, "a {\n  b {\n    c {\n      deep\n    }\n    middle\n  }\n  top\n}"), None),
+                    spanned(span_of(nested, "b {\n    c {\n      deep\n    }\n    middle\n  }"), Some(0)),
+                    spanned(span_of(nested, "c {\n      deep\n    }"), Some(1)),
+                ],
+            ),
+        ];
+        for (source, blocks) in &cases {
+            let refs: Vec<&CodeBlock> = blocks.iter().collect();
+            for line in source.lines() {
+                let (hits, line_starts) = hit_on_every_byte(source, line);
+                let lines = |hits: &[LineHit]| -> Vec<Vec<usize>> {
+                    owned_hits(&refs, hits, &line_starts)
+                        .iter()
+                        .map(|owned| owned.iter().map(|hit| hit.line_number).collect())
+                        .collect()
+                };
+                assert_eq!(lines(&hits), lines(&per_offset(&hits)), "{line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_match_at_every_byte_of_a_line_is_credited_to_every_block_with_a_byte_on_it() {
+        let lines = |source: &str, text: &str, blocks: &[CodeBlock]| -> Vec<Vec<usize>> {
+            let refs: Vec<&CodeBlock> = blocks.iter().collect();
+            let (hits, line_starts) = hit_on_every_byte(source, text);
+            owned_hits(&refs, &hits, &line_starts)
+                .iter()
+                .map(|owned| owned.iter().map(|hit| hit.line_number).collect())
+                .collect()
+        };
+        // `class` holds the byte between the two methods; `a` ends and `b` starts on the line.
+        assert_eq!(lines(SHARED_LINE, "} b() {", &shared_line_blocks()), [vec![3], vec![3], vec![3]]);
+        let nested = "a { b { x } y }\n";
+        let blocks = [spanned(span_of(nested, "a { b { x } y }"), None), spanned(span_of(nested, "b { x }"), Some(0))];
+        assert_eq!(lines(nested, "a { b { x } y }", &blocks), [vec![1], vec![1]]);
+        assert_eq!(lines(nested, "b { x }", &blocks), [vec![], vec![1]]);
+        assert_eq!(lines(nested, "b { x } y", &blocks), [vec![1], vec![1]]);
+    }
+
+    #[test]
+    fn one_run_over_a_full_line_of_sibling_blocks_credits_each_block_as_a_start_at_every_byte_does() {
+        // 409 blocks of ten bytes fill a 4090-byte line; a pattern matching every byte records one run for it.
+        let source = format!("{}\n", "fn a() {} ".repeat(409));
+        let blocks: Vec<CodeBlock> = (0..409).map(|index| spanned(index * 10..index * 10 + 9, None)).collect();
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        let run = LineHit { line_number: 1, text: source.clone(), match_starts: std::iter::once(0..4090).collect() };
+        let credited =
+            |hits: &[LineHit]| -> Vec<usize> { owned_hits(&refs, hits, &[Some(0)]).iter().map(Vec::len).collect() };
+        assert_eq!(run.match_starts.len(), 1);
+        assert_eq!(per_offset(std::slice::from_ref(&run))[0].match_starts.len(), 4090);
+        assert_eq!(credited(std::slice::from_ref(&run)), vec![1; 409]);
+        assert_eq!(credited(&per_offset(std::slice::from_ref(&run))), vec![1; 409]);
+    }
+
+    #[test]
+    fn a_hit_outside_every_block_and_a_hit_without_matches_belong_to_no_block() {
+        let source = "needle\nfn f() {}\n";
+        let blocks = [spanned(span_of(source, "fn f() {}"), None)];
+        assert_eq!(owned(source, &["needle"], &blocks), [Vec::<usize>::new()]);
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        let cut_short = [LineHit { line_number: 2, text: "fn f".to_owned(), match_starts: Vec::new() }];
+        assert_eq!(owned_hits(&refs, &cut_short, &[Some(7)]), [Vec::<&LineHit>::new()]);
+    }
+
+    #[test]
+    fn a_hit_whose_line_is_missing_from_the_source_belongs_to_no_block() {
+        let blocks = [spanned(0..9, None)];
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        let hits =
+            [LineHit { line_number: 9, text: "fn f() {}".to_owned(), match_starts: std::iter::once(0..1).collect() }];
+        assert_eq!(owned_hits(&refs, &hits, &[None]), [Vec::<&LineHit>::new()]);
+    }
+
+    #[test]
+    fn hit_lines_start_at_their_byte_offset_in_the_source() {
+        let text = "ab\ncd\r\n\u{FFFD}f\nlast";
+        let on = |lines: &[usize]| -> Vec<LineHit> {
+            lines
+                .iter()
+                .map(|&line_number| LineHit { line_number, text: String::new(), match_starts: Vec::new() })
+                .collect()
+        };
+        assert_eq!(hit_line_starts(text, &on(&[1, 2, 3, 4])), [Some(0), Some(3), Some(7), Some(12)]);
+        assert_eq!(hit_line_starts(text, &on(&[2, 4])), [Some(3), Some(12)]);
+        assert_eq!(hit_line_starts(text, &on(&[4, 5])), [Some(12), None]);
+        assert_eq!(hit_line_starts(text, &[]), []);
+    }
+
+    #[test]
+    fn a_match_after_invalid_utf8_goes_to_the_block_it_is_in_not_to_the_one_the_raw_bytes_would_give() {
+        // The invalid byte becomes a three-byte U+FFFD, so everything after it sits two bytes later in the text the
+        // analyzer sees than in the file, and `b_needle` is at 11 in the text and 9 in the file, inside `a() {}`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"\xff a() {} b_needle() {}\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let registry = registry(|path, source| {
+            let at = |text: &str| CodeBlock {
+                span: span_of(source, text),
+                code: text.to_owned(),
+                ..block(path, source, 1, 1)
+            };
+            Ok((vec![at("a() {}"), at("b_needle() {}")], false))
+        });
+        let result = search(&registry, &request(&root, "b_needle")).unwrap();
+        let rows: Vec<_> =
+            result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+        assert_eq!(rows, [("b_needle() {}", vec![1])]);
+    }
+
+    #[test]
+    fn a_match_on_a_later_line_after_invalid_utf8_goes_to_the_block_it_is_in() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), b"// \xff\nfoo()\nneedle()\n").unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let registry = registry(|path, source| Ok((vec![block(path, source, 2, 2), block(path, source, 3, 3)], false)));
+        let result = search(&registry, &request(&root, "needle")).unwrap();
+        let rows: Vec<_> =
+            result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+        assert_eq!(rows, [("needle()", vec![3])]);
     }
 
     #[test]
@@ -1159,17 +1469,10 @@ class Foo {
     #[test]
     fn source_read_failure_skips_the_file_with_a_diagnostic() {
         let registry = whole_file_registry();
-        let plan = QueryPlan::from_terms(parse("alpha").unwrap());
-        let matchers = vec![compile("alpha").unwrap()];
-        let ctx = FileContext {
-            registry: &registry,
-            plan: &plan,
-            matchers: &matchers,
-            language: None,
-            allow_tests: false,
-            max_file_bytes: MAX_FILE_BYTES,
-        };
-        let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
+        let ctx =
+            FileContext { registry: &registry, language: None, allow_tests: false, max_file_bytes: MAX_FILE_BYTES };
+        let hits =
+            [LineHit { line_number: 1, text: "alpha".to_owned(), match_starts: std::iter::once(0..1).collect() }];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
         let failing = |_: &Utf8Path| -> io::Result<Source> { Err(io::Error::from(io::ErrorKind::PermissionDenied)) };
         retrieve_blocks(&ctx, Utf8Path::new("/r/a.ts"), &hits, &failing, &mut out, &mut diagnostics);
@@ -1395,17 +1698,10 @@ class Foo {
         let (_dir, root) = tree(&[("a.ts", "alpha\n")]);
         let path = root.join("a.ts");
         let registry = whole_file_registry();
-        let plan = QueryPlan::from_terms(parse("alpha").unwrap());
-        let matchers = vec![compile("alpha").unwrap()];
-        let ctx = |max_file_bytes| FileContext {
-            registry: &registry,
-            plan: &plan,
-            matchers: &matchers,
-            language: None,
-            allow_tests: false,
-            max_file_bytes,
-        };
-        let hits = [LineHit { line_number: 1, text: "alpha".to_owned() }];
+        let ctx =
+            |max_file_bytes| FileContext { registry: &registry, language: None, allow_tests: false, max_file_bytes };
+        let hits =
+            [LineHit { line_number: 1, text: "alpha".to_owned(), match_starts: std::iter::once(0..1).collect() }];
         let never_read = |_: &Utf8Path| -> io::Result<Source> { panic!("an oversize file must not be read") };
 
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());

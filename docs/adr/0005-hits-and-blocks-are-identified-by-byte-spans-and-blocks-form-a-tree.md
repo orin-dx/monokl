@@ -19,10 +19,10 @@ The same gap produced 7 fix or test commits in 3 PRs (#66: 3, #68: 1, #77: 3). O
 
 We recommend identifying hits and blocks by byte spans and linking blocks into a forest.
 
-- A hit carries its line and the byte range of each match.
+- A hit carries its line and the offsets at which its matches start, as ranges of consecutive offsets (a pattern that matches every byte of a line is one range). Where a match ends is not needed: ownership reads the first byte.
 - A block carries a byte span and its parent's index in the file's block list, built once by the analyzer.
 - The AST supplies `name` and `kind` as typed fields.
-- A hit belongs to the innermost block whose span contains the hit's start byte. Equal spans resolve by parent depth, not text.
+- Each match belongs to the innermost block whose span contains the match's first byte, and a hit goes once to every block that holds one of its matches. Equal spans resolve by parent depth, not text. (Decided per match, not per hit: `const a = 1; const needle = 2;` searched for `const` has a match in each block, and the line-based rule credited both.)
 - Snippets are cut from spans and dedup compares spans.
 
 ## Consequences
@@ -31,7 +31,7 @@ Deleted: own-text matching and the equal-range rule in `owned_hits`, `signature_
 
 Costs:
 
-- `LineHit` grows a list of match ranges. The searcher does not give them: `SinkMatch` in `grep-searcher` 0.1.17 (`sink.rs:379-423`) exposes only `bytes()`, `absolute_byte_offset()` and `line_number()` for the whole line. In-line offsets need `Matcher::find_iter` (`grep-matcher` 0.1.9, `lib.rs:629`) over each matching line. `LineCollector::text_matches` (`text_search.rs`) already makes that second pass for CRLF lines.
+- `LineHit` grows a list of match start offsets. The searcher does not give them: `SinkMatch` in `grep-searcher` 0.1.17 (`sink.rs:379-423`) exposes only `bytes()`, `absolute_byte_offset()` and `line_number()` for the whole line. In-line offsets need `Matcher::find_iter` (`grep-matcher` 0.1.9, `lib.rs:629`) over each matching line. `LineCollector::text_matches` (`text_search.rs`) already makes that second pass for CRLF lines.
 - Offsets must mean the same bytes on both sides. The searcher sees raw file bytes and the analyzer sees the lossy-decoded `String`, which differ after any invalid UTF-8.
 - Each block gains a span (16 bytes) and a parent index (4 to 8 bytes). `code` stays, so nested blocks keep duplicating text.
 - Dedup compares bytes instead of lines, the one stage whose output can change beyond the old bugs.

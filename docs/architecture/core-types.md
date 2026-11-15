@@ -78,7 +78,7 @@ When implementing a command that can degrade, check that command's own spec text
 
 - `SymbolKind` — universal (`Function, Method, Constructor, Class, Struct, Enum, Interface, TypeAlias, Property, Field, Variable, Module`) + Rust-only (`Impl, Macro`) + `Other` catch-all. `Copy`.
 - `SearchResponse { results: Vec<RankedBlock>, total_blocks_before_truncation, truncated, diagnostics }` — top-level `search` command output. Counts only: the output layer words the truncation hint.
-- `LineHit { line_number, text }` — internal grep-hit representation only.
+- `LineHit { line_number, text, match_starts }` — internal grep-hit representation only. `match_starts` holds the offsets in `text` (the lossy-decoded line) at which a match starts, as ranges of consecutive offsets; `owned_hits` adds the line's start to get offsets in the analyzed source.
 
 ## Types removed until a command reads them
 
