@@ -1,0 +1,18 @@
+{
+  "tool_use_id": "toolu_014gzDFUhZNvEd9wvyFhE9Do",
+  "agent_id": "a303551c11f4db32a",
+  "subagent_type": "general-purpose",
+  "task_description": "Verify PRs against combined main in CI",
+  "files": [
+    "pr-body.tmp"
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 46706,
+    "cache_read_tokens": 893919,
+    "output_tokens": 5405,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-14T17:35:00.052081-08:00",
+  "completed_at": "2026-11-14T17:38:14.652434-08:00"
+}
