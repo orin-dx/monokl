@@ -527,19 +527,70 @@ Step 3 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-an
 - **Decision.** `scripts/agent-cost.py` (`just agent-cost [--detail] [--json PATH]`) scores the `rg-compare` rows for cost: 59 sampled identifiers, 18 questions, 16 members, fd (24 rows), the held-out sets and report-only react-hook-form, 222 rows in all. It reuses `rg-compare.py` for repositories, rows, declaration patterns and monokl's file rules, so no row, pin or rule is duplicated. It is report only: a `FAIL` line prints when a set's median monokl bytes exceed its median rg-policy bytes or its answerable-in-one-turn rate is below 0.8, and the exit status stays 0.
 - **monokl, measured.** One `monokl search <words> .` with default caps. Bytes are its stdout, tokens are `ceil(bytes / 3)` (the product's own estimate), turns are 1. The row is answerable when one of the first 3 rows is in the expected file, spans the declaration's line and shows its text. `monokl+read` adds one read turn of the expected block to a row that is not answerable.
 - **rg-policy, simulated.** No model. Every choice favors rg. (1) Best term: the identifier, or for a question the word with the fewest non-test `rg -n` lines, which an agent could only know by trying each. (2) Turn 1 is `rg -n -S -w <term>` on source files, tests dropped, the first 200 lines read, each cut at 300 bytes, sorted by path. (3) Turn 2 only above 50 lines: the identifier's declaration pattern, or lines with the two best words in either order. (4) A file read of the smallest block of the expected file holding the declaration (a declaration with a `{...}` body is preferred over an overload), sized by a bracket-balance scan that skips strings, template and regex literals and comments, without its doc comment or attributes. An earlier version cut the block on indentation and ended a multi-line generic header with an unindented `>(` early (date-fns `addBusinessDays`: 96 bytes, now 1,476); `scripts/test_agent_cost.py` holds exact-byte cases and `just agent-cost` runs it first. The fix raised the rg-policy median over all rows from 1,463 to 1,566 bytes and its total from 851,913 to 953,567. The policy always succeeds and is never charged for missing the file; `rg located` counts how often the file was in what it read. `rg-early` stops, with no read, when a turn shows the declaration's line.
-- **Today's numbers** (median / p90 bytes, `all` 222 rows). monokl 10,012 / 13,351 (3,338 tokens, 1 turn, 1,714,350 total); rg-policy 1,566 / 12,342 (523 tokens, 2 turns median, 482 turns, 953,567 total); rg-early 1,452 / 12,281. monokl answers in one turn on 204 of 222 (92%); rg-policy located the file on 182 of 222 (82%).
+- **Today's numbers** (bytes, `all` 222 rows, monokl at the lean default of §46: floor 8, fraction 0.3, cap 20, one snippet line). monokl 1,567 median, 3,997 p90, 420,946 total (523 tokens, 1 turn); rg-policy 1,566 median, 12,342 p90, 953,567 total (523 tokens, 2 turns median, 482 turns). rg-early 1,452 / 12,281 / 919,884. monokl answers in one turn on 204 of 222 (92%); rg-policy located the file on 182 of 222 (82%). Before §46, with 50 rows and 3 snippet lines, monokl was 10,012 / 13,351 / 1,714,350 and every median was above the rg policy's.
 
   | set | n | monokl median | monokl p90 | rg-policy median | rg-policy p90 | monokl one-turn | rg located |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-  | identifiers | 59 | 474 | 3,258 | 508 | 1,703 | 59 (100%) | 59 (100%) |
-  | questions | 18 | 9,985 | 13,658 | 2,347 | 6,980 | 14 (78%) | 11 (61%) |
-  | members | 16 | 11,208 | 13,323 | 2,620 | 11,446 | 14 (88%) | 14 (88%) |
-  | rust (fd) | 24 | 5,062 | 10,843 | 608 | 2,446 | 20 (83%) | 21 (88%) |
-  | held-out questions | 33 | 10,737 | 14,640 | 3,403 | 22,699 | 32 (97%) | 26 (79%) |
-  | held-out members | 22 | 11,286 | 14,217 | 1,772 | 12,366 | 22 (100%) | 21 (95%) |
-  | held-out rust | 36 | 12,253 | 14,215 | 3,369 | 19,164 | 30 (83%) | 27 (75%) |
-  | report-only | 14 | 11,460 | 12,293 | 3,226 | 16,124 | 13 (93%) | 3 (21%) |
+  | identifiers | 59 | 463 | 1,643 | 508 | 1,703 | 59 (100%) | 59 (100%) |
+  | questions | 18 | 1,853 | 3,357 | 2,347 | 6,980 | 14 (78%) | 11 (61%) |
+  | members | 16 | 1,529 | 4,289 | 2,620 | 11,446 | 14 (88%) | 14 (88%) |
+  | rust (fd) | 24 | 1,442 | 2,957 | 608 | 2,446 | 20 (83%) | 21 (88%) |
+  | held-out questions | 33 | 1,684 | 3,962 | 3,403 | 22,699 | 32 (97%) | 26 (79%) |
+  | held-out members | 22 | 1,587 | 2,447 | 1,772 | 12,366 | 22 (100%) | 21 (95%) |
+  | held-out rust | 36 | 3,560 | 4,692 | 3,369 | 19,164 | 30 (83%) | 27 (75%) |
+  | report-only | 14 | 2,241 | 3,983 | 3,226 | 16,124 | 13 (93%) | 3 (21%) |
 
-- **Reading it.** Nine `FAIL` lines print (median bytes on 8 of 9 sets, all but identifiers; `questions` is 78% answerable); that is the baseline, not a regression. monokl's one call costs about 10 KB (3,300 tokens) on a question whatever it asks, against a rg-policy median of 1.6 KB. The policy gets there with an oracle: it picks the one word that is rare in the repository and is never charged when that word's lines miss the file (38 of 222 rows need a third turn, 40 never show the file). monokl is ahead on three things: identifiers, where it is slightly cheaper (median 474 against 508 bytes, total 70,796 against 73,410); the tail, where one call is bounded (p90 at most 14,640) while the rg policy reaches 22,699 on held-out questions, 19,164 on held-out Rust and 16,124 on report-only; and answering where rg cannot locate the file (react-hook-form: 13 of 14 against 3 of 14).
+- **Reading it.** Four `FAIL` lines print, so they are not gone: `questions` is 78% answerable (below 0.8); monokl's median bytes exceed the rg policy's on `rust` (1,442 against 608), `held-out rust` (3,560 against 3,369) and `all` (1,567 against 1,566, a margin of one byte). On the other six sets monokl's median is lower; its p90 and total are lower on every set but `rust` (2,957 against 2,446 p90, 34,915 against 27,805 total), and overall (420,946 against 953,567 total). The policy's Rust reads are cheap because its best word is rare in fd and the declaration blocks are short; it also uses an oracle on the word and is never charged when that word's lines miss the file (38 of 222 rows need a third turn, 40 never show the file). monokl is also ahead where rg cannot locate the file (react-hook-form: 13 of 14 against 3 of 14).
 - **What it does not prove.** It is not a model evaluation. It does not show that a model finds or uses the answer, that a cheaper model does as well with monokl's rows, or that an agent follows the rg policy: real agents pick words by reading, retry, and read whole files. It counts bytes and turns, not correctness, and treats a byte of rg output and a byte of monokl output as equal. The block read is a heuristic, not monokl's analyzer. Rows are the harness's, so questions written with `rg` in hand favor the rg route's vocabulary. Wall time is out of scope (`just bench`).
-- **Next.** A cheaper monokl answer is the lever the numbers point at: the default prints up to 50 rows (the median over the 222 rows is 50) for an answer that is in the first 3 on 92% of them. Whether to print fewer rows by default is a separate decision and needs this baseline and a model eval first.
+- **Next.** The markers that remain are the targets: the 4 questions that are not answerable in the first 3 rows (`questions`) and the Rust sets, where the policy's reads are short. The thresholds stay report-only until a model evaluation says what an agent needs.
+
+## 46. The default output is lean: one snippet line and a relevance cut (2026-11-15)
+
+- **Decision.** `monokl search` prints, by default, the rows whose `finalScore` is at least 0.3 times the top row's (`--min-score`, 0 turns it off), always the first 8 rows when that many exist, at most 20 (`--max-results`, was 50; the cap wins over the floor), and one snippet line per row (`--snippet-lines`, 0 to 3, was a fixed 3; the lines past the shown ones are still counted). The help line names the flag for each rule that cut rows: `showing 9 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`. `--snippet-lines 0` is allowed and documented as losing the declaration text of variable and type rows, which have no signature. The old output is `--min-score 0 --max-results 50 --snippet-lines 3`, checked to match the previous output byte for byte on the fixture. No `--offset`: rows past the cap are reached by a narrower query or `--max-results`, a known gap.
+- **Why.** An output-economics sweep of the 222 harness rows (the rows of `just rg-compare`, as an agent runs them with default flags) found a median default output of 10 KB, 91% of the bytes in rows past rank 3, an answer in those rows for only 6% of the questions, the snippet half of every row, and 58% of the bytes past rank 3 repeating a file already shown.
+- **First choice and why it moved.** The sweep's rule (fraction 0.3, floor 3, cap 15) lost two harness questions against the baseline, which a gate would have hidden: zod `registry add schema` (member `add`: its row is rank 18 of the old output, scoring 10.75 against a top of 23.21, so 46% of the top: the fraction keeps it and the cap of 15 dropped it) and the fd identifier `patterns` (declared by `mod patterns;` in `src/main.rs`, whose first row is rank 6 at 0.082 against a top of 0.384, 21%: the fraction drops it and the floor of 3 did not reach it). The gates stay at 0.9; the parameters moved instead.
+- **Chosen from a grid.** Floor in {3, 5, 8}, fraction in {0.15, 0.2, 0.3} and cap in {15, 20}, 18 settings, each scored over the whole harness (`just rg-compare` rows and `scripts/agent-cost.py`) with the cut applied to one cached ranked output per query. A setting qualifies when no harness set is below its baseline (59/59, 17/18, 15/16, Rust 22/24, held-out 32/33 and 22/22, held-out Rust 34/36, react-hook-form 14/14). Seven settings qualify, all with cap 20; all nine cap-15 settings lose the zod member. Of the qualifying settings the smallest total output is floor 8, fraction 0.3, cap 20:
+
+  | floor | fraction | cap | total bytes (222 rows) | median | p90 | qualifies |
+  | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+  | 3 | 0.3 | 15 | 318,736 | 920 | 3,207 | no: members 14/16, Rust 21/24 |
+  | 5 | 0.3 | 15 | 340,835 | 1,149 | 3,207 | no: members 14/16, Rust 21/24 |
+  | 3 | 0.3 | 20 | 358,657 | 920 | 3,993 | no: Rust 21/24 |
+  | 3 | 0.2 | 15 | 373,260 | 1,147 | 3,338 | no: members 14/16 |
+  | 5 | 0.3 | 20 | 380,756 | 1,149 | 3,993 | no: Rust 21/24 |
+  | 8 | 0.3 | 15 | 383,221 | 1,586 | 3,207 | no: members 14/16 |
+  | 5 | 0.2 | 15 | 389,378 | 1,445 | 3,338 | no: members 14/16 |
+  | 3 | 0.15 | 15 | 404,652 | 1,784 | 3,457 | no: members 14/16 |
+  | 5 | 0.15 | 15 | 415,533 | 1,784 | 3,457 | no: members 14/16 |
+  | 8 | 0.2 | 15 | 418,862 | 1,706 | 3,338 | no: members 14/16 |
+  | **8** | **0.3** | **20** | **423,142** | **1,586** | **3,993** | **yes** |
+  | 8 | 0.15 | 15 | 437,447 | 1,979 | 3,457 | no: members 14/16 |
+  | 3 | 0.2 | 20 | 439,088 | 1,147 | 4,408 | yes |
+  | 5 | 0.2 | 20 | 455,206 | 1,445 | 4,408 | yes |
+  | 3 | 0.15 | 20 | 479,640 | 1,784 | 4,442 | yes |
+  | 8 | 0.2 | 20 | 484,690 | 1,706 | 4,408 | yes |
+  | 5 | 0.15 | 20 | 490,521 | 1,784 | 4,442 | yes |
+  | 8 | 0.15 | 20 | 512,435 | 1,979 | 4,442 | yes |
+
+  Totals, medians and p90s come from the grid run, which cuts a cached output and prints a help line of fixed length, so the real binary differs by a few bytes (below). Floor 3, fraction 0.2, cap 20 has the smallest median (1,147) and a total 16,000 bytes larger; total bytes was the criterion.
+- **Measured** (the real binary, `scripts/agent-cost.py` from the agent-workflow-cost branch, which is not part of this change, run from a separate checkout, before and after; 222 rows; bytes of one `monokl search <words> .`):
+
+  | set | n | median before | median after | p90 before | p90 after | one turn before / after (first 3 rows) | any returned row before / after |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | identifiers | 59 | 474 | 463 | 3,258 | 1,643 | 59 / 59 | 59 / 59 |
+  | questions | 18 | 9,985 | 1,853 | 13,658 | 3,357 | 14 / 14 | 18 / 17 |
+  | members | 16 | 11,208 | 1,529 | 13,323 | 4,289 | 14 / 14 | 15 / 15 |
+  | rust (fd) | 24 | 5,062 | 1,442 | 10,843 | 2,957 | 20 / 20 | 20 / 20 |
+  | held-out questions | 33 | 10,737 | 1,684 | 14,640 | 3,962 | 32 / 32 | 33 / 33 |
+  | held-out members | 22 | 11,286 | 1,587 | 14,217 | 2,447 | 22 / 22 | 22 / 22 |
+  | held-out rust | 36 | 12,253 | 3,560 | 14,215 | 4,692 | 30 / 30 | 35 / 34 |
+  | report-only | 14 | 11,460 | 2,241 | 12,293 | 3,983 | 13 / 13 | 14 / 14 |
+  | all | 222 | 10,012 | 1,567 | 13,351 | 3,997 | 204 / 204 | 216 / 214 |
+
+  The total over the 222 rows falls from 1,714,350 to 420,946 bytes (75%). A median of 3,338 tokens becomes 523.
+- **Why the sweep said 213 and the first measurement said 204.** Two definitions of answerable. `scripts/agent-cost.py` counts a row only when one of the first 3 rows holds the declaration, and the floor keeps those rows whatever the cut, so that count cannot change (204 before and after). The sweep counted the answer in any returned row: the old output scores 216 by that definition, the first rule (floor 3, 0.3, cap 15) scored 213, as predicted, and the chosen rule scores 214. The cut was applied to the same `finalScore` of the same deduplicated rows in both. The two questions the chosen rule loses by the any-row count, zod `safe parse result` and axum `listener extension`, are ones the harness's file-rank rule already scores as misses in the baseline (answer file at rank 5 and 9), so no gated count moves.
+- **Harness** (`just rg-compare`, which runs monokl with its defaults and no cap flag, so it scores the lean shape): identifiers 59/59, questions 17/18, members 15/16, Rust 22/24, held-out 32/33 and 22/22, held-out Rust 34/36, react-hook-form 14/14: every set equals its baseline, with the gates at 0.9 as before.
+- **Time.** Search work is unchanged; only the rows printed shrink. An alternating run of the old and new binaries, 300 each, differs by at most 0.6%.
+- **What it does not prove.** Not a model evaluation: it counts bytes and whether the expected declaration is in the rows, not whether a model finds the answer. The value of snippet lines 2 and 3 to an agent that is not trying to answer in one turn (reading context, deciding between candidates) was not measured; `--snippet-lines 3` is there for that. The parameters come from a grid of 18 settings over rows written with `rg` in hand; a different distribution of queries may want other values, and the grid cannot tell a setting that is right from one that happens to keep these 222 rows. A query whose answer is past the floor and the cap needs a second call; the help line names the flag to use.
+- **Rejected.** `--snippet-lines 0` as the default: a variable or type row has no signature, so it would show nothing about what it declares and the answer would need a read. Relaxing `--min-member-recall` and `--min-rust-recall` to fit the first rule: a lowered gate hides the regression it was meant to catch.
+- **Left open.** No `--offset`. The fraction, the floor and the cap are not tuned per language or per query shape. Four `FAIL` lines of `scripts/agent-cost.py` remain, down from nine (§45, whose rg-policy reads were corrected after this was written): `questions` is answerable in one turn on 78% (unchanged), and monokl's median bytes still exceed the rg policy's on Rust (1,442 against 608), held-out Rust (3,560 against 3,369) and all (1,567 against 1,566).

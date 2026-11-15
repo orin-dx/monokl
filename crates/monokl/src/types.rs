@@ -151,6 +151,8 @@ pub struct LineHit {
 pub struct SearchResponse {
     pub results: Vec<RankedBlock>,
     pub total_blocks_before_truncation: usize,
+    /// How many of the blocks left out of `results` the relevance cut dropped; the row and token caps dropped the rest.
+    pub blocks_cut_by_relevance: usize,
     pub truncated: bool,
     pub diagnostics: Vec<Diagnostic>,
 }

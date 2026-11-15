@@ -15,7 +15,9 @@ use crate::analysis::lang::{Language, TEST_DIRS};
 use crate::analysis::registry::AnalyzerRegistry;
 use crate::budget::{Budget, apply_budget};
 use crate::error::MonoklError;
-use crate::output::agent::{ToDomainError, render_search, search_row_texts};
+use crate::output::agent::{
+    DEFAULT_SNIPPET_LINES, MAX_SNIPPET_LINES, SearchView, ToDomainError, render_search, search_row_texts,
+};
 use crate::pipeline::{SearchRequest, search_with_timeout};
 use crate::text_search::DEFAULT_MAX_FILES;
 use crate::types::{Diagnostic, DiagnosticKind};
@@ -56,12 +58,20 @@ struct SearchArgs {
     /// Searches only this language: typescript, javascript or rust.
     #[arg(long, value_enum)]
     language: Option<Language>,
-    /// The most results to print.
+    /// The most results to print. It also caps the rows `--min-score` keeps, so it can cut below the first eight.
     #[arg(long, default_value_t = Budget::default().max_results)]
     max_results: usize,
     /// The most estimated tokens (one per three bytes) across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
+    /// Drops the rows scoring below this fraction of the top row's score, but never one of the first eight. 0 keeps every
+    /// row up to `--max-results`; 1 keeps only the rows that tie with the top.
+    #[arg(long, value_name = "FRACTION", default_value_t = Budget::default().min_score, value_parser = parse_min_score)]
+    min_score: f64,
+    /// The most matching lines each row's snippet shows, 0 to 3; the rest are counted. 0 prints no snippet, so a
+    /// variable or type row, which has no signature, shows no declaration text.
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_SNIPPET_LINES, value_parser = parse_snippet_lines)]
+    snippet_lines: usize,
     /// Stops after this many seconds and prints what was found so far, marked as a partial result. 0 means no limit.
     #[arg(long, value_name = "SECONDS", default_value = "30", value_parser = parse_timeout)]
     timeout: f64,
@@ -73,6 +83,22 @@ fn parse_timeout(text: &str) -> Result<f64, String> {
     Duration::try_from_secs_f64(seconds)
         .map(|_| seconds)
         .map_err(|e| format!("`{text}` is not a usable number of seconds: {e}"))
+}
+
+/// Reads `--min-score`: a share of the top score, from 0 to 1.
+fn parse_min_score(text: &str) -> Result<f64, String> {
+    let fraction: f64 = text.parse().map_err(|e| format!("`{text}` is not a fraction: {e}"))?;
+    if (0.0..=1.0).contains(&fraction) { Ok(fraction) } else { Err(format!("`{text}` is not between 0 and 1")) }
+}
+
+/// Reads `--snippet-lines`: a count from 0 to [`MAX_SNIPPET_LINES`].
+fn parse_snippet_lines(text: &str) -> Result<usize, String> {
+    let lines: usize = text.parse().map_err(|e| format!("`{text}` is not a number of lines: {e}"))?;
+    if lines <= MAX_SNIPPET_LINES {
+        Ok(lines)
+    } else {
+        Err(format!("`{text}` is more than the {MAX_SNIPPET_LINES} lines a snippet can show"))
+    }
 }
 
 /// Runs the command line with `args`, writing results to `out` and errors to `err`.
@@ -180,11 +206,12 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
             ),
         });
     }
-    let budget = Budget { max_results: args.max_results, max_tokens: args.max_tokens };
+    let budget = Budget { max_results: args.max_results, max_tokens: args.max_tokens, min_score: args.min_score };
+    let view = SearchView { snippet_lines: args.snippet_lines, max_results: args.max_results };
     let total_before = ranked.len();
-    let row_texts = search_row_texts(&ranked);
+    let row_texts = search_row_texts(&ranked, view.snippet_lines);
     let response = apply_budget(ranked, total_before, &budget, &row_texts, diagnostics);
-    Ok(render_search(&response))
+    Ok(render_search(&response, &view))
 }
 
 /// The deadline `--timeout` asks for; `0` asks for none.
@@ -274,6 +301,51 @@ mod tests {
         assert_eq!(code, ExitCode::from(2));
         assert_eq!(out, "");
         assert!(err.contains("<QUERY>"), "got: {err}");
+    }
+
+    #[test]
+    fn a_usage_error_names_the_flag_and_the_value_and_exits_with_2() {
+        for (flag, value, reason) in [
+            ("--min-score", "1.5", "`1.5` is not between 0 and 1"),
+            ("--min-score", "-0.1", "`-0.1` is not between 0 and 1"),
+            ("--min-score", "NaN", "`NaN` is not between 0 and 1"),
+            ("--min-score", "inf", "`inf` is not between 0 and 1"),
+            ("--min-score", "most", "`most` is not a fraction: invalid float literal"),
+            ("--snippet-lines", "4", "`4` is more than the 3 lines a snippet can show"),
+            ("--snippet-lines", "-1", "`-1` is not a number of lines: invalid digit found in string"),
+            ("--snippet-lines", "1.5", "`1.5` is not a number of lines: invalid digit found in string"),
+        ] {
+            let arg = format!("{flag}={value}");
+            let (code, out, err) = run_args(&["search", "alpha", &arg]);
+            assert_eq!(code, ExitCode::from(2), "{arg}");
+            assert_eq!(out, "", "{arg}");
+            assert!(err.contains(&format!("invalid value '{value}' for '{flag} <")), "{arg}: {err}");
+            assert!(err.contains(reason), "{arg}: {err}");
+        }
+    }
+
+    #[test]
+    fn the_ends_of_the_accepted_ranges_are_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        for args in [
+            ["--min-score=0", "--snippet-lines=0"],
+            ["--min-score=1", "--snippet-lines=3"],
+            ["--min-score=0.3", "--snippet-lines=1"],
+        ] {
+            let (code, _, err) = run_args(&["search", "zzzqqqxx", root, args[0], args[1]]);
+            assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn help_describes_the_relevance_cut_and_the_snippet_length_with_their_defaults() {
+        let (_, out, _) = run_args(&["search", "--help"]);
+        assert!(out.contains("--min-score <FRACTION>"), "got: {out}");
+        assert!(out.contains("[default: 0.3]"), "got: {out}");
+        assert!(out.contains("--snippet-lines <N>"), "got: {out}");
+        assert!(out.contains("[default: 1]"), "got: {out}");
+        assert!(out.contains("[default: 20]"), "got: {out}");
     }
 
     #[test]

@@ -12,21 +12,46 @@ fn opt_cell(s: Option<&str>) -> Value {
     s.map_or(Value::Null, Value::from)
 }
 
-const TRUNCATION_GUIDANCE: &str = "raise the cap or refine the query with +term or -term";
-
-/// The most matching lines a row's snippet shows.
-const SNIPPET_LINES: usize = 3;
+/// The most snippet lines a row can show, and the largest value `--snippet-lines` takes.
+pub const MAX_SNIPPET_LINES: usize = 3;
+/// The snippet lines a row shows unless `--snippet-lines` says otherwise.
+pub const DEFAULT_SNIPPET_LINES: usize = 1;
 /// The most characters of one matching line a snippet shows.
 const SNIPPET_LINE_CHARS: usize = 160;
+
+/// How a search response is shown: how long each row's snippet is, and the row cap the truncation hint names.
+///
+/// # Examples
+///
+/// ```
+/// use monokl::output::agent::SearchView;
+///
+/// let view = SearchView::default();
+/// assert_eq!((view.snippet_lines, view.max_results), (1, 20));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchView {
+    /// The most matching lines a row's snippet shows, from 0 to [`MAX_SNIPPET_LINES`]. With 0 the column is `null` and a
+    /// variable or type alias row, which has no signature, shows no declaration text.
+    pub snippet_lines: usize,
+    /// The row cap the response was budgeted with, which tells the hint whether the rows or the tokens ran out.
+    pub max_results: usize,
+}
+
+impl Default for SearchView {
+    fn default() -> Self {
+        Self { snippet_lines: DEFAULT_SNIPPET_LINES, max_results: crate::budget::Budget::default().max_results }
+    }
+}
 
 /// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
 ///
 /// A line the signature column already shows is left out: one whose text lies inside the block's
 /// [`signature_span`](crate::types::CodeBlock::signature_span). A variable or type alias has no signature, so its first
 /// line is the best thing to show; so is a first line that says more than the signature, such as a decorator or the
-/// start of an arrow function's body. At most [`SNIPPET_LINES`] lines appear, each cut to [`SNIPPET_LINE_CHARS`]
-/// characters, and the lines beyond that are counted, not dropped silently.
-fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
+/// start of an arrow function's body. At most `max_lines` lines appear, each cut to [`SNIPPET_LINE_CHARS`] characters,
+/// and the lines beyond that are counted, not dropped silently. With `max_lines` 0 there is no snippet at all.
+fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> {
     let mut lines = Vec::new();
     let mut start = block.span.start;
     for text in block.code.split('\n') {
@@ -45,10 +70,10 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
         .collect();
     shown.sort_unstable();
     shown.dedup();
-    let hidden = shown.len().saturating_sub(SNIPPET_LINES);
+    let hidden = shown.len().saturating_sub(max_lines);
     let mut out: Vec<String> = shown
         .iter()
-        .take(SNIPPET_LINES)
+        .take(max_lines)
         .map(|&line| {
             let text = lines[line - block.line_start].1.trim();
             let mut chars = text.chars();
@@ -79,7 +104,7 @@ fn parent_cell(parent: Option<&crate::types::ParentContext>) -> Value {
     opt_cell(parent.map(|p| format!("{} {}", p.kind.as_str(), p.name)).as_deref())
 }
 
-fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
+fn search_row(block: &crate::types::RankedBlock, snippet_lines: usize) -> [Value; 9] {
     [
         Value::from(block.block.file.as_str()),
         Value::from(block.block.line_start),
@@ -87,7 +112,7 @@ fn search_row(block: &crate::types::RankedBlock) -> [Value; 9] {
         Value::from(block.block.node_kind.as_str()),
         parent_cell(block.block.parent.as_ref()),
         opt_cell(block.block.symbol_signature.as_deref()),
-        opt_cell(snippet(&block.block).as_deref()),
+        opt_cell(snippet(&block.block, snippet_lines).as_deref()),
         Value::from(block.rank),
         Value::from(block.final_score),
     ]
@@ -100,27 +125,51 @@ const SEARCH_FIELDS: [&str; 9] =
 ///
 /// The search budget measures these lines, so a cap counts what the reader receives. Rendering them in one table keeps
 /// michi's cell quoting and truncation as the only definition of a row.
-pub fn search_row_texts(blocks: &[RankedBlock]) -> Vec<String> {
-    let rows: Vec<Vec<Value>> = blocks.iter().map(|block| search_row(block).to_vec()).collect();
+pub fn search_row_texts(blocks: &[RankedBlock], snippet_lines: usize) -> Vec<String> {
+    let rows: Vec<Vec<Value>> = blocks.iter().map(|block| search_row(block, snippet_lines).to_vec()).collect();
     let rendered = michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).render_toon();
     rendered.lines().skip(1).map(str::to_owned).collect()
 }
 
 /// Renders a search response as a TOON table of its rows, followed by the truncation count and hints.
-pub fn render_search(response: &SearchResponse) -> String {
-    let rows: Vec<Vec<Value>> = response.results.iter().map(|block| search_row(block).to_vec()).collect();
+pub fn render_search(response: &SearchResponse, view: &SearchView) -> String {
+    let rows: Vec<Vec<Value>> =
+        response.results.iter().map(|block| search_row(block, view.snippet_lines).to_vec()).collect();
     let mut rendered =
-        michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).hints(search_hints(response));
+        michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).hints(search_hints(response, view));
     if response.truncated {
         rendered = rendered.total_count(response.total_blocks_before_truncation);
     }
     rendered.render_toon()
 }
 
-fn search_hints(response: &SearchResponse) -> Vec<michi::Hint> {
+/// What the truncation hint tells a reader to do to see more: name the flag that lifts each rule that cut rows, then
+/// point at refining the query.
+///
+/// The relevance cut is named only when it dropped rows. The row cap is named when the rows ran out, the token cap when
+/// the tokens did; `view.max_results` tells them apart, because the token cap cuts below the row cap.
+fn truncation_guidance(response: &SearchResponse, view: &SearchView) -> String {
+    let by_caps = response
+        .total_blocks_before_truncation
+        .saturating_sub(response.results.len())
+        .saturating_sub(response.blocks_cut_by_relevance);
+    let mut flags = Vec::new();
+    if response.blocks_cut_by_relevance > 0 {
+        flags.push("--min-score 0");
+    }
+    if by_caps > 0 {
+        flags.push(if response.results.len() >= view.max_results { "--max-results N" } else { "--max-tokens N" });
+    }
+    if flags.is_empty() {
+        return "refine with +term/-term".to_owned();
+    }
+    format!("{} for more, or refine with +term/-term", flags.join(" or "))
+}
+
+fn search_hints(response: &SearchResponse, view: &SearchView) -> Vec<michi::Hint> {
     let shown =
         michi::TruncationOutcome::new(response.results.iter().collect(), response.total_blocks_before_truncation);
-    let mut hints: Vec<michi::Hint> = shown.hint(TRUNCATION_GUIDANCE).into_iter().collect();
+    let mut hints: Vec<michi::Hint> = shown.hint(truncation_guidance(response, view)).into_iter().collect();
     hints.extend(diagnostic_lines(&response.diagnostics).into_iter().map(michi::Hint::new));
     if response.results.is_empty() {
         hints.push(michi::Hint::new(
@@ -163,6 +212,17 @@ mod snippet_tests {
 
     /// Where the test blocks start in their file, so a span offset is not mistaken for an offset in the code.
     const START: usize = 100;
+
+    /// The snippet at the longest length, which is what every row showed before `--snippet-lines` existed; the tests
+    /// below that call this pin that contract unchanged.
+    fn snippet(block: &CodeBlock) -> Option<String> {
+        super::snippet(block, MAX_SNIPPET_LINES)
+    }
+
+    /// The snippet at an explicit length.
+    fn snippet_of(block: &CodeBlock, lines: usize) -> Option<String> {
+        super::snippet(block, lines)
+    }
 
     /// A block whose head is its first line, as for a function whose body opens at the end of that line.
     fn block(line_start: usize, code: &str, matched_lines: &[usize]) -> CodeBlock {
@@ -284,6 +344,44 @@ mod snippet_tests {
     }
 
     #[test]
+    fn a_snippet_of_one_line_shows_the_first_matching_line_and_counts_the_rest() {
+        let b = block(1, "head\nx1\nx2\nx3", &[2, 3, 4]);
+        assert_eq!(snippet_of(&b, 1), Some("2: x1\n...and 2 more matching lines".to_owned()));
+    }
+
+    #[test]
+    fn a_snippet_of_one_line_has_no_marker_when_one_line_matched() {
+        let b = block(1, "head\nx1\nx2", &[2]);
+        assert_eq!(snippet_of(&b, 1), Some("2: x1".to_owned()));
+        assert_eq!(snippet_of(&b, 3), Some("2: x1".to_owned()));
+    }
+
+    #[test]
+    fn a_snippet_of_one_line_counts_one_more_line_in_the_singular() {
+        let b = block(1, "head\nx1\nx2", &[2, 3]);
+        assert_eq!(snippet_of(&b, 1), Some("2: x1\n...and 1 more matching line".to_owned()));
+        assert_eq!(snippet_of(&b, 2), Some("2: x1\n3: x2".to_owned()));
+    }
+
+    #[test]
+    fn a_snippet_of_one_line_still_shows_the_declaration_of_a_variable_or_type() {
+        let b = unsigned(3, "export const price = 1;", &[3]);
+        assert_eq!(snippet_of(&b, 1), Some("3: export const price = 1;".to_owned()));
+    }
+
+    #[test]
+    fn a_snippet_of_no_lines_is_none_even_where_a_line_matched() {
+        let b = unsigned(3, "export const price = 1;", &[3]);
+        assert_eq!(snippet_of(&b, 0), None);
+        assert_eq!(snippet_of(&block(1, "head\nx1\nx2", &[2, 3]), 0), None);
+    }
+
+    #[test]
+    fn the_default_and_the_longest_snippet_are_one_and_three_lines() {
+        assert_eq!((DEFAULT_SNIPPET_LINES, MAX_SNIPPET_LINES), (1, 3));
+    }
+
+    #[test]
     fn a_long_line_is_cut_on_a_character_boundary() {
         let long = "é".repeat(200);
         let b = block(1, &format!("head\n  {long}"), &[2]);
@@ -355,11 +453,12 @@ mod projection_tests {
                 rank: 2,
             }],
             total_blocks_before_truncation: 1,
+            blocks_cut_by_relevance: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
 
-        let rendered = render_search(&response);
+        let rendered = render_search(&response, &SearchView::default());
         assert_eq!(
             rendered,
             "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
@@ -398,11 +497,12 @@ mod projection_tests {
                 ranked(1, SymbolKind::Class, None, 3),
             ],
             total_blocks_before_truncation: 3,
+            blocks_cut_by_relevance: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
         assert_eq!(
-            render_search(&response),
+            render_search(&response, &SearchView::default()),
             "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
              src/a.ts,3,5,method,class Foo,null,null,1,0.5\n  \
              src/a.ts,7,9,constructor,class Bar Baz,null,null,2,0.5\n  \
@@ -423,6 +523,7 @@ mod projection_tests {
         let response = SearchResponse {
             results: Vec::new(),
             total_blocks_before_truncation: 0,
+            blocks_cut_by_relevance: 0,
             truncated: false,
             diagnostics: vec![
                 diagnostic(DiagnosticKind::Skipped, Some("a.ts"), "unreadable"),
@@ -433,7 +534,7 @@ mod projection_tests {
         };
 
         assert_eq!(
-            render_search(&response),
+            render_search(&response, &SearchView::default()),
             "search: []\n\
              help[4]: \"1 file degraded: parse errors: c.ts\",query has no positive terms,\
              \"2 files skipped: unreadable: a.ts, b.ts\",\
@@ -487,6 +588,96 @@ mod projection_tests {
         );
     }
 
+    /// `scores.len()` ranked blocks in `src/f<rank>.rs`, scored as given, without a snippet.
+    fn scored_blocks(scores: &[f64]) -> Vec<crate::types::RankedBlock> {
+        use crate::types::{CodeBlock, RankedBlock, SymbolKind};
+        use camino::Utf8PathBuf;
+
+        scores
+            .iter()
+            .zip(1..)
+            .map(|(&final_score, rank)| RankedBlock {
+                block: CodeBlock {
+                    file: Utf8PathBuf::from(format!("src/f{rank}.rs")),
+                    line_start: rank,
+                    line_end: rank + 1,
+                    node_kind: SymbolKind::Function,
+                    span: 0..9,
+                    parent_index: None,
+                    code: "fn a() {}".to_string(),
+                    symbol_signature: None,
+                    signature_span: None,
+                    name: None,
+                    matched_lines: Vec::new(),
+                    parent: None,
+                },
+                final_score,
+                rank,
+            })
+            .collect()
+    }
+
+    /// The help line `scores` produce under `budget`, or `None` when the whole result is shown.
+    fn help_line(scores: &[f64], budget: &crate::budget::Budget) -> Option<String> {
+        let ranked = scored_blocks(scores);
+        let total = ranked.len();
+        let view = SearchView { max_results: budget.max_results, ..SearchView::default() };
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        let rendered = render_search(&crate::budget::apply_budget(ranked, total, budget, &texts, Vec::new()), &view);
+        rendered.lines().find_map(|line| line.strip_prefix("help[1]: \"")?.strip_suffix('"').map(str::to_owned))
+    }
+
+    #[test]
+    fn the_help_line_names_the_min_score_flag_when_the_relevance_cut_dropped_rows() {
+        let scores = [vec![1.0; 9], vec![0.1, 0.05]].concat();
+        assert_eq!(
+            help_line(&scores, &crate::budget::Budget::default()).as_deref(),
+            Some("showing 9 of 11; --min-score 0 for more, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_the_max_results_flag_when_the_row_cap_dropped_rows() {
+        let budget = crate::budget::Budget { max_results: 2, ..crate::budget::Budget::default() };
+        assert_eq!(
+            help_line(&[1.0, 0.9, 0.8], &budget).as_deref(),
+            Some("showing 2 of 3; --max-results N for more, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_both_flags_when_both_rules_dropped_rows() {
+        let budget = crate::budget::Budget { max_results: 5, ..crate::budget::Budget::default() };
+        let scores = [vec![1.0; 9], vec![0.1]].concat();
+        assert_eq!(
+            help_line(&scores, &budget).as_deref(),
+            Some("showing 5 of 10; --min-score 0 or --max-results N for more, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_the_max_tokens_flag_when_the_tokens_ran_out_before_the_rows() {
+        let budget = crate::budget::Budget { max_tokens: 20, ..crate::budget::Budget::default() };
+        assert_eq!(
+            help_line(&[1.0, 0.9, 0.8], &budget).as_deref(),
+            Some("showing 1 of 3; --max-tokens N for more, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_help_line_does_not_name_min_score_once_the_relevance_cut_is_off() {
+        let budget = crate::budget::Budget { max_results: 2, min_score: 0.0, ..crate::budget::Budget::default() };
+        assert_eq!(
+            help_line(&[1.0, 0.9, 0.1], &budget).as_deref(),
+            Some("showing 2 of 3; --max-results N for more, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn a_result_nothing_was_cut_from_has_no_help_line() {
+        assert_eq!(help_line(&[1.0, 0.9, 0.8], &crate::budget::Budget::default()), None);
+    }
+
     #[test]
     fn a_budgeted_search_reports_the_cut() {
         use crate::budget::{Budget, apply_budget};
@@ -514,16 +705,17 @@ mod projection_tests {
             })
             .collect();
         let budget = Budget { max_results: 2, ..Budget::default() };
-        let texts = search_row_texts(&ranked);
+        let view = SearchView { max_results: 2, ..SearchView::default() };
+        let texts = search_row_texts(&ranked, view.snippet_lines);
 
-        let rendered = render_search(&apply_budget(ranked, 3, &budget, &texts, Vec::new()));
+        let rendered = render_search(&apply_budget(ranked, 3, &budget, &texts, Vec::new()), &view);
         assert_eq!(
             rendered,
             "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
              src/f1.rs,1,2,function,null,null,null,1,0.5\n  \
              src/f2.rs,2,3,function,null,null,null,2,0.5\n\
              totalCount: 3\n\
-             help[1]: showing 2 of 3; raise the cap or refine the query with +term or -term"
+             help[1]: \"showing 2 of 3; --max-results N for more, or refine with +term/-term\""
         );
     }
 
@@ -560,11 +752,12 @@ mod projection_tests {
                 block("src/three.rs", 5, 6, 3, 0.30),
             ],
             total_blocks_before_truncation: 3,
+            blocks_cut_by_relevance: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
 
-        let rendered = render_search(&search);
+        let rendered = render_search(&search, &SearchView::default());
         assert!(
             rendered.starts_with(
                 "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n"

@@ -33,3 +33,13 @@ fn readme_options_table_matches_budget_default() {
     assert_eq!(parse_cap(&default_cell(&readme, "--max-results")), budget.max_results);
     assert_eq!(parse_cap(&default_cell(&readme, "--max-tokens")), budget.max_tokens);
 }
+
+#[test]
+fn readme_options_table_matches_the_relevance_cut_and_snippet_defaults() {
+    let readme = readme();
+    assert_eq!(default_cell(&readme, "--min-score").parse::<f64>().expect("a fraction"), Budget::default().min_score);
+    assert_eq!(
+        default_cell(&readme, "--snippet-lines").parse::<usize>().expect("a line count"),
+        monokl::output::agent::DEFAULT_SNIPPET_LINES
+    );
+}
