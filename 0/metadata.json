@@ -1,0 +1,153 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7G9JJ5AC08AAV1M2869GYH6",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-15T19:05:17.724094Z",
+  "branch": "feat/lean-default-output",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/monokl/src/cli.rs",
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "01d20c7418b4",
+  "checkpoint_transcript_start": 28294,
+  "transcript_lines_at_start": 28294,
+  "compact_transcript_start": 1998,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 17523,
+    "cache_read_tokens": 1380912,
+    "output_tokens": 6122,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 62,
+      "cache_creation_tokens": 146305,
+      "cache_read_tokens": 2711614,
+      "output_tokens": 25424,
+      "api_call_count": 31
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 196
+  },
+  "summary": {
+    "intent": "Reduce the context cost of the monokl code-search CLI for agent workflows. This meant first measuring cost against an rg-based policy, then finding a leaner default output shape.",
+    "outcome": "A cost harness PR (#109) was opened, showing monokl's median output (~10 KB) is about 7x the rg-policy median. A sweep found rows past rank 3 hold 91% of the bytes, and a lean-default-output PR (1 snippet line, relevance cut at 0.3 x top score, floor 3, cap 15) was started, stacked on #105. That PR was not yet finished.",
+    "learnings": {
+      "repo": [
+        "`just agent-cost` (scripts/agent-cost.py) is a deterministic report-only harness that imports rg-compare.py. Its policy and baseline numbers are recorded as section 45 of docs/spec/05-research-and-decisions.md.",
+        "Checks used: `just agent-cost`, `just rg-compare`, `just typos`. `just ci` and Rust tests were not run for the harness PR because no Rust source changed.",
+        "Baseline over 222 rows: monokl median 10,012 bytes vs rg-policy 1,463; p90 13,351 vs 12,078. monokl wins on p90 for held-out questions and held-out Rust, and where rg can't locate the file (react-hook-form 13/14 vs 3/14).",
+        "The `questions` set is 78% answerable, below the 0.8 threshold, so 9 FAIL markers print. This is the baseline, not a regression.",
+        "Bytes per row: snippet 50%, signature 20%, path 12.5%, score/kind/parent/lines ~14%. Rows past rank 3 are 91.3% of default bytes, and 67% of those fall into a waste class (same-file repeats, repeated parents, test/example paths, types paths).",
+        "The expected declaration ranks 1st for 173 rows, within top 3 for 204, within 5 for 211, within 8 for 213, and never for 5.",
+        "Snippet lines = 0 fails because variable and type rows have no signature, so their declaration text appears only in the snippet (identifiers fall to 15 of 59).",
+        "Truncated output ends with `totalCount: T` and a `help[1]` hint. `--max-results` and `--max-tokens` exist, but there is no `--offset`/cursor, no snippet-lines flag and no relevance-cut flag. The hint does not name a flag.",
+        "Stacking order: the lean-output PR sits on #105's branch because it touches snippet and row-selection code that #105 and #107 also changed."
+      ],
+      "code": [],
+      "workflow": [
+        "Subagent reports are treated as unverified model output. The assistant relayed the numbers while noting it hadn't re-run them.",
+        "Read-only experiments (sweeps, prototypes) came before shipping a default change, and the scripts were cleaned up afterward.",
+        "A change to default output affects every search, so it gets its own PR with an explicit `**Breaking:**` note, with the old behavior reachable via flags.",
+        "The harness's rg policy assumes the agent already knows where to look, which understates rg's true cost. Comparisons should be read with that caveat."
+      ]
+    },
+    "friction": [
+      "The cost harness subagent added a CONTRIBUTING.md row outside its stated file ownership (harmless but out of scope).",
+      "The offline sandbox blocked fetching origin; the needed branch happened to already exist locally.",
+      "Snippet-lines had to be prototyped via an env var because no flag exists.",
+      "The harness measures bytes and answerability only, so it cannot show model correctness or the value of usage context in extra snippet lines."
+    ],
+    "open_items": [
+      "Finish and merge the lean-default-output PR (`--snippet-lines`, `--min-score`, relevance cut 0.3 x top, floor 3, cap 15). It must stay within 1 question loss per set, report new median/p90 bytes and show no bench slowdown over 2%.",
+      "Make the truncation hint name the flag to use.",
+      "Add `--offset` or a cursor so asking for more doesn't re-pay the first N rows (documented as a known gap).",
+      "Pending merges: #105 (first, since the lean-output PR is stacked on it), #109, and release PR #97. CI on #109 was pending.",
+      "Raise `questions` answerability above the 0.8 threshold to clear the 9 FAIL markers.",
+      "Evaluate model correctness and the value of usage context beyond bytes and answerability."
+    ]
+  }
+}
