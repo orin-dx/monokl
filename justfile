@@ -104,6 +104,10 @@ bench *args:
     cargo build --release -q
     python3 -I scripts/bench.py {{ args }}
 
+# Block span and parent invariants over the harness repositories in target/rg-compare (`just rg-compare` fills it) or the directories in MONOKL_SPAN_CORPUS; skips with a message when neither exists. On demand.
+span-invariants:
+    cargo test -p monokl --test span_invariants --release -- --ignored --nocapture
+
 # Mutation testing. Slow, so on demand only, not part of `just ci`.
 mutants:
     cargo mutants --workspace
