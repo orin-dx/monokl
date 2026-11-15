@@ -23,15 +23,18 @@ rg-policy cost. A fixed policy standing in for an agent that only has ripgrep. E
   3. Turn 2, only when turn 1 matched more than 50 lines: a narrower `rg -n`, read the same way. For an identifier,
      the declaration pattern of that identifier. For a question, lines holding the two best words in either order.
      A question with fewer than two words that match has no narrower pattern and skips turn 2.
-  4. Last turn: a file read of the smallest block of the expected file that holds the declaration. The block is found
-     by a bracket-balance scan from the declaration line (`statement_end`), not by indentation: it ends at a `;`
-     outside every bracket, or at the line end after the body's closing `}` or after a bracket-free statement, and
-     it skips strings, template literals, regex literals, comments and Rust raw strings, char literals and
-     lifetimes. A declaration with a `{...}` body is preferred over an overload or signature without one. The
-     block has no doc comment, decorators or attributes above it. rg is never charged for failing to find the
-     file: the policy always succeeds, and `rg_located` reports how often the expected file was in the lines the
-     agent actually read. `scripts/test_agent_cost.py` holds exact-byte checks of the scan; `just agent-cost`
-     runs it first.
+  4. Last turn: a file read of the lines of the block that holds the declaration. The extent is monokl's own, from
+     the first and last line of the rows of `monokl search <symbol>` with the lean cut off (`--min-score 0`, no row
+     or token cap, `--snippet-lines 0`); the declaration line is found by rg, and ranking plays no part, so the
+     measurement does not depend on where monokl ranks the answer. For each declaration line the block is the
+     innermost block holding it (a class does not stand in for its method), and the largest of those counts, so an
+     implementation is read in place of its overload signatures. Across several expected files the smallest counts.
+     A declaration with no body, such as Rust's `mod name;`, has no block and is read as its own line; the report
+     lists them. The extent is monokl's, so a TypeScript block starts at the declaration and a Rust block also holds
+     the doc comments and attributes above it. An analyzer extent bug would raise or lower the read cost and monokl's
+     own rows alike. rg is never charged for failing to find the file: the policy always succeeds, and `rg_located`
+     reports how often the expected file was in the lines the agent actually read. `scripts/test_agent_cost.py`
+     checks the extents with exact bytes; `just agent-cost` runs it first.
 
 Turns are the rg calls plus the read; bytes are the sum of the lines read in each call plus the read. `rg-early`
 repeats the policy but stops, with no read, as soon as a turn shows the expected declaration's line; it is the cheaper
@@ -126,174 +129,48 @@ def declaration_lines(path, lang, file, symbol, member):
     return found
 
 
-IDENT = re.compile(r"[A-Za-z0-9_$]")
-OPERATORS = "=,+-*/%&|^?:."
-CONTINUES = ("|", "&", ".", "?", ":", "+", "-", "=", ",", "{", "where", "extends", "implements", "as ", "satisfies ")
-REGEX_AFTER = "(,=:[!&|?{};"
+def monokl_spans(binary, symbol, path, file):
+    """(first line, last line) of every block monokl returns for `file` when it searches `symbol` with the lean cut
+    off (no score floor, no row cap, no token cap). Only extents are read: the declaration is found by rg, and monokl's
+    ranking does not choose it."""
+    out = RC.run([binary, "search", symbol, ".", "--min-score", "0", "--max-results", "1000000", "--max-tokens",
+                  "1000000000", "--snippet-lines", "0"], cwd=path, check=False).stdout
+    rows = [(m.group(1).removeprefix("./"), int(m.group(2)), int(m.group(3)))
+            for line in out.splitlines() if (m := ROW.match(line))]
+    return sorted({(start, end) for name, start, end in rows if name == file})
 
 
-def statement_end(text, rust):
-    """Offset where the declaration that starts at the beginning of `text` ends, and whether it has a `{...}` body.
-
-    A scan over characters, not lines or indentation: brackets `()`, `[]` and `{}` are counted, strings, template
-    literals (with their `${}`), regex literals, line and block comments (nested in Rust) and Rust raw strings, char
-    literals and lifetimes are skipped, and generic `<>` count only while no bracket is open. The declaration ends
-    at a `;` outside every bracket, or at a line end outside every bracket (and after a body, once its `}` closes)
-    when the line does not end in an operator and the next code line does not start with one or with `where`,
-    `extends`, `implements`, `as` or `satisfies`. Text that never ends runs to the end of the file, so an unusual
-    construct reads more, not less.
-    """
-    n = len(text)
-    i = 0
-    paren = brack = brace = angle = 0
-    templates = []
-    last = prev = ""
-    body = False
-    where = False
-
-    def template(at):
-        """Scans template text from `at`; returns the offset after it and whether a `${` opened an expression."""
-        while at < n:
-            if text[at] == "\\":
-                at += 2
-            elif text[at] == "`":
-                return at + 1, False
-            elif text.startswith("${", at):
-                return at + 2, True
-            else:
-                at += 1
-        return n, False
-
-    def next_code_line(at):
-        """The next line after `at` that holds code: blank lines and `//` comment lines are skipped."""
-        for line in text[at + 1:].split("\n"):
-            stripped = line.strip()
-            if stripped and not stripped.startswith("//"):
-                return stripped
-        return None
-
-    while i < n:
-        c = text[i]
-        flat = not (paren or brack or brace)
-        if c == "\n":
-            continues = where or last in OPERATORS or prev + last in ("=>", "->")
-            if last and flat and not angle and not continues:
-                upcoming = next_code_line(i)
-                if upcoming is None or not upcoming.startswith(CONTINUES):
-                    return i, body
-            i += 1
-            continue
-        if c.isspace():
-            i += 1
-            continue
-        if text.startswith("//", i):
-            i = text.find("\n", i)
-            i = n if i < 0 else i
-            continue
-        if text.startswith("/*", i):
-            depth = 1
-            i += 2
-            while i < n and depth:
-                if rust and text.startswith("/*", i):
-                    depth += 1
-                    i += 2
-                elif text.startswith("*/", i):
-                    depth -= 1
-                    i += 2
-                else:
-                    i += 1
-            continue
-        prev, last = last, c
-        if rust and flat and not angle and text.startswith("where", i) and not IDENT.match(text[i + 5:i + 6]) and not (
-                i and IDENT.match(text[i - 1])):
-            where = True
-        if rust and c == "r" and (i == 0 or not IDENT.match(text[i - 1])) and re.match(r'r#*"', text[i:i + 40]):
-            hashes = len(re.match(r"r(#*)", text[i:]).group(1))
-            close = text.find('"' + "#" * hashes, i + 2 + hashes)
-            i = n if close < 0 else close + 1 + hashes
-            last = '"'
-        elif c == '"' or (c == "'" and not rust):
-            i += 1
-            while i < n and text[i] != c and not (c == "'" and text[i] == "\n"):
-                i += 2 if text[i] == "\\" else 1
-            i += 1
-            last = '"'
-        elif c == "'":
-            if text[i + 1:i + 2] == "\\":
-                close = text.find("'", i + 3)
-                i = n if close < 0 else close + 1
-                last = '"'
-            elif text[i + 2:i + 3] == "'":
-                i += 3
-                last = '"'
-            else:
-                i += 1
-        elif c == "`" and not rust:
-            i, opened = template(i + 1)
-            if opened:
-                brace += 1
-                templates.append(brace)
-            last = '"'
-        elif c == "/" and not rust and (not prev or prev in REGEX_AFTER):
-            j = i + 1
-            in_class = False
-            while j < n and text[j] != "\n" and (in_class or text[j] != "/"):
-                in_class = (text[j] == "[") or (in_class and text[j] != "]")
-                j += 2 if text[j] == "\\" else 1
-            if j < n and text[j] == "/":
-                i = j + 1
-                last = '"'
-            else:
-                i += 1
-        else:
-            if c in "([":
-                paren += c == "("
-                brack += c == "["
-            elif c in ")]":
-                paren -= c == ")"
-                brack -= c == "]"
-            elif c == "{":
-                where = False
-                body = body or (not paren and not brack and not brace and not angle)
-                brace += 1
-            elif c == "}":
-                brace -= 1
-                if templates and templates[-1] == brace + 1:
-                    templates.pop()
-                    i, opened = template(i + 1)
-                    if opened:
-                        brace += 1
-                        templates.append(brace)
-                    last = '"'
-                    continue
-            elif c == ";" and flat:
-                return i, body
-            elif c == "<" and (flat or angle):
-                after = text[i + 1:i + 2]
-                before = text[i - 1:i]
-                if after not in (" ", "=", "<", "") and (IDENT.match(before) or prev in ">=:(,"):
-                    angle += 1
-            elif c == ">" and angle and prev not in ("=", "-"):
-                angle -= 1
-            i += 1
-    return n, body
+def declared_block(spans, declarations):
+    """(first line, last line) of the block that is the declaration: for each declaration line, the innermost block
+    that holds it (a class that holds a method does not stand in for the method), then the largest of those, so an
+    implementation is read in place of its overload signatures. None when no block holds any declaration line."""
+    innermost = set()
+    for number, _text in declarations:
+        holding = [(start, end) for start, end in spans if start <= number <= end]
+        if holding:
+            innermost.add(min(holding, key=lambda span: (span[1] - span[0], -span[0])))
+    return max(innermost, key=lambda span: (span[1] - span[0], -span[0]), default=None)
 
 
-def block_bytes(lines, start, lang):
-    """(bytes, has a body) of the block that starts on `lines[start]`: whole lines from the declaration to the line
-    where it ends. Doc comments, decorators and attributes above the declaration are not in it."""
-    text = "\n".join(lines[start:])
-    end, body = statement_end(text, lang is RC.LANGS["rust"])
-    last = start + text.count("\n", 0, end)
-    return sum(len(line.encode()) + 1 for line in lines[start:last + 1]), body
+def span_bytes(lines, span):
+    """Bytes of the lines `span` covers (1-based, inclusive), each with its newline."""
+    return sum(len(line.encode()) + 1 for line in lines[span[0] - 1:span[1]])
 
 
-def smallest_block(path, lang, file, declarations):
-    """Bytes of the smallest block of `file` that holds one of the declarations and has a `{...}` body, so an overload
-    or a signature without a body does not stand in for the function. Without any body, the smallest block."""
-    lines = (path / file).read_text(errors="replace").splitlines()
-    blocks = [block_bytes(lines, number - 1, lang) for number, _ in declarations]
-    return min([size for size, body in blocks if body] or [size for size, _ in blocks])
+def read_block_bytes(binary, path, expected, symbol, gaps):
+    """Bytes of the smallest file read that shows the expected declaration: per expected file the block of
+    `declared_block`, then the smallest file. monokl makes no block for a declaration that has no body, such as Rust's
+    `mod name;`; that declaration is read as its own line, and each such file is appended to `gaps` so the report
+    counts them."""
+    sizes = []
+    for file, declarations in expected.items():
+        lines = (path / file).read_text(errors="replace").splitlines()
+        span = declared_block(monokl_spans(binary, symbol, path, file), declarations)
+        if span is None:
+            gaps.append(f"{path.name}:{file}:{declarations[0][0]}")
+            span = (declarations[0][0], declarations[0][0])
+        sizes.append(span_bytes(lines, span))
+    return min(sizes)
 
 
 def declaration_prefix(text):
@@ -316,7 +193,7 @@ def monokl_cost(binary, query, path, expected):
     return len(out.encode()), answerable, len(rows)
 
 
-def rg_policy(path, lang, words, identifier, expected, cache):
+def rg_policy(path, lang, words, identifier, expected, cache, read):
     """Simulates the rg-only agent; returns its turns, bytes, whether the expected file was read, and the early-stop
     turns and bytes."""
     usable = best_words(path, lang, words, cache)
@@ -346,7 +223,6 @@ def rg_policy(path, lang, words, identifier, expected, cache):
                 located = True
                 if early is None and int(rest.partition(":")[0]) in {n for n, _ in expected[file]}:
                     early = (number, spent)
-    read = min(smallest_block(path, lang, file, decls) for file, decls in expected.items())
     full = (len(turns) + 1, spent + read)
     return full, located, early or full
 
@@ -387,7 +263,7 @@ def set_names(row, report_only):
     return [name, "all"]
 
 
-def score(binary, row, cache):
+def score(binary, row, cache, gaps):
     path, lang = row["path"], row["lang"]
     expected = {}
     for file in row["files"]:
@@ -397,12 +273,12 @@ def score(binary, row, cache):
     if not expected:
         sys.exit(f"{row['repo']}: `{row['symbol']}` has no declaration in {row['files']}; run `just rg-compare`")
     monokl_bytes, answerable, printed = monokl_cost(binary, row["query"], path, expected)
+    block = read_block_bytes(binary, path, expected, row["symbol"], gaps)
     (rg_turns, rg_bytes), located, (early_turns, early_bytes) = rg_policy(
-        path, lang, row["words"], row["identifier"], expected, cache)
-    block = min(smallest_block(path, lang, file, decls) for file, decls in expected.items())
+        path, lang, row["words"], row["identifier"], expected, cache, block)
     return {
         "repo": row["repo"], "kind": row["kind"], "query": row["query"], "symbol": row["symbol"],
-        "expected": sorted(expected),
+        "expected": sorted(expected), "read": block,
         "answerable": answerable, "rg_located": located, "monokl_rows": printed,
         "monokl": (1, monokl_bytes),
         "monokl+read": (1 if answerable else 2, monokl_bytes + (0 if answerable else block)),
@@ -479,9 +355,10 @@ def main():
     report_only = RC.report_only_repositories()
 
     cache = {}
+    gaps = []
     results = []
     for row in [*identifier_rows(args.binary, args.repo, args.terms), *question_rows(args.repo)]:
-        result = score(args.binary, row, cache)
+        result = score(args.binary, row, cache, gaps)
         result["sets"] = set_names(row, report_only)
         results.append(result)
     if not results:
@@ -489,6 +366,8 @@ def main():
 
     print("agent workflow cost: one monokl search vs a fixed rg policy; bytes, tokens = ceil(bytes / 3), no timing")
     failures = table(results, args.detail)
+    print(f"read sized from monokl's block extents; {len(gaps)} declaration(s) have no block and are read as their own "
+          f"line: {', '.join(gaps) or 'none'}")
     summary(results, failures)
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=2, default=str))
