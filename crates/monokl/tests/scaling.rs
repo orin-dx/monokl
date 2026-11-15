@@ -69,10 +69,12 @@ fn candidates(count: usize, layout: Layout) -> Vec<(CodeBlock, Vec<String>)> {
                 line_start,
                 line_end,
                 node_kind: SymbolKind::Function,
-                span: 0..code.len(),
+                // A hundred bytes a line, so the spans overlap exactly as the lines do.
+                span: line_start * 100..(line_end + 1) * 100,
                 parent_index: None,
                 code,
                 symbol_signature: Some(format!("function handle{index}(input)")),
+                signature_span: None,
                 name: None,
                 matched_lines: vec![line_start + 1],
                 parent: None,

@@ -391,6 +391,106 @@ export default {
         assert_eq!(&OBJECTS[10..16], "export");
     }
 
+    const HEADS: &str = "\
+export async function load(
+  a: A,
+): Promise<B> {
+  return a;
+}
+
+export function stub(): void;
+
+declare function native(): void;
+
+function noop() {}
+
+function idle() {
+}
+
+function note() { /* later */ }
+
+class Foo {
+  @Dec() static async run(a: A) {
+    return a;
+  }
+
+  @Dec2()
+  handle = async (req: Req) => {
+    return req;
+  };
+
+  load = () => needle(
+    1,
+  );
+
+  get name(): string {
+    return 'x';
+  }
+}
+
+export const api = {
+  save: function (a: A) {
+    return a;
+  },
+  find(b: B) {
+    return b;
+  },
+};
+";
+
+    /// The source each block's head covers, with the block's name.
+    fn heads<'a>(source: &'a str, analysis: &'a FileAnalysis) -> Vec<(Option<&'a str>, Option<&'a str>)> {
+        analysis
+            .blocks
+            .iter()
+            .map(|b| (b.name.as_deref(), b.signature_span.clone().map(|head| &source[head])))
+            .collect()
+    }
+
+    #[test]
+    fn a_signature_span_covers_the_head_through_the_opening_brace_of_a_block_body() {
+        let analysis = analyze_source("heads.ts", HEADS);
+        assert_eq!(
+            heads(HEADS, &analysis),
+            [
+                (Some("load"), Some("export async function load(\n  a: A,\n): Promise<B> {")),
+                (Some("stub"), Some("export function stub(): void;")),
+                (Some("native"), Some("declare function native(): void;")),
+                // An empty block adds nothing to the head, and one with a comment in it does.
+                (Some("noop"), Some("function noop() {}")),
+                (Some("idle"), Some("function idle() {\n}")),
+                (Some("note"), Some("function note() {")),
+                (Some("Foo"), None),
+                // The decorator is not part of the head, and the space after it is.
+                (Some("run"), Some(" static async run(a: A) {")),
+                // The head stops at an expression body, which is not a declaration's head.
+                (Some("handle"), Some("\n  handle = async (req: Req) => {")),
+                (Some("load"), Some("load = () => ")),
+                (Some("name"), Some("get name(): string {")),
+                (Some("api"), None),
+                (Some("save"), Some("save: function (a: A) {")),
+                (Some("find"), Some("find(b: B) {")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_signature_span_is_some_exactly_when_the_signature_is_and_lies_within_the_block() {
+        for (name, source) in [("heads.ts", HEADS), ("class.ts", CLASS_WITH_MEMBERS), ("objects.ts", OBJECTS)] {
+            let analysis = analyze_source(name, source);
+            assert!(!analysis.blocks.is_empty());
+            for block in &analysis.blocks {
+                assert_eq!(block.signature_span.is_some(), block.symbol_signature.is_some(), "{name} {:?}", block.name);
+                let Some(head) = &block.signature_span else { continue };
+                assert!(block.span.start <= head.start && head.end <= block.span.end, "{name} {:?}", block.name);
+                // The signature is the head's text on one line, leaving out what the head holds before its keyword.
+                let collapsed = source[head.clone()].split_whitespace().collect::<Vec<_>>().join(" ");
+                let signature = block.symbol_signature.as_deref().unwrap();
+                assert!(collapsed.contains(signature), "{name}: {collapsed:?} lacks {signature:?}");
+            }
+        }
+    }
+
     /// Each block's name with the position of its parent.
     fn parent_indices(analysis: &FileAnalysis) -> Vec<(Option<&str>, Option<usize>)> {
         analysis.blocks.iter().map(|b| (b.name.as_deref(), b.parent_index)).collect()

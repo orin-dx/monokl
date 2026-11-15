@@ -25,7 +25,7 @@ flowchart TB
     S4["4 · Boolean evaluation<br/>drop files missing a required term or containing an excluded one"]
     S5["5 · Block retrieval<br/>analyze survivors, keep only blocks overlapping a matched line"]
     S6["6 · BM25 rank — K1=1.5, B=0.5<br/>x node-type boost (functions over modules)<br/>x name-match boost (query words in the declared name)"]
-    S7["7 · Dedup<br/>drop blocks overlapping &gt;50% with a higher-ranked block in the same file"]
+    S7["7 · Dedup<br/>drop blocks sharing &gt;50% of their bytes with a higher-ranked block in the same file"]
     S8["8 · Budget<br/>cut to --max-results and --max-tokens, with a help line saying how many were cut"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8

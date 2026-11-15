@@ -25,3 +25,13 @@ pub(crate) use parse_stack::with_parse_threads;
 pub(crate) fn with_parse_threads<T: Send>(_files: usize, run: impl FnOnce() -> T + Send) -> T {
     run()
 }
+
+/// How many leading bytes of a block body's `text` belong to the head of the declaration that holds it: the opening
+/// `{`, or all of `{ }` when nothing but whitespace lies between the braces, because an empty body adds nothing the
+/// head leaves out.
+#[cfg(any(feature = "lang-rust", feature = "lang-ts"))]
+pub(crate) fn block_head_len(text: &str) -> usize {
+    let is_empty =
+        text.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).is_some_and(|inner| inner.trim().is_empty());
+    if is_empty { text.len() } else { 1 }
+}

@@ -10,7 +10,9 @@
 //!   and that block's span strictly encloses the child's;
 //! - following parents never loops;
 //! - no two blocks partially overlap, and a block's parent is the innermost block that encloses it;
-//! - the declared `name` occurs in the span.
+//! - the declared `name` occurs in the span;
+//! - `signature_span` is set exactly when `symbol_signature` is, lies inside the block's span, and its text, on one line,
+//!   holds the signature.
 //!
 //! The corpora are the checked-in fixtures and this crate's own source, a test over the pinned harness repositories
 //! when they are on disk, and generated TypeScript and Rust. The checker is itself tested by breaking one invariant at
@@ -45,6 +47,9 @@ enum Invariant {
     SpanSlicesToCode,
     StartsAtDeclaration,
     NameInSpan,
+    SignatureSpanMatchesSignature,
+    SignatureSpanInBlock,
+    SignatureSpanHoldsSignature,
     ParentIndexMatchesParent,
     ParentIndexInRange,
     ParentPrecedesChild,
@@ -289,6 +294,22 @@ fn violations(path: &Utf8Path, source: &str, analysis: &FileAnalysis) -> Vec<Vio
             && !collapse(text).contains(&collapse(name))
         {
             report(Invariant::NameInSpan, index, format!("name {name:?}"));
+        }
+        if block.signature_span.is_some() != block.symbol_signature.is_some() {
+            let note = format!("signature_span {:?}, signature {:?}", block.signature_span, block.symbol_signature);
+            report(Invariant::SignatureSpanMatchesSignature, index, note);
+        }
+        let Some(head) = &block.signature_span else { continue };
+        if head.start < start
+            || head.end > end
+            || !source.is_char_boundary(head.start)
+            || !source.is_char_boundary(head.end)
+        {
+            report(Invariant::SignatureSpanInBlock, index, format!("head {head:?} of span {start}..{end}"));
+        } else if let Some(signature) = &block.symbol_signature
+            && !collapse(&source[head.clone()]).contains(signature.as_str())
+        {
+            report(Invariant::SignatureSpanHoldsSignature, index, format!("head {head:?} lacks {signature:?}"));
         }
     }
 
@@ -605,6 +626,39 @@ fn a_span_that_starts_inside_the_declaration_is_reported() {
 fn a_name_the_span_does_not_contain_is_reported() {
     let found = tampered("a.ts", TS_SAMPLE, |blocks| blocks[1].name = Some("unload".to_owned()));
     assert!(kinds(&found).contains(&Invariant::NameInSpan), "{}", render(&found));
+}
+
+#[test]
+fn a_signature_span_without_a_signature_or_a_signature_without_a_span_is_reported() {
+    let found = tampered("a.ts", TS_SAMPLE, |blocks| blocks[1].signature_span = None);
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanMatchesSignature), "{}", render(&found));
+    let found = tampered("a.rs", RUST_SAMPLE, |blocks| blocks[2].symbol_signature = None);
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanMatchesSignature), "{}", render(&found));
+}
+
+#[test]
+fn a_signature_span_outside_its_block_is_reported() {
+    let found = tampered("a.ts", TS_SAMPLE, |blocks| blocks[1].signature_span = Some(0..5));
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanInBlock), "{}", render(&found));
+    let found = tampered("a.ts", TS_SAMPLE, |blocks| {
+        let end = blocks[1].span.end;
+        blocks[1].signature_span = Some(blocks[1].span.start..end + 1);
+    });
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanInBlock), "{}", render(&found));
+}
+
+#[test]
+fn a_signature_span_whose_text_lacks_the_signature_is_reported() {
+    let found = tampered("a.ts", TS_SAMPLE, |blocks| {
+        let head = blocks[1].signature_span.clone().unwrap();
+        blocks[1].signature_span = Some(head.start + 2..head.end);
+    });
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanHoldsSignature), "{}", render(&found));
+    let found = tampered("a.rs", RUST_SAMPLE, |blocks| {
+        let head = blocks[2].signature_span.clone().unwrap();
+        blocks[2].signature_span = Some(head.start..head.end - 4);
+    });
+    assert!(kinds(&found).contains(&Invariant::SignatureSpanHoldsSignature), "{}", render(&found));
 }
 
 #[test]
