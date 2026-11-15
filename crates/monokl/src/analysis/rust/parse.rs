@@ -69,10 +69,10 @@ fn parse_and_extract(path: &Utf8Path, source: &str) -> Extraction {
     let Some(file) = SourceFile::cast(parse.syntax_node()) else {
         return Extraction::degraded(Degradation::Panicked);
     };
-    let mut walker = Walker { path, source, lines: LineIndex::new(source), out: Extraction::default() };
+    let mut walker = Walker { path, source, lines: LineIndex::new(source), recorded: Vec::new() };
     let file_is_test = file.attrs().any(|attr| attr.excl_token().is_some() && is_test_attr(&attr));
     walker.items(file.items(), None, file_is_test);
-    Extraction { had_parse_errors, ..walker.out }
+    walker.finish(had_parse_errors)
 }
 
 /// Parses and extracts on the calling thread, for a test that supplies its own stack.
@@ -103,11 +103,19 @@ impl LineIndex {
     }
 }
 
+/// The block an item's members belong to: where it was recorded, and the context their `parent` field carries.
+struct Holder {
+    context: ParentContext,
+    block: usize,
+}
+
 struct Walker<'s> {
     path: &'s Utf8Path,
     source: &'s str,
     lines: LineIndex,
-    out: Extraction,
+    /// Every block in the order it was found, with whether it is test code. A block's `parent_index` is its parent's
+    /// position here until [`Walker::finish`] splits the list.
+    recorded: Vec<(CodeBlock, bool)>,
 }
 
 impl Walker<'_> {
@@ -121,19 +129,19 @@ impl Walker<'_> {
 
     /// Walks the items of a file or an inline module. Each becomes a block, then its own members do. `in_test` marks
     /// the items as test code when an enclosing item or file is.
-    fn items(&mut self, items: impl Iterator<Item = ast::Item>, holder: Option<&ParentContext>, in_test: bool) {
+    fn items(&mut self, items: impl Iterator<Item = ast::Item>, holder: Option<&Holder>, in_test: bool) {
         for item in items {
             self.item(&item, holder, in_test);
         }
     }
 
-    fn item(&mut self, item: &ast::Item, holder: Option<&ParentContext>, in_test: bool) {
+    fn item(&mut self, item: &ast::Item, holder: Option<&Holder>, in_test: bool) {
         let Some((kind, name)) = describe(item) else { return };
         let in_test = in_test || item.attrs().any(|attr| is_test_attr(&attr));
-        self.record(item.syntax(), kind, name.clone(), holder, in_test);
+        let block = self.record(item.syntax(), kind, name.clone(), holder, in_test);
 
         let Some(name) = name else { return };
-        let holder = ParentContext { kind, name };
+        let holder = Holder { context: ParentContext { kind, name }, block };
         match item {
             ast::Item::Module(module) => {
                 let Some(list) = module.item_list() else { return };
@@ -161,7 +169,7 @@ impl Walker<'_> {
     /// A block for each method with a body in an `impl` or trait, at least [`MIN_MEMBER_LINES`] long unless it is test
     /// code. Any other member (a bodiless method, a constant, a type, a macro call) gets one only when it is itself
     /// marked as test code, so its matches do not go to the holder.
-    fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &ParentContext, in_test: bool) {
+    fn methods(&mut self, list: Option<ast::AssocItemList>, holder: &Holder, in_test: bool) {
         let Some(list) = list else { return };
         for member in list.assoc_items() {
             let marked = member.attrs().any(|attr| is_test_attr(&attr));
@@ -196,15 +204,15 @@ impl Walker<'_> {
         }
     }
 
-    /// Records one item's block, with attributes and doc comments, in `test_blocks` when it is test code.
+    /// Records one item's block, with attributes and doc comments, and returns where it was recorded.
     fn record(
         &mut self,
         node: &SyntaxNode,
         kind: SymbolKind,
         name: Option<String>,
-        holder: Option<&ParentContext>,
+        holder: Option<&Holder>,
         in_test: bool,
-    ) {
+    ) -> usize {
         let signature = self.signature(node);
         let range = node.text_range();
         let block = CodeBlock {
@@ -212,18 +220,42 @@ impl Walker<'_> {
             line_start: self.line_of(range.start()),
             line_end: self.line_of(range.end()),
             node_kind: kind,
-
+            span: usize::from(range.start())..usize::from(range.end()),
+            parent_index: holder.map(|holder| holder.block),
             name,
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
             matched_lines: Vec::new(),
-            parent: holder.cloned(),
+            parent: holder.map(|holder| holder.context.clone()),
         };
-        if in_test {
-            self.out.test_blocks.push(block);
-        } else {
-            self.out.blocks.push(block);
+        self.recorded.push((block, in_test));
+        self.recorded.len() - 1
+    }
+
+    /// Splits the recorded blocks into `blocks` and `test_blocks`, pointing each `parent_index` at its parent's place
+    /// in the two lists end to end.
+    fn finish(self, had_parse_errors: bool) -> Extraction {
+        let normal = self.recorded.iter().filter(|(_, in_test)| !in_test).count();
+        let (mut normal_seen, mut test_seen) = (0, normal);
+        let places: Vec<usize> = self
+            .recorded
+            .iter()
+            .map(|&(_, in_test)| {
+                let seen = if in_test { &mut test_seen } else { &mut normal_seen };
+                *seen += 1;
+                *seen - 1
+            })
+            .collect();
+        let mut out = Extraction { had_parse_errors, ..Extraction::default() };
+        for (mut block, in_test) in self.recorded {
+            block.parent_index = block.parent_index.map(|parent| places[parent]);
+            if in_test {
+                out.test_blocks.push(block);
+            } else {
+                out.blocks.push(block);
+            }
         }
+        out
     }
 
     /// The item's header on one line: everything from its visibility or first keyword up to its body or initializer,

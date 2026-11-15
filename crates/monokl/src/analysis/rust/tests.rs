@@ -112,6 +112,104 @@ fn each_kind_of_item_is_a_block_with_its_header_as_the_signature() {
     assert!(analysis.test_blocks.is_empty());
 }
 
+/// The blocks of a file in the order a `parent_index` counts them: `blocks`, then `test_blocks`.
+fn listed(analysis: &FileAnalysis) -> Vec<&CodeBlock> {
+    analysis.blocks.iter().chain(&analysis.test_blocks).collect()
+}
+
+const TESTED: &str = "\
+struct Cart;
+
+impl Cart {
+    pub fn new() -> Self {
+        Cart
+    }
+
+    #[test]
+    fn checks() {
+        assert!(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn adds() {
+        assert!(true);
+    }
+
+    #[test]
+    fn short() {}
+}
+
+pub mod outer {
+    mod inner {
+        pub fn two() -> u8 {
+            2
+        }
+    }
+}
+";
+
+#[test]
+fn a_block_span_slices_the_source_to_its_code() {
+    let crab = "// \u{e9}\u{1f980}\nfn crab() {\n    let s = \"\u{e9}\";\n    s\n}\n";
+    for source in [KINDS, IMPLS, TESTED, crab] {
+        let analysis = analyze_source(source);
+        let all = listed(&analysis);
+        assert!(!all.is_empty());
+        for block in all {
+            assert_eq!(&source[block.span.clone()], block.code);
+        }
+    }
+}
+
+#[test]
+fn a_block_span_counts_bytes_not_characters() {
+    let source = "const S: &str = \"\u{e9}\u{1f980}\";\nfn crab() {\n    one();\n}\n";
+    let analysis = analyze_source(source);
+    assert_eq!(analysis.blocks[0].span, 0..25);
+    assert_eq!(analysis.blocks[1].span, 26..source.len() - 1);
+}
+
+#[test]
+fn a_member_points_at_the_block_of_the_item_that_holds_it() {
+    let analysis = analyze_source(TESTED);
+    assert_eq!(analysis.blocks.len(), 6);
+    let parents: Vec<_> = listed(&analysis).iter().map(|b| (b.name.as_deref().unwrap(), b.parent_index)).collect();
+    // The test blocks come after the others, so `checks` finds its impl across the two lists.
+    assert_eq!(
+        parents,
+        [
+            ("Cart", None),
+            ("Cart", None),
+            ("new", Some(1)),
+            ("outer", None),
+            ("inner", Some(3)),
+            ("two", Some(4)),
+            ("checks", Some(1)),
+            ("tests", None),
+            ("adds", Some(7)),
+            ("short", Some(7)),
+        ]
+    );
+}
+
+#[test]
+fn a_parent_index_is_set_exactly_when_the_parent_is_and_points_at_an_enclosing_earlier_block() {
+    let analysis = analyze_source(TESTED);
+    let all = listed(&analysis);
+    for (index, block) in all.iter().enumerate() {
+        assert_eq!(block.parent_index.is_some(), block.parent.is_some());
+        let Some(parent_index) = block.parent_index else { continue };
+        let parent = all[parent_index];
+        assert!(parent_index < index);
+        assert!(parent.span.start <= block.span.start && block.span.end <= parent.span.end);
+        let context = block.parent.as_ref().unwrap();
+        assert_eq!((context.kind, Some(context.name.as_str())), (parent.node_kind, parent.name.as_deref()));
+    }
+}
+
 fn names(blocks: &[CodeBlock]) -> Vec<Option<&str>> {
     blocks.iter().map(|b| b.name.as_deref()).collect()
 }

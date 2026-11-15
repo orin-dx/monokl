@@ -112,6 +112,8 @@ mod tests {
                 line_start: 1,
                 line_end: 1,
                 node_kind: SymbolKind::Function,
+                span: 0..code.len(),
+                parent_index: None,
                 code: code.to_owned(),
                 symbol_signature: None,
                 name: None,

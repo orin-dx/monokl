@@ -63,12 +63,15 @@ fn candidates(count: usize, layout: Layout) -> Vec<(CodeBlock, Vec<String>)> {
                 Layout::OneFile => ("src/one.ts".to_owned(), 1 + index * 4, 3 + index * 4),
                 Layout::OneFileOverlapping => ("src/one.ts".to_owned(), 1 + index, 20 + index),
             };
+            let code = format!("function handle{index}(input) {{\n  return needle + {index};\n}}");
             let block = CodeBlock {
                 file: Utf8PathBuf::from(file),
                 line_start,
                 line_end,
                 node_kind: SymbolKind::Function,
-                code: format!("function handle{index}(input) {{\n  return needle + {index};\n}}"),
+                span: 0..code.len(),
+                parent_index: None,
+                code,
                 symbol_signature: Some(format!("function handle{index}(input)")),
                 name: None,
                 matched_lines: vec![line_start + 1],

@@ -10,12 +10,15 @@ const OTHER: &str = "miss";
 /// A block over `line_start..=line_start + marks.len() - 1` whose line `i` reads `hit` when `marks[i]` is set.
 fn block(line_start: usize, marks: &[bool]) -> CodeBlock {
     let code: Vec<&str> = marks.iter().map(|&m| if m { MATCHING } else { OTHER }).collect();
+    let code = code.join("\n");
     CodeBlock {
         file: Utf8PathBuf::from("a.ts"),
         line_start,
         line_end: line_start + marks.len() - 1,
         node_kind: SymbolKind::Function,
-        code: code.join("\n"),
+        span: 0..code.len(),
+        parent_index: None,
+        code,
         symbol_signature: None,
         name: None,
         matched_lines: Vec::new(),

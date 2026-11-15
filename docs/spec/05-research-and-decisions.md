@@ -462,3 +462,10 @@ PRs 84 to 87. Each removed code whose only reader was a test or nothing.
 - **Why.** The head of a line is not a name: it held modifiers (`get`, `static`, `default`) and the type of a variable as words, and needed a `pub(crate)` rule because `(` ends the head. The tree has the name.
 - **Output.** No column is added. Scores differ only where the old head held a word the name does not (a modifier, or the type of a variable) and for `export default Button;`, which now has no name because it declares none. The harness is unchanged: identifier 58/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 23/24 and 12/12.
 - **Not done.** A typed `ParsedTerm` for ranking. `rank_blocks` and `name_match_boost` take BM25 tokens, which are lowercased fragments of the user's words and not query terms, and `ParsedTerm` already types the one place a query term is read (`QueryPlan`). A wrapper around `&str` tokens would add a type with no new check.
+
+## 40. Blocks carry a byte span and a parent index (2026-11-14)
+
+- **Decision.** `CodeBlock` gains `span: Range<usize>` and `parent_index: Option<usize>`, set by both analyzers from the span and the enclosing block they already hold when they build a block. Nothing reads them. This is step 1 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md); `name` landed in §39 and `kind` was already typed (`node_kind`), so steps 2 (match ranges in the sink, innermost-containing `owned_hits`) and 3 (snippets, name boost and dedup from spans) remain.
+- **Index space.** `parent_index` counts `FileAnalysis::blocks` followed by `FileAnalysis::test_blocks`. The Rust analyzer splits test code into its own list, and a `#[test]` method of a non-test `impl` has its parent in the other list, so one list per kind cannot hold the link. The analyzer records blocks in one list and renumbers when it splits.
+- **Offsets are the analyzer's.** `span` counts bytes of the lossy-decoded source the analyzer received, not of the file. Mapping the searcher's raw offsets onto it is step 2's work, as ADR 0005 states.
+- **Output.** None. No reader, no wire change, harness unchanged.

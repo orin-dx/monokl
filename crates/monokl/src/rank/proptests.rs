@@ -24,6 +24,8 @@ fn input_block() -> impl Strategy<Value = (CodeBlock, Vec<String>)> {
                 line_start,
                 line_end,
                 node_kind,
+                span: 0..code.len(),
+                parent_index: None,
                 code: code.to_string(),
                 symbol_signature: None,
                 name: None,
