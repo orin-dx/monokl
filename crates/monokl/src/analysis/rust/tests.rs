@@ -978,6 +978,147 @@ fn a_test_function_on_the_line_of_its_module_does_not_leak_to_the_module() {
     assert_eq!(with, [("l.rs".to_owned(), 1, 1, SymbolKind::Function, Some("m".to_owned()), vec![1])]);
 }
 
+/// Two methods that share the line `} fn b() {`: `a` ends where `b` starts.
+const SHARED_LINE_RS: &str = "impl C {\n    fn a() {\n        one();\n    } fn b() {\n        two();\n    }\n}\n";
+
+#[test]
+fn a_match_on_a_line_two_methods_share_goes_to_the_method_that_holds_it() {
+    let (_dir, root) = tree(&[("l.rs", SHARED_LINE_RS)]);
+    let method = |first, last, matched: Vec<usize>| {
+        ("l.rs".to_owned(), first, last, SymbolKind::Method, Some("C".to_owned()), matched)
+    };
+    assert_eq!(found(&find(&root, "regex:b\\(\\)", false, None), &root), [method(4, 6, vec![4])]);
+    assert_eq!(found(&find(&root, "one", false, None), &root), [method(2, 4, vec![3])]);
+}
+
+#[test]
+fn a_match_before_a_method_on_the_impl_header_line_stays_with_the_impl() {
+    let (_dir, root) = tree(&[("l.rs", "impl C { fn a() {\n    one();\n}\n    fn b() {\n        two();\n    }\n}\n")]);
+    assert_eq!(
+        found(&find(&root, "impl", false, None), &root),
+        [("l.rs".to_owned(), 1, 7, SymbolKind::Impl, None, vec![1])]
+    );
+}
+
+#[test]
+fn a_comment_after_the_last_methods_closing_brace_stays_with_the_impl() {
+    let source = "impl Svc {\n    fn load() {\n        one();\n    } // zebra note\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    assert_eq!(
+        found(&find(&root, "zebra", false, None), &root),
+        [("l.rs".to_owned(), 1, 5, SymbolKind::Impl, None, vec![4])]
+    );
+}
+
+#[test]
+fn a_comment_after_a_methods_closing_brace_belongs_to_the_method_that_follows_it() {
+    // The analyzer starts a method at the comments before it, so the match is inside `save`'s span.
+    let source =
+        "impl Svc {\n    fn load() {\n        one();\n    } // zebra note\n    fn save() {\n        two();\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    assert_eq!(
+        found(&find(&root, "zebra", false, None), &root),
+        [("l.rs".to_owned(), 4, 7, SymbolKind::Method, Some("Svc".to_owned()), vec![4])]
+    );
+}
+
+#[test]
+fn of_items_sharing_a_line_the_one_holding_the_match_is_returned() {
+    let (_dir, root) = tree(&[("l.rs", "const A: u32 = 1; const NEEDLE: u32 = 2;\n")]);
+    let result = find(&root, "needle", false, None);
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(rows, [("const NEEDLE: u32 = 2;", vec![1])]);
+}
+
+#[test]
+fn a_holder_keeps_a_match_outside_its_method_even_when_the_method_matches_another_term() {
+    let source =
+        "impl C { const LABEL: &str = \"beta\"; fn m() {\n    one();\n}\n    fn other() {\n        two();\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let rows = |query| {
+        let mut rows: Vec<_> = find(&root, query, false, None)
+            .ranked
+            .iter()
+            .map(|r| (r.block.line_start, r.block.line_end, r.block.matched_lines.clone()))
+            .collect();
+        rows.sort();
+        rows
+    };
+    // `beta` is only in the impl's own part of line 1 and `m` only in the method's.
+    assert_eq!(rows("beta m"), [(1, 3, vec![1]), (1, 7, vec![1])]);
+    assert_eq!(rows("beta"), [(1, 7, vec![1])]);
+}
+
+#[test]
+fn a_match_after_invalid_utf8_on_the_same_line_goes_to_the_function_it_is_in() {
+    // The invalid byte is one byte in the file and a three-byte U+FFFD in the text the analyzer sees.
+    let (_dir, root) = tree(&[]);
+    std::fs::write(root.join("l.rs"), b"/* \xff */ fn a() {} fn b_needle() {}\n").unwrap();
+    let result = find(&root, "b_needle", false, None);
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(rows, [("fn b_needle() {}", vec![1])]);
+}
+
+#[test]
+fn a_zero_width_match_at_the_end_of_an_item_is_credited_to_it() {
+    let (_dir, root) = tree(&[("l.rs", "const NEEDLE: u32 = 1;\n")]);
+    for query in ["regex:$", "regex:^", "regex:\\b", "regex:(?:)", "regex:.*"] {
+        assert_eq!(
+            found(&find(&root, query, false, None), &root),
+            [("l.rs".to_owned(), 1, 1, SymbolKind::Variable, None, vec![1])],
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn a_term_that_swallows_the_rest_of_a_line_does_not_hide_a_term_after_it() {
+    // `impl.*` takes the whole first line, and the method `m` starts on it.
+    let source = "impl C {\n    fn m() {\n        1;\n    }\n    fn other() {\n        2;\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:impl.* m", false, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(1, 8, SymbolKind::Impl, vec![1]), (2, 4, SymbolKind::Method, vec![2])]);
+}
+
+#[test]
+fn every_line_start_is_credited_to_the_impl_or_the_method_it_falls_in() {
+    let source = "impl C {\n    fn m() {\n        1;\n    }\n    fn other() {\n        2;\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:^", false, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            (1, 8, SymbolKind::Impl, vec![1, 2, 5, 8]),
+            (2, 4, SymbolKind::Method, vec![3, 4]),
+            (5, 7, SymbolKind::Method, vec![6, 7]),
+        ]
+    );
+}
+
+#[test]
+fn a_test_module_and_its_test_function_are_each_credited_the_matches_inside_them() {
+    let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert!(true);\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:^", true, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(1, 7, SymbolKind::Module, vec![1, 2, 3, 7]), (3, 6, SymbolKind::Function, vec![4, 5, 6]),]);
+    assert_eq!(found(&find(&root, "regex:^", false, None), &root), []);
+}
+
 #[test]
 fn a_syntax_error_reports_a_degraded_file_and_still_returns_blocks() {
     let (_dir, root) = tree(&[("src/bad.rs", "fn fine() {\n    alpha();\n}\n\nstruct Oops {\n    a: ,\n")]);
@@ -1014,4 +1155,65 @@ fn the_language_filter_isolates_rust_from_typescript() {
     assert_eq!(run(Some(Language::Rust)), ["a.rs"]);
     assert_eq!(run(Some(Language::TypeScript)), ["b.ts"]);
     assert_eq!(run(Some(Language::JavaScript)), Vec::<String>::new());
+}
+
+/// The source each block's head covers.
+fn heads<'a>(source: &'a str, blocks: &[&'a CodeBlock]) -> Vec<&'a str> {
+    blocks.iter().map(|b| &source[b.signature_span.clone().unwrap()]).collect()
+}
+
+#[test]
+fn a_signature_span_covers_the_head_without_attributes_through_the_opening_brace_of_a_body() {
+    let analysis = analyze_source(KINDS);
+    assert_eq!(
+        heads(KINDS, &listed(&analysis)),
+        [
+            "pub fn add<T: Add>(a: T, b: T) -> T\nwhere\n    T: Copy,\n{",
+            "pub(crate) struct Point<T> {",
+            "struct Unit;",
+            "pub enum Mode {",
+            "pub trait Shape {",
+            // An initializer is not part of the head.
+            "pub type Result<T> ",
+            "const LIMIT: usize ",
+            "static mut COUNT: u32 ",
+            "macro_rules! twice {",
+            "union Bits {",
+        ]
+    );
+}
+
+#[test]
+fn a_member_signature_span_covers_its_head_and_a_test_member_has_one_too() {
+    let analysis = analyze_source(TESTED);
+    assert_eq!(
+        heads(TESTED, &listed(&analysis)),
+        [
+            "struct Cart;",
+            "impl Cart {",
+            "pub fn new() -> Self {",
+            "pub mod outer {",
+            "mod inner {",
+            "pub fn two() -> u8 {",
+            "fn checks() {",
+            "mod tests {",
+            "fn adds() {",
+            // An empty block adds nothing to the head.
+            "fn short() {}",
+        ]
+    );
+}
+
+#[test]
+fn a_signature_span_lies_within_its_block_and_collapses_to_the_signature() {
+    for source in [KINDS, IMPLS, TESTED] {
+        let analysis = analyze_source(source);
+        for block in listed(&analysis) {
+            let head = block.signature_span.clone().unwrap();
+            assert!(block.span.start <= head.start && head.end <= block.span.end);
+            let collapsed = source[head].split_whitespace().collect::<Vec<_>>().join(" ");
+            let signature = block.symbol_signature.as_deref().unwrap();
+            assert!(collapsed.contains(signature), "{collapsed:?} lacks {signature:?}");
+        }
+    }
 }

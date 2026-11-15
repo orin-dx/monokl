@@ -74,6 +74,13 @@ pub struct CodeBlock {
     pub name: Option<String>,
     pub code: String,
     pub symbol_signature: Option<String>,
+    /// The bytes of the declaration's head, which `symbol_signature` is the one-line form of: from the first byte after
+    /// any decorators, attributes and doc comments (so a modifier such as `export` or `pub` is inside) through the
+    /// opening `{` of a block body, or, for a declaration with no body, through its last byte. A body that is an
+    /// expression, or an initializer after `=`, is not part of it. `Some` exactly when `symbol_signature` is, and
+    /// within `span`. The snippet leaves out a matched line whose text lies inside it, because the signature already
+    /// shows that line.
+    pub signature_span: Option<Range<usize>>,
     pub matched_lines: Vec<usize>,
     /// The block this one is a member of, such as the class of a method; `None` for a top-level block.
     pub parent: Option<ParentContext>,
@@ -132,6 +139,11 @@ pub struct Diagnostic {
 pub struct LineHit {
     pub line_number: usize,
     pub text: String,
+    /// The byte offsets in `text` at which a match starts, in ascending order, as ranges of consecutive offsets: a match
+    /// at offset 4 is `4..5` and one at each of 4, 5 and 6 is `4..7`. Where a match ends is not recorded. A line cut to
+    /// the searcher's length limit records only the matches that start before the cut, so a hit whose matches all lie
+    /// past it has none.
+    pub match_starts: Vec<Range<usize>>,
 }
 
 /// The search command's response.

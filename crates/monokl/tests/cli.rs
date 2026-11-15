@@ -422,9 +422,42 @@ fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
     assert_eq!(
         stdout(&output),
         format!(
-            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,5.105006\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),\"15: fn total_price_adds_up() {{\",2,2.083676\n",
+            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,5.105006\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),null,2,2.083676\n",
             SEARCH_HEADER.replace("[N]", "[2]")
         )
+    );
+}
+
+/// The files of `files` and `monokl search <query> .` over them: the rows without their header.
+fn rows_for(files: &[(&str, &str)], query: &str) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.path().join(name), body).unwrap();
+    }
+    let output = monokl_in(dir.path(), &["search", query, "."]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    stdout(&output).lines().skip(1).map(str::to_owned).collect()
+}
+
+#[test]
+fn two_typescript_declarations_on_one_line_each_get_a_row_when_each_holds_a_match() {
+    let rows = rows_for(&[("a.ts", "const first = 1; const second = 2;\n")], "first second");
+    assert_eq!(
+        rows,
+        [
+            "  a.ts,1,1,variable,null,null,\"1: const first = 1;\",1,1.779077",
+            "  a.ts,1,1,variable,null,null,\"1: const second = 2;\",2,1.779077",
+        ]
+    );
+}
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn two_rust_items_on_one_line_each_get_a_row_when_each_holds_a_match() {
+    let rows = rows_for(&[("a.rs", "fn first() {} fn second() {}\n")], "first second");
+    assert_eq!(
+        rows,
+        ["  a.rs,1,1,function,null,fn first(),null,1,3.465735", "  a.rs,1,1,function,null,fn second(),null,2,3.465735",]
     );
 }
 

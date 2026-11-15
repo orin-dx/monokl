@@ -203,9 +203,18 @@ fn a_comment_after_a_members_closing_brace_stays_with_the_class() {
 #[test]
 fn a_match_that_spans_the_edge_of_every_block_on_its_line_is_still_found() {
     let dir = project(&[("a.ts", "const a = 1; const b = 2;\n")]);
-    let result = library_search(&dir, "regex:1; const");
-    assert_eq!(result.ranked.len(), 1);
-    assert_eq!(result.ranked[0].block.matched_lines, [1]);
+    // One match that starts in the first block and runs into the second belongs to the block it starts in.
+    let result = library_search(&dir, "regex:1;.const");
+    assert_eq!(found(&result), [(1, 1, vec![1])]);
+    assert_eq!(result.ranked.iter().map(|r| r.block.code.as_str()).collect::<Vec<_>>(), ["const a = 1;"]);
+}
+
+#[test]
+fn two_statements_sharing_a_line_are_both_returned_when_each_holds_a_match() {
+    let dir = project(&[("a.ts", "const a = 1; const b = 2;\n")]);
+    let result = library_search(&dir, "regex:1;.const const");
+    let blocks: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(blocks, [("const a = 1;", vec![1]), ("const b = 2;", vec![1])]);
 }
 
 #[test]
@@ -377,20 +386,27 @@ fn an_object_whose_matches_are_all_inside_members_is_dropped() {
 /// Two object members that share a line: `a` ends where `b` starts.
 const SHARED_LINE: &str = "const o = { a() {\n  return needleX;\n}, b() {\n  return needleY;\n} };\n";
 
+/// A line is credited to each block that holds one of its matches, so a line two members share can be credited to both
+/// the member it ends and the one it starts, and to the object whose own text it also holds.
 #[test]
-fn no_line_of_an_object_is_credited_to_two_blocks_whatever_the_query() {
+fn a_line_shared_by_object_members_is_credited_to_each_block_holding_one_of_its_matches() {
     let dir = project(&[("src/shared.ts", SHARED_LINE)]);
-    let queries = ["needle", "return", "const", "b", "a", "regex:\\w+", "regex:\\}", "regex:\\{", "o a b"];
-    for query in queries {
-        let result = library_search(&dir, query);
-        let mut owners: BTreeMap<usize, usize> = BTreeMap::new();
-        for ranked in &result.ranked {
-            for &line in &ranked.block.matched_lines {
-                *owners.entry(line).or_default() += 1;
-            }
-        }
-        let shared: Vec<_> = owners.iter().filter(|&(_, &count)| count > 1).collect();
-        assert_eq!(shared, [], "{query}: lines in more than one block");
+    let a = |lines: &[usize]| (1, 3, lines.to_vec());
+    let object = |lines: &[usize]| (1, 5, lines.to_vec());
+    let b = |lines: &[usize]| (3, 5, lines.to_vec());
+    let expected = [
+        ("needle", vec![a(&[2]), b(&[4])]),
+        ("return", vec![a(&[2]), b(&[4])]),
+        ("const", vec![object(&[1])]),
+        ("b", vec![b(&[3])]),
+        ("a", vec![a(&[1])]),
+        ("regex:\\w+", vec![a(&[1, 2]), object(&[1]), b(&[3, 4])]),
+        ("regex:\\}", vec![a(&[3]), object(&[5]), b(&[5])]),
+        ("regex:\\{", vec![a(&[1]), object(&[1]), b(&[3])]),
+        ("o a b", vec![a(&[1]), object(&[1]), b(&[3])]),
+    ];
+    for (query, rows) in expected {
+        assert_eq!(found(&library_search(&dir, query)), rows, "{query}");
     }
 }
 
@@ -422,4 +438,58 @@ fn the_same_object_search_prints_the_same_rows_every_time() {
     for _ in 0..5 {
         assert_eq!(run(&dir, "http user"), first);
     }
+}
+
+#[test]
+fn a_holder_keeps_a_match_outside_its_member_even_when_the_member_matches_another_term() {
+    let source = "export class C { label = 'beta'; m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    // `beta` is only in the class's own part of line 1 and `m` only in the method's.
+    assert_eq!(found(&library_search(&dir, "beta m")), [(1, 3, vec![1]), (1, 7, vec![1])]);
+    assert_eq!(found(&library_search(&dir, "beta")), [(1, 7, vec![1])]);
+}
+
+#[test]
+fn a_match_after_invalid_utf8_on_the_same_line_goes_to_the_function_it_is_in() {
+    // The invalid byte is one byte in the file and a three-byte U+FFFD in the text the analyzer sees.
+    let dir = project(&[]);
+    fs::write(dir.path().join("f.ts"), b"/* \xff */ function a() {} function b_needle() {}\n").unwrap();
+    let result = library_search(&dir, "b_needle");
+    let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(rows, [("function b_needle() {}", vec![1])]);
+}
+
+#[test]
+fn a_zero_width_match_at_the_end_of_a_declaration_is_credited_to_it() {
+    let dir = project(&[("f.ts", "const needle = 1;\n")]);
+    for query in ["regex:$", "regex:^", "regex:\\b", "regex:(?:)", "regex:.*"] {
+        assert_eq!(found(&library_search(&dir, query)), [(1, 1, vec![1])], "{query}");
+    }
+}
+
+#[test]
+fn a_term_that_swallows_the_rest_of_a_line_does_not_hide_a_term_after_it() {
+    // `class.*` takes the whole first line, and the method `m` starts on it.
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "regex:class.* m")), [(1, 3, vec![1]), (1, 7, vec![1])]);
+    // The same terms in the other order find the same blocks.
+    assert_eq!(found(&library_search(&dir, "m regex:class.*")), [(1, 3, vec![1]), (1, 7, vec![1])]);
+}
+
+#[test]
+fn every_line_start_is_credited_to_the_class_or_the_method_it_falls_in() {
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(
+        found(&library_search(&dir, "regex:^")),
+        [(1, 3, vec![2, 3]), (1, 7, vec![1, 4, 7]), (4, 6, vec![5, 6])]
+    );
+}
+
+#[test]
+fn a_match_at_every_word_edge_of_a_class_is_credited_like_one_at_every_line_start() {
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "regex:\\b")), [(1, 3, vec![1, 2]), (1, 7, vec![1]), (4, 6, vec![4, 5])]);
 }

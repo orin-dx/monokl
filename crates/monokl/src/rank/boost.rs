@@ -36,6 +36,7 @@ use crate::types::{CodeBlock, SymbolKind};
 ///     name: Some("mergeConfig".to_string()),
 ///     code: String::new(),
 ///     symbol_signature: Some("function mergeConfig(a: Config, b: Config)".to_string()),
+///     signature_span: None,
 ///     matched_lines: Vec::new(),
 ///     parent: None,
 /// };
@@ -110,6 +111,7 @@ mod tests {
             name: name.map(ToString::to_string),
             code: "function other(parse: string) { return parse(); }".to_string(),
             symbol_signature: Some("function other(parse: string)".to_string()),
+            signature_span: None,
             matched_lines: Vec::new(),
             parent: None,
         }

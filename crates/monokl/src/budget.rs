@@ -116,6 +116,7 @@ mod tests {
                 parent_index: None,
                 code: code.to_owned(),
                 symbol_signature: None,
+                signature_span: None,
                 name: None,
                 matched_lines: Vec::new(),
                 parent: None,
