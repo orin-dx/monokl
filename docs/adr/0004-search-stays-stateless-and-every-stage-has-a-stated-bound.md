@@ -29,6 +29,7 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 4. No step is super-linear in match count. A scaling test in CI counts the work (comparisons, reads, filter calls) at two input sizes and asserts the ratio. No test asserts elapsed time: it passes on an idle machine and fails under load.
 5. Results are deterministic regardless of thread timing: fold in walk order.
 6. A file no analyzer owns is never opened.
+7. A search starts threads only for work it has. The parse threads (256 MiB stack each) are started when there is a file to analyze and number `min(CPUs, files to analyze)`: none for no files. A thread count is not looked up before there is work, because asking rayon for it starts its shared pool.
 
 ## Consequences
 
@@ -41,6 +42,7 @@ Rules 2 to 4 are done:
 - Rule 4: unit tests next to each stage count work. Dedup (three layouts) and ranking count the pairs compared and assert that 4 times the blocks costs at most 5 (dedup) or 6 (ranking) times as many; a quadratic step costs 16. Text search asserts that the file filter is asked once per file, and a whole search that each matching file is read once, at two sizes. The failed-lookahead budget of the nesting scan is shown by a scan that only that budget can end.
 - Rule 5 is what the ordered batch fold already does.
 - Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
+- Rule 7 holds for the parse threads, which a search starts once and no wider than its files, and for rayon's shared pool, which text search, ranking and the thread count read touch only when there is something to search or rank. Text search and ranking still use all of that pool for one file: it is shared, started once per process with default stacks, and not sized per search.
 
 The trade-off: a stateless search pays the cold cost on every run, and the bounds reject or skip some inputs (deeply nested or oversized files) that analysis would otherwise attempt. Each skip is reported, not silent.
 

@@ -8,6 +8,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use rayon::prelude::*;
+
 pub use bm25::{round6, score};
 pub use boost::{name_match_boost, node_type_boost};
 pub use tokenize_doc::tokenize_block;
@@ -22,7 +24,8 @@ use crate::types::{CodeBlock, RankedBlock};
 ///
 /// The order is `final_score` descending (with `-0.0` equal to `0.0`), then ascending `file` by path components,
 /// `line_start`, `line_end`, `node_kind` in `SymbolKind` declaration order, and `code` by bytes. Reordering the input
-/// never reorders the output, except that blocks equal on all six keys keep their relative input order.
+/// never reorders the output, except that blocks equal on all six keys keep their relative input order. Scoring and
+/// sorting run on the rayon pool the caller is in, which changes nothing about the result.
 ///
 /// # Examples
 ///
@@ -60,20 +63,20 @@ use crate::types::{CodeBlock, RankedBlock};
 /// assert_eq!(ranked[0].rank, 1);
 /// assert_eq!(ranked[1].final_score, 0.0);
 /// ```
-pub fn rank_blocks<S: BuildHasher>(
+pub fn rank_blocks<S: BuildHasher + Sync>(
     blocks: Vec<(CodeBlock, Vec<String>)>,
     query_terms: &[&str],
     df: &HashMap<String, usize, S>,
 ) -> Vec<RankedBlock> {
-    rank_counting(blocks, query_terms, df, &mut || {})
+    rank_counting(blocks, query_terms, df, &|| {})
 }
 
 /// [`rank_blocks`] that calls `on_compare` once for every pair of blocks the sort compares, so a test can count the work.
-fn rank_counting<S: BuildHasher>(
+fn rank_counting<S: BuildHasher + Sync>(
     blocks: Vec<(CodeBlock, Vec<String>)>,
     query_terms: &[&str],
     df: &HashMap<String, usize, S>,
-    on_compare: &mut dyn FnMut(),
+    on_compare: &(dyn Fn() + Sync),
 ) -> Vec<RankedBlock> {
     if blocks.is_empty() {
         return Vec::new();
@@ -82,7 +85,7 @@ fn rank_counting<S: BuildHasher>(
     let total_tokens: usize = blocks.iter().map(|(_, tokens)| tokens.len()).sum();
     let avg_doc_len = bm25::as_f64(total_tokens) / bm25::as_f64(corpus_size);
     let mut ranked: Vec<RankedBlock> = blocks
-        .into_iter()
+        .into_par_iter()
         .map(|(block, doc_tokens)| {
             let bm25_score = score(&doc_tokens, query_terms, avg_doc_len, corpus_size, df);
             let final_score =
@@ -90,7 +93,7 @@ fn rank_counting<S: BuildHasher>(
             RankedBlock { block, final_score, rank: 0 }
         })
         .collect();
-    ranked.sort_by(|a, b| {
+    ranked.par_sort_by(|a, b| {
         on_compare();
         best_first(a, b)
     });
@@ -167,9 +170,11 @@ mod tests {
                 })
                 .collect();
             let df: HashMap<String, usize> = HashMap::from([("needle".to_string(), count)]);
-            let mut compared = 0;
-            rank_counting(input, &["needle"], &df, &mut || compared += 1);
-            compared
+            let compared = std::sync::atomic::AtomicUsize::new(0);
+            rank_counting(input, &["needle"], &df, &|| {
+                compared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+            compared.into_inner()
         };
         let (small, large) = (comparisons(2_500), comparisons(10_000));
         assert!(small > 0, "nothing was compared");
@@ -190,6 +195,43 @@ mod tests {
         let ranked = rank_blocks(input.to_vec(), &["foo"], &df);
         let order: Vec<_> = ranked.iter().map(|r| r.block.symbol_signature.as_deref()).collect();
         assert_eq!(order, signatures.map(Some));
+    }
+
+    #[test]
+    fn a_large_input_is_ranked_as_one_sequential_pass_would() {
+        // Many scores tie and many blocks are equal on every sort key, so a parallel sort that is not stable, or scoring
+        // that loses input order, shows up in the signatures.
+        let input: Vec<_> = (0..20_000_usize)
+            .map(|i| {
+                let mut b = block(&format!("f{:02}.ts", i % 7), i % 5, i % 5 + 1, SymbolKind::Function, Vec::new());
+                b.symbol_signature = Some(i.to_string());
+                (b, tokens(if i % 3 == 0 { &["foo", "bar"] } else { &["baz"] }))
+            })
+            .collect();
+        let df: HashMap<String, usize> = HashMap::from([("foo".to_string(), 6_667)]);
+        let total_tokens: usize = input.iter().map(|(_, doc)| doc.len()).sum();
+        let avg_doc_len = bm25::as_f64(total_tokens) / bm25::as_f64(input.len());
+        let mut expected: Vec<RankedBlock> = input
+            .iter()
+            .map(|(block, doc)| {
+                let bm25_score = score(doc, &["foo"], avg_doc_len, input.len(), &df);
+                let final_score =
+                    round6(bm25_score * name_match_boost(block, &["foo"]) * node_type_boost(block.node_kind));
+                RankedBlock { block: block.clone(), final_score, rank: 0 }
+            })
+            .collect();
+        expected.sort_by(best_first);
+        for (rank, block) in (1..).zip(&mut expected) {
+            block.rank = rank;
+        }
+
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let ranked = pool.install(|| rank_blocks(input, &["foo"], &df));
+
+        let describe = |ranked: &[RankedBlock]| -> Vec<(Option<String>, f64, usize)> {
+            ranked.iter().map(|r| (r.block.symbol_signature.clone(), r.final_score, r.rank)).collect()
+        };
+        assert_eq!(describe(&ranked), describe(&expected));
     }
 
     /// The fields that identify a ranked block and its position, for comparing whole outputs.

@@ -229,6 +229,9 @@ struct Scan<'s> {
     plain: Option<Region>,
     /// Closers before this offset pop nothing.
     no_pop_until: usize,
+    /// Bytes the regular-expression lookaheads have read in all; a test stops a scan that reads past its bound.
+    #[cfg(test)]
+    lookahead_read: usize,
 }
 
 impl<'s> Scan<'s> {
@@ -253,6 +256,8 @@ impl<'s> Scan<'s> {
             newline: false,
             plain: None,
             no_pop_until: 0,
+            #[cfg(test)]
+            lookahead_read: 0,
         }
     }
 
@@ -688,6 +693,16 @@ impl<'s> Scan<'s> {
                 _ => {}
             }
             index += 1;
+        }
+        #[cfg(test)]
+        {
+            self.lookahead_read += index - start;
+            // The budget is 4 times the length, and the lookahead that spends it may read one more line.
+            assert!(
+                self.lookahead_read <= 6 * self.bytes.len() + 4096,
+                "lookaheads read {} bytes",
+                self.lookahead_read
+            );
         }
         self.charge(index - start);
         found
