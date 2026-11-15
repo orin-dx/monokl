@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EJVB0ME87JXQW9DFXYC3BY",
+  "strategy": "manual-commit",
+  "branch": "feat/spans-everywhere",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/monokl/src/analysis/rust/tests.rs",
+    "crates/monokl/src/pipeline/mod.rs",
+    "crates/monokl/src/pipeline/proptests.rs",
+    "docs/adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md",
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 28451,
+    "cache_read_tokens": 3305744,
+    "output_tokens": 6250,
+    "api_call_count": 12,
+    "subagent_tokens": {
+      "input_tokens": 162,
+      "cache_creation_tokens": 299527,
+      "cache_read_tokens": 32022601,
+      "output_tokens": 69039,
+      "api_call_count": 81
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

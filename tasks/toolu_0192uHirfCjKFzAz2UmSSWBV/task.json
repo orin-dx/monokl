@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_0192uHirfCjKFzAz2UmSSWBV",
+  "agent_id": "aea747ffca5852cb9",
+  "subagent_type": "general-purpose",
+  "task_description": "ADR 0005 PR 3: read spans everywhere",
+  "started_at": "2026-11-14T18:49:38.862664-08:00"
+}
