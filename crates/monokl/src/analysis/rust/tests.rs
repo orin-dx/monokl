@@ -1062,6 +1062,66 @@ fn a_match_after_invalid_utf8_on_the_same_line_goes_to_the_function_it_is_in() {
 }
 
 #[test]
+fn a_zero_width_match_at_the_end_of_an_item_is_credited_to_it() {
+    let (_dir, root) = tree(&[("l.rs", "const NEEDLE: u32 = 1;\n")]);
+    for query in ["regex:$", "regex:^", "regex:\\b", "regex:(?:)", "regex:.*"] {
+        assert_eq!(
+            found(&find(&root, query, false, None), &root),
+            [("l.rs".to_owned(), 1, 1, SymbolKind::Variable, None, vec![1])],
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn a_term_that_swallows_the_rest_of_a_line_does_not_hide_a_term_after_it() {
+    // `impl.*` takes the whole first line, and the method `m` starts on it.
+    let source = "impl C {\n    fn m() {\n        1;\n    }\n    fn other() {\n        2;\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:impl.* m", false, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(1, 8, SymbolKind::Impl, vec![1]), (2, 4, SymbolKind::Method, vec![2])]);
+}
+
+#[test]
+fn every_line_start_is_credited_to_the_impl_or_the_method_it_falls_in() {
+    let source = "impl C {\n    fn m() {\n        1;\n    }\n    fn other() {\n        2;\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:^", false, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            (1, 8, SymbolKind::Impl, vec![1, 2, 5, 8]),
+            (2, 4, SymbolKind::Method, vec![3, 4]),
+            (5, 7, SymbolKind::Method, vec![6, 7]),
+        ]
+    );
+}
+
+#[test]
+fn a_test_module_and_its_test_function_are_each_credited_the_matches_inside_them() {
+    let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert!(true);\n    }\n}\n";
+    let (_dir, root) = tree(&[("l.rs", source)]);
+    let mut rows: Vec<_> = find(&root, "regex:^", true, None)
+        .ranked
+        .iter()
+        .map(|r| (r.block.line_start, r.block.line_end, r.block.node_kind, r.block.matched_lines.clone()))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, [(1, 7, SymbolKind::Module, vec![1, 2, 3, 7]), (3, 6, SymbolKind::Function, vec![4, 5, 6]),]);
+    assert_eq!(found(&find(&root, "regex:^", false, None), &root), []);
+}
+
+#[test]
 fn a_syntax_error_reports_a_degraded_file_and_still_returns_blocks() {
     let (_dir, root) = tree(&[("src/bad.rs", "fn fine() {\n    alpha();\n}\n\nstruct Oops {\n    a: ,\n")]);
     let result = find(&root, "alpha", false, None);

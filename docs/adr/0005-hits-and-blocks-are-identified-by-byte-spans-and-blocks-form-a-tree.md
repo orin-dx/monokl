@@ -22,7 +22,9 @@ We recommend identifying hits and blocks by byte spans and linking blocks into a
 - A hit carries its line and the offsets at which its matches start, as ranges of consecutive offsets (a pattern that matches every byte of a line is one range). Where a match ends is not needed: ownership reads the first byte.
 - A block carries a byte span and its parent's index in the file's block list, built once by the analyzer.
 - The AST supplies `name` and `kind` as typed fields.
-- Each match belongs to the innermost block whose span contains the match's first byte, and a hit goes once to every block that holds one of its matches. Equal spans resolve by parent depth, not text. (Decided per match, not per hit: `const a = 1; const needle = 2;` searched for `const` has a match in each block, and the line-based rule credited both.)
+- Ownership is per match, in this order. Each match goes to the innermost block whose span contains its first byte (equal spans resolve by parent depth, not text). A match no block contains, which sits where a block's span ends, goes to the innermost block that ends there; the end is inclusive only when no block contains the offset, so a zero-width `$` after a declaration belongs to it. A hit that no match credited goes to the innermost blocks at each byte of its line. A hit goes once to every block credited. (Decided per match, not per hit: `const a = 1; const needle = 2;` searched for `const` has a match in each block, and the line-based rule credited both.)
+- The invariant: every matched line with a byte in at least one block credits at least one block, so a block is never dropped for lack of a hit while a match touches it. A line no block touches is a match outside every declaration and has no block to return.
+- The sink finds the starts of each pattern on its own and merges them. The searcher's alternation matches left to right without overlap, so one pattern's match (`class.*`) could hide another's (`m`).
 - Snippets are cut from spans and dedup compares spans.
 
 ## Consequences

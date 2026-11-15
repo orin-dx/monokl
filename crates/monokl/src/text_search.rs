@@ -213,7 +213,7 @@ fn search_in_batches(
     wanted: &dyn Fn(&Utf8Path) -> bool,
     batch_size: impl FnOnce() -> usize,
 ) -> Result<TextSearchResult> {
-    let matcher = compile(patterns)?;
+    let matchers = compile(patterns)?;
     let root_error = |source| MonoklError::Walk { path: root.to_owned(), source };
     let metadata = std::fs::metadata(root).map_err(|e| root_error(ignore::Error::Io(e)))?;
     if !metadata.is_dir() {
@@ -222,7 +222,7 @@ fn search_in_batches(
     // Listed here as well as by the walk, so a root that cannot be listed fails even when there is nothing to search.
     std::fs::read_dir(root).map_err(|e| root_error(ignore::Error::Io(e)))?;
     let mut result = TextSearchResult::default();
-    let Some(matcher) = matcher else {
+    let Some(matchers) = matchers else {
         return Ok(result);
     };
     // Passthru hands every line to the sink, so a CRLF line the matcher rejected because it saw the `\r` can still be
@@ -306,7 +306,7 @@ fn search_in_batches(
                 || searcher_builder.build(),
                 |searcher, item| match item {
                     WalkItem::File(path) => {
-                        let outcome = search_file(searcher, &matcher, &path, &limits);
+                        let outcome = search_file(searcher, &matchers, &path, &limits);
                         Searched::File(path, outcome)
                     }
                     WalkItem::WalkError(error) => Searched::WalkError(error),
@@ -431,19 +431,27 @@ impl ParentIgnores {
     }
 }
 
+/// The patterns of a search compiled for the searcher and for locating matches.
+struct Matchers {
+    /// All patterns as one alternation, which the searcher runs to find the matching lines.
+    all: RegexMatcher,
+    /// Each pattern alone. The alternation takes the leftmost match and then skips past it, so one pattern's match can
+    /// swallow another's (`class.*` over a line that also holds `m`); running each pattern on its own finds every
+    /// pattern's matches.
+    each: Vec<RegexMatcher>,
+}
+
 /// Compiles each pattern alone, then all together, so an invalid one always fails the search. `None` when there are no
 /// patterns.
-fn compile(patterns: &[&str]) -> Result<Option<RegexMatcher>> {
+fn compile(patterns: &[&str]) -> Result<Option<Matchers>> {
     let mut builder = RegexMatcherBuilder::new();
     builder.case_insensitive(true);
     // `build_many` joins the patterns with `|` before parsing, so halves such as `(a` and `b)` would compile together.
-    for pattern in patterns {
-        builder.build(pattern)?;
-    }
+    let each = patterns.iter().map(|pattern| builder.build(pattern)).collect::<std::result::Result<Vec<_>, _>>()?;
     if patterns.is_empty() {
         return Ok(None);
     }
-    Ok(Some(builder.build_many(patterns)?))
+    Ok(Some(Matchers { all: builder.build_many(patterns)?, each }))
 }
 
 /// Lists the path a walk error names in `unreadable`, or counts it when it names none that is UTF-8.
@@ -531,7 +539,7 @@ struct FileLimits {
     deadline: Option<Instant>,
 }
 
-fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path, limits: &FileLimits) -> FileOutcome {
+fn search_file(searcher: &mut Searcher, matchers: &Matchers, path: &Utf8Path, limits: &FileLimits) -> FileOutcome {
     if limits.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
         return FileOutcome::NotReached;
     }
@@ -542,8 +550,8 @@ fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path,
         Ok(_) => {}
         Err(_) => return FileOutcome::Unreadable,
     }
-    let mut sink = LineCollector::new(matcher, limits.max_line_bytes);
-    match searcher.search_file(matcher, &file, &mut sink) {
+    let mut sink = LineCollector::new(matchers, limits.max_line_bytes);
+    match searcher.search_file(&matchers.all, &file, &mut sink) {
         Err(_) => FileOutcome::Unreadable,
         Ok(()) if sink.binary => FileOutcome::Binary,
         Ok(()) => FileOutcome::Lines(sink.hits, sink.truncated),
@@ -559,7 +567,7 @@ fn search_file(searcher: &mut Searcher, matcher: &RegexMatcher, path: &Utf8Path,
 /// searcher strips only the `\n` before matching, so a line ending in `\r\n` is matched here against its text without
 /// the terminator: a pattern always sees exactly the text a hit reports.
 struct LineCollector<'m> {
-    matcher: &'m RegexMatcher,
+    matchers: &'m Matchers,
     hits: Vec<LineHit>,
     binary: bool,
     /// The most bytes of a line's text a hit keeps.
@@ -577,8 +585,8 @@ struct LineMatches {
 }
 
 impl<'m> LineCollector<'m> {
-    fn new(matcher: &'m RegexMatcher, max_line_bytes: usize) -> Self {
-        Self { matcher, hits: Vec::new(), binary: false, max_line_bytes, truncated: 0 }
+    fn new(matchers: &'m Matchers, max_line_bytes: usize) -> Self {
+        Self { matchers, hits: Vec::new(), binary: false, max_line_bytes, truncated: 0 }
     }
 
     /// Records `line` as a hit when it matches. `searcher_matched` is the searcher's verdict, which is final unless the
@@ -612,30 +620,49 @@ impl<'m> LineCollector<'m> {
         Ok(())
     }
 
-    /// Finds where the matches in `text` start, `cut` being how many of its first bytes a hit keeps. The search stops at
-    /// the first match that starts past the cut, so a line of many matches costs only what is kept. Starts at
-    /// consecutive offsets are one range, so a pattern that matches every byte of a line stores one range, not one per
-    /// byte, and at most every other byte can begin a range of its own.
+    /// Finds where the matches of each pattern in `text` start, `cut` being how many of its first bytes a hit keeps, and
+    /// merges them. The search of a pattern stops at its first match that starts past the cut, so a line of many matches
+    /// costs only what is kept. Starts at consecutive offsets are one range, so a pattern that matches every byte of a
+    /// line stores one range, not one per byte, and at most every other byte can begin a range of its own.
     fn find_matches(&self, text: &[u8], cut: usize) -> io::Result<LineMatches> {
         let cut_short = cut < text.len();
         let mut found = LineMatches { starts: Vec::new(), any: false };
-        self.matcher
-            .find_iter(text, |found_match| {
-                found.any = true;
-                let start = found_match.start();
-                if cut_short && start >= cut {
-                    return false;
-                }
-                match found.starts.last_mut() {
-                    Some(run) if start < run.end => {}
-                    Some(run) if run.end == start => run.end += 1,
-                    _ => found.starts.push(start..start + 1),
-                }
-                true
-            })
-            .map_err(io::Error::other)?;
+        for matcher in &self.matchers.each {
+            let first_run = found.starts.len();
+            matcher
+                .find_iter(text, |found_match| {
+                    found.any = true;
+                    let start = found_match.start();
+                    if cut_short && start >= cut {
+                        return false;
+                    }
+                    match found.starts.get_mut(first_run..).and_then(<[_]>::last_mut) {
+                        Some(run) if start < run.end => {}
+                        Some(run) if run.end == start => run.end += 1,
+                        _ => found.starts.push(start..start + 1),
+                    }
+                    true
+                })
+                .map_err(io::Error::other)?;
+        }
+        if self.matchers.each.len() > 1 {
+            found.starts = union_of_runs(found.starts);
+        }
         Ok(found)
     }
+}
+
+/// `runs` as ascending, non-touching ranges covering the same offsets.
+fn union_of_runs(mut runs: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    runs.sort_by_key(|run| run.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(runs.len());
+    for run in runs {
+        match merged.last_mut() {
+            Some(last) if run.start <= last.end => last.end = last.end.max(run.end),
+            _ => merged.push(run),
+        }
+    }
+    merged
 }
 
 impl Sink for LineCollector<'_> {
@@ -881,6 +908,23 @@ mod tests {
         let result = search_files(&root, &["ab"], &TextSearchOptions::default()).unwrap();
         // `ab` is two bytes wide, so its starts at 0, 2 and 5 are not consecutive.
         assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_at(2, "abab ab", &[0..1, 2..3, 5..6])])]));
+    }
+
+    #[test]
+    fn a_match_of_one_pattern_does_not_hide_the_matches_of_another() {
+        // One alternation would match `a.*` to the end of the line and never see `b`.
+        let (_dir, root) = tree(&[("a.ts", b"xa b b\n")]);
+        let result = search_files(&root, &["a.*", "b"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_at(1, "xa b b", &[1..2, 3..4, 5..6])])]));
+        let reversed = search_files(&root, &["b", "a.*"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(reversed.hits, result.hits);
+    }
+
+    #[test]
+    fn starts_of_different_patterns_that_touch_or_repeat_are_one_run() {
+        let (_dir, root) = tree(&[("a.ts", b"abab\n")]);
+        let result = search_files(&root, &["ab", "b", "a"], &TextSearchOptions::default()).unwrap();
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![hit_in(1, "abab", 0..4)])]));
     }
 
     #[test]

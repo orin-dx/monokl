@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -414,6 +415,18 @@ fn retrieve_blocks(
         });
     }
     let line_starts = hit_line_starts(&text, hits);
+    // A file that shrank after it was searched has lines the hits name and the text lacks; they cannot be placed.
+    let missing = line_starts.iter().filter(|start| start.is_none()).count();
+    if missing > 0 {
+        diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::Warning,
+            path: Some(path.to_owned()),
+            message: format!(
+                "{missing} matching {} past the end of the file, which changed after it was searched",
+                if missing == 1 { "line is" } else { "lines are" }
+            ),
+        });
+    }
     let analysis = match analyzer.analyze(path, text) {
         Ok(analysis) => analysis,
         Err(err) => {
@@ -461,58 +474,125 @@ fn hit_line_starts(text: &str, hits: &[LineHit]) -> Vec<Option<usize>> {
     starts
 }
 
-/// Splits `hits` among `blocks`: each match goes to the innermost block whose span holds the match's first byte, and a
-/// hit goes once to every block that holds one of its matches. A class or object therefore keeps only the matches
-/// outside its members, a block with none is dropped by the caller, and blocks that only share a line are told apart
-/// by where on it a match starts. Blocks with the same span are told apart by depth in the block tree, and a match
-/// outside every block belongs to none.
+/// Splits `hits` among `blocks`. A block with no hit is dropped by the caller, so this decides what is returned.
+///
+/// The rule, for every hit whose line has a byte in at least one block: the hit goes to at least one block. In order:
+///
+/// 1. Each match goes to the innermost block whose span holds the match's first byte, so a class or object keeps only
+///    the matches outside its members and blocks that only share a line are told apart by where a match starts. Equal
+///    spans are told apart by depth in the block tree.
+/// 2. A match that no block holds strictly but that sits where a block ends (a zero-width match at the end of a span,
+///    such as `$` after a declaration) goes to the innermost block that ends there. The end is inclusive only when no
+///    block holds the byte strictly.
+/// 3. A hit that no match credited (its matches begin between blocks, or began past the line cut) goes to the innermost
+///    blocks at each byte of its line, so a line the search matched is not lost while a block covers part of it.
+///
+/// A hit goes once to every block it is credited to. A hit whose line no block touches belongs to none: it is a match
+/// outside every declaration, which has no block to return.
 ///
 /// A hit lists where its matches start as ranges of consecutive offsets, so a range of several bytes stands for a match
-/// at each of them and is credited to the innermost block at each byte.
-///
-/// `line_starts` holds, for each hit, the offset at which its line starts in the text the spans index (see
-/// [`hit_line_starts`]). `hits` must be in line order and each hit's starts in ascending order, so each block's hits
-/// are in line order too. Each block's `parent_index` is lower than its own position.
+/// at each of them and is credited to the innermost block at each byte. `line_starts` holds, for each hit, the offset
+/// at which its line starts in the text the spans index (see [`hit_line_starts`]). `hits` must be in line order and each
+/// hit's starts in ascending order, so each block's hits are in line order too. Each block's `parent_index` is lower
+/// than its own position.
 fn owned_hits<'h>(blocks: &[&CodeBlock], hits: &'h [LineHit], line_starts: &[Option<usize>]) -> Vec<Vec<&'h LineHit>> {
     let mut depth: Vec<usize> = Vec::with_capacity(blocks.len());
     for block in blocks {
         let level = block.parent_index.and_then(|parent| depth.get(parent).copied()).map_or(0, |parent| parent + 1);
         depth.push(level);
     }
-    // Sweeping the matches in order while the blocks enter in order of start (an outer block before the blocks it holds,
-    // even when they start at the same byte) keeps the open blocks in a stack whose top is the innermost one.
-    let mut entering: Vec<usize> = (0..blocks.len()).collect();
-    entering.sort_by_key(|&index| (blocks[index].span.start, depth[index]));
-    let mut entering = entering.into_iter().peekable();
-    let mut open: Vec<usize> = Vec::new();
+    // Entering the blocks in order of start (an outer block before the blocks it holds, even when they start at the
+    // same byte) keeps the open blocks of a sweep in a stack whose top is the innermost one.
+    let mut by_start: Vec<usize> = (0..blocks.len()).collect();
+    by_start.sort_by_key(|&index| (blocks[index].span.start, depth[index]));
     let mut owned: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
-    for (hit_index, (hit, line_start)) in hits.iter().zip(line_starts).enumerate() {
-        let Some(line_start) = *line_start else { continue };
-        for run in &hit.match_starts {
-            let (mut at, end) = (line_start + run.start, line_start + run.end);
+    let mut credited = vec![false; hits.len()];
+
+    let starts = hits.iter().zip(line_starts).enumerate().filter_map(|(index, (hit, line_start))| {
+        let line_start = (*line_start)?;
+        Some(hit.match_starts.iter().map(move |run| (index, line_start + run.start..line_start + run.end)))
+    });
+    Sweep::new(blocks, &by_start).credit(starts.flatten(), true, &mut owned, &mut credited);
+
+    let uncredited = hits.iter().zip(line_starts).enumerate().filter_map(|(index, (hit, line_start))| {
+        let line_start = (*line_start)?;
+        (!credited[index]).then_some((index, line_start..line_start + hit.text.len()))
+    });
+    let mut unused = vec![false; hits.len()];
+    Sweep::new(blocks, &by_start).credit(uncredited, false, &mut owned, &mut unused);
+
+    owned
+        .into_iter()
+        .map(|mut indices| {
+            indices.sort_unstable();
+            indices.dedup();
+            indices.into_iter().map(|index| &hits[index]).collect()
+        })
+        .collect()
+}
+
+/// A left-to-right walk over a file's blocks that finds the innermost block at each offset it is asked about.
+struct Sweep<'a> {
+    blocks: &'a [&'a CodeBlock],
+    entering: std::iter::Peekable<std::slice::Iter<'a, usize>>,
+    /// The blocks holding the last offset asked about, outermost first.
+    open: Vec<usize>,
+    /// The innermost block that ended exactly at the offset last asked about, and that offset.
+    ended: Option<(usize, usize)>,
+}
+
+impl<'a> Sweep<'a> {
+    fn new(blocks: &'a [&'a CodeBlock], by_start: &'a [usize]) -> Self {
+        Self { blocks, entering: by_start.iter().peekable(), open: Vec::new(), ended: None }
+    }
+
+    /// Credits each `(hit, offsets)` to the innermost block at every offset in the range, and marks the hit in
+    /// `credited`. The offsets must ascend over the whole iterator. `at_end` makes an offset that no block holds
+    /// belong to the innermost block that ends there.
+    fn credit(
+        &mut self,
+        runs: impl Iterator<Item = (usize, Range<usize>)>,
+        at_end: bool,
+        owned: &mut [Vec<usize>],
+        credited: &mut [bool],
+    ) {
+        for (hit, run) in runs {
+            let mut at = run.start;
             loop {
-                while let Some(index) = entering.next_if(|&index| blocks[index].span.start <= at) {
-                    open.push(index);
+                if let Some(holder) = self.innermost_at(at, at_end) {
+                    credited[hit] = true;
+                    if owned[holder].last() != Some(&hit) {
+                        owned[holder].push(hit);
+                    }
                 }
-                while open.last().is_some_and(|&index| blocks[index].span.end <= at) {
-                    open.pop();
-                }
-                let holder = open.last().copied().filter(|&holder| owned[holder].last() != Some(&hit_index));
-                if let Some(holder) = holder {
-                    owned[holder].push(hit_index);
-                }
-                // Every byte of a run starts a match, so the innermost block is looked up again wherever it can
-                // change inside the run.
-                let next_start = entering.peek().map(|&index| blocks[index].span.start);
-                let next_end = open.last().map(|&index| blocks[index].span.end);
+                // Every byte of a run starts a match, so the innermost block is looked up again wherever it can change
+                // inside the run.
+                let next_start = self.entering.peek().map(|&&index| self.blocks[index].span.start);
+                let next_end = self.open.last().map(|&index| self.blocks[index].span.end);
                 match next_start.into_iter().chain(next_end).filter(|&boundary| boundary > at).min() {
-                    Some(boundary) if boundary < end => at = boundary,
+                    Some(boundary) if boundary < run.end => at = boundary,
                     _ => break,
                 }
             }
         }
     }
-    owned.into_iter().map(|indices| indices.into_iter().map(|index| &hits[index]).collect()).collect()
+
+    /// The innermost block whose span holds `at`, or with `at_end` else the innermost block that ends at `at`.
+    fn innermost_at(&mut self, at: usize, at_end: bool) -> Option<usize> {
+        while let Some(&index) = self.entering.next_if(|&&index| self.blocks[index].span.start <= at) {
+            self.open.push(index);
+        }
+        while let Some(&index) = self.open.last().filter(|&&index| self.blocks[index].span.end <= at) {
+            self.open.pop();
+            if self.blocks[index].span.end == at && self.ended.is_none_or(|(position, _)| position != at) {
+                self.ended = Some((at, index));
+            }
+        }
+        self.open
+            .last()
+            .copied()
+            .or_else(|| self.ended.filter(|&(position, _)| at_end && position == at).map(|(_, index)| index))
+    }
 }
 
 /// Returns the text the user typed for `term`: a regex as written, a literal with its escaping undone.
@@ -558,7 +638,6 @@ fn document_frequencies(blocks: &[(CodeBlock, Vec<String>)], terms: &[String]) -
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
     use std::sync::Arc;
 
     use rstest::rstest;
@@ -1110,6 +1189,20 @@ class Foo {
             .collect()
     }
 
+    /// The line numbers of the hits each block owns for the regexes `patterns` in `source`, found by the text search.
+    fn owned_by_search(source: &str, patterns: &[&str], blocks: &[CodeBlock]) -> Vec<Vec<usize>> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ts"), source).unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().canonicalize().unwrap()).unwrap();
+        let found = crate::text_search::search_files(&root, patterns, &TextSearchOptions::default()).unwrap();
+        let hits = found.hits.get(&root.join("a.ts")).cloned().unwrap_or_default();
+        let refs: Vec<&CodeBlock> = blocks.iter().collect();
+        owned_hits(&refs, &hits, &hit_line_starts(source, &hits))
+            .iter()
+            .map(|owned| owned.iter().map(|hit| hit.line_number).collect())
+            .collect()
+    }
+
     /// Two methods that share the line `} b() {`: `a` ends where `b` starts.
     const SHARED_LINE: &str = "class C { a() {\n  one();\n} b() {\n  two();\n} }\n";
 
@@ -1306,13 +1399,73 @@ class Foo {
     }
 
     #[test]
-    fn a_hit_outside_every_block_and_a_hit_without_matches_belong_to_no_block() {
+    fn a_hit_on_a_line_no_block_touches_belongs_to_no_block() {
         let source = "needle\nfn f() {}\n";
         let blocks = [spanned(span_of(source, "fn f() {}"), None)];
         assert_eq!(owned(source, &["needle"], &blocks), [Vec::<usize>::new()]);
+    }
+
+    #[test]
+    fn a_hit_cut_before_any_match_goes_to_the_innermost_blocks_on_its_line() {
+        // The line was cut to `fn f`, so no start was recorded, but the line is matched and `f` covers part of it.
+        let source = "needle\nfn f() {}\n";
+        let blocks = [spanned(span_of(source, "fn f() {}"), None)];
         let refs: Vec<&CodeBlock> = blocks.iter().collect();
         let cut_short = [LineHit { line_number: 2, text: "fn f".to_owned(), match_starts: Vec::new() }];
-        assert_eq!(owned_hits(&refs, &cut_short, &[Some(7)]), [Vec::<&LineHit>::new()]);
+        let owned = owned_hits(&refs, &cut_short, &[Some(7)]);
+        assert_eq!(owned.iter().map(Vec::len).collect::<Vec<_>>(), [1]);
+        let outside = [LineHit { line_number: 1, text: "needle".to_owned(), match_starts: Vec::new() }];
+        assert_eq!(owned_hits(&refs, &outside, &[Some(0)]), [Vec::<&LineHit>::new()]);
+    }
+
+    #[test]
+    fn a_zero_width_match_at_the_end_of_a_span_goes_to_the_block_that_ends_there() {
+        // `$` matches at byte 17, the exclusive end of the declaration, which no block holds strictly.
+        let source = "const needle = 1;\n";
+        let blocks = [spanned(span_of(source, "const needle = 1;"), None)];
+        assert_eq!(owned_by_search(source, &["$"], &blocks), [vec![1]]);
+        assert_eq!(owned_by_search(source, &["^"], &blocks), [vec![1]]);
+        assert_eq!(owned_by_search(source, &[r"\b"], &blocks), [vec![1]]);
+        assert_eq!(owned_by_search(source, &["needle"], &blocks), [vec![1]]);
+    }
+
+    #[test]
+    fn the_end_of_a_span_is_inclusive_only_when_no_block_holds_the_offset_strictly() {
+        // `m` ends at 14 and `C` goes on to 18: the offset belongs to `C`. At 18 only `C` ends, so it belongs to `C` too.
+        let source = "class C { m() {} }\n";
+        let blocks =
+            [spanned(span_of(source, "class C { m() {} }"), None), spanned(span_of(source, "m() {}"), Some(0))];
+        let at = |offset: usize| {
+            let refs: Vec<&CodeBlock> = blocks.iter().collect();
+            let hit = LineHit {
+                line_number: 1,
+                text: source.trim_end().to_owned(),
+                match_starts: std::iter::once(offset..offset + 1).collect(),
+            };
+            owned_hits(&refs, std::slice::from_ref(&hit), &[Some(0)]).iter().map(Vec::len).collect::<Vec<_>>()
+        };
+        assert_eq!(at(16), [1, 0]);
+        assert_eq!(at(18), [1, 0]);
+        assert_eq!(at(11), [0, 1]);
+    }
+
+    #[test]
+    fn a_match_between_blocks_on_a_line_that_a_block_covers_part_of_is_not_lost() {
+        // `x = 1;` is no block, so `; fun` begins outside every block, but the line has a byte in `f`.
+        let source = "x = 1; function f() {}\n";
+        let blocks = [spanned(span_of(source, "function f() {}"), None)];
+        assert_eq!(owned(source, &["; fun"], &blocks), [vec![1]]);
+        assert_eq!(owned(source, &["x = 1"], &blocks), [vec![1]]);
+    }
+
+    #[test]
+    fn matches_of_one_term_do_not_hide_matches_of_another() {
+        // The first block starts after `class.*` has taken the rest of the line, as one alternation would.
+        let source = "export class C { m() {\n  return 1;\n}\n}\n";
+        let class = spanned(span_of(source, "export class C { m() {\n  return 1;\n}\n}"), None);
+        let method = spanned(span_of(source, "m() {\n  return 1;\n}"), Some(0));
+        let blocks = [class, method];
+        assert_eq!(owned_by_search(source, &["class.*", "m"], &blocks), [vec![1], vec![1]]);
     }
 
     #[test]
@@ -1486,6 +1639,31 @@ class Foo {
         assert_eq!(
             summary(&diagnostics),
             [(DiagnosticKind::Skipped, Some("/r/a.ts"), "could not read source: permission denied")]
+        );
+    }
+
+    #[test]
+    fn hits_on_lines_the_file_no_longer_has_are_counted_in_a_warning() {
+        let registry = whole_file_registry();
+        let ctx =
+            FileContext { registry: &registry, language: None, allow_tests: false, max_file_bytes: MAX_FILE_BYTES };
+        let hit = |line_number| LineHit {
+            line_number,
+            text: "alpha".to_owned(),
+            match_starts: std::iter::once(0..1).collect(),
+        };
+        let hits = [hit(1), hit(7), hit(9)];
+        let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
+        let shrunk = |_: &Utf8Path| -> io::Result<Source> { Ok(Source { text: "alpha\n".to_owned(), lossy: false }) };
+        retrieve_blocks(&ctx, Utf8Path::new("/r/a.ts"), &hits, &shrunk, &mut out, &mut diagnostics);
+        assert_eq!(out.iter().map(|(block, _)| block.matched_lines.clone()).collect::<Vec<_>>(), [vec![1]]);
+        assert_eq!(
+            summary(&diagnostics),
+            [(
+                DiagnosticKind::Warning,
+                Some("/r/a.ts"),
+                "2 matching lines are past the end of the file, which changed after it was searched"
+            )]
         );
     }
 

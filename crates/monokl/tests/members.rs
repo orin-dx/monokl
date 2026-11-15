@@ -449,3 +449,38 @@ fn a_match_after_invalid_utf8_on_the_same_line_goes_to_the_function_it_is_in() {
     let rows: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
     assert_eq!(rows, [("function b_needle() {}", vec![1])]);
 }
+
+#[test]
+fn a_zero_width_match_at_the_end_of_a_declaration_is_credited_to_it() {
+    let dir = project(&[("f.ts", "const needle = 1;\n")]);
+    for query in ["regex:$", "regex:^", "regex:\\b", "regex:(?:)", "regex:.*"] {
+        assert_eq!(found(&library_search(&dir, query)), [(1, 1, vec![1])], "{query}");
+    }
+}
+
+#[test]
+fn a_term_that_swallows_the_rest_of_a_line_does_not_hide_a_term_after_it() {
+    // `class.*` takes the whole first line, and the method `m` starts on it.
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "regex:class.* m")), [(1, 3, vec![1]), (1, 7, vec![1])]);
+    // The same terms in the other order find the same blocks.
+    assert_eq!(found(&library_search(&dir, "m regex:class.*")), [(1, 3, vec![1]), (1, 7, vec![1])]);
+}
+
+#[test]
+fn every_line_start_is_credited_to_the_class_or_the_method_it_falls_in() {
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(
+        found(&library_search(&dir, "regex:^")),
+        [(1, 3, vec![2, 3]), (1, 7, vec![1, 4, 7]), (4, 6, vec![5, 6])]
+    );
+}
+
+#[test]
+fn a_match_at_every_word_edge_of_a_class_is_credited_like_one_at_every_line_start() {
+    let source = "export class C { m() {\n  return 1;\n}\n  other() {\n    return 2;\n  }\n}\n";
+    let dir = project(&[("f.ts", source)]);
+    assert_eq!(found(&library_search(&dir, "regex:\\b")), [(1, 3, vec![1, 2]), (1, 7, vec![1]), (4, 6, vec![4, 5])]);
+}
