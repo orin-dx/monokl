@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0192uHirfCjKFzAz2UmSSWBV",
+  "agent_id": "aea747ffca5852cb9",
+  "subagent_type": "general-purpose",
+  "task_description": "ADR 0005 PR 3: read spans everywhere",
+  "token_usage": {
+    "input_tokens": 264,
+    "cache_creation_tokens": 289817,
+    "cache_read_tokens": 27515278,
+    "output_tokens": 113925,
+    "api_call_count": 132
+  },
+  "started_at": "2026-11-14T18:49:38.862664-08:00",
+  "completed_at": "2026-11-14T19:14:42.173776-08:00"
+}

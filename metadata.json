@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EKQDPHC34TZ3P43AY7VBQN",
+  "strategy": "manual-commit",
+  "branch": "feat/name-boost-exact-declaration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 7067,
+    "cache_read_tokens": 587411,
+    "output_tokens": 2342,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 264,
+      "cache_creation_tokens": 290872,
+      "cache_read_tokens": 27516252,
+      "output_tokens": 113895,
+      "api_call_count": 132
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

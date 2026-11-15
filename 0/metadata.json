@@ -1,0 +1,146 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7EKQDPHC34TZ3P43AY7VBQN",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-15T03:24:09.180125Z",
+  "branch": "feat/name-boost-exact-declaration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "5516e5907c4f",
+  "checkpoint_transcript_start": 27888,
+  "transcript_lines_at_start": 27888,
+  "compact_transcript_start": 1972,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 7067,
+    "cache_read_tokens": 587411,
+    "output_tokens": 2342,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 264,
+      "cache_creation_tokens": 290872,
+      "cache_read_tokens": 27516252,
+      "output_tokens": 113895,
+      "api_call_count": 132
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 187
+  },
+  "summary": {
+    "intent": "Land PR 3 of ADR 0005 (span-based snippet and dedup in monokl) via a delegated subagent, and begin the follow-up Variant V name-boost PR.",
+    "outcome": "Subagent opened PR #107 (+822/-371), stacked on #105, with lint, tests, rg-compare, changesets and bench all passing; CI was still pending and the diff had not been reviewed. Variant V name-boost work was started in parallel from main.",
+    "learnings": {
+      "repo": [
+        "ADR 0005 work is delivered as stacked PRs; #107 is based on feat/span-hit-ownership (#105) and must merge after #105. Intended merge order is #106, #105, #107, with release PR #97 also waiting.",
+        "Analyzer spans nest or are disjoint, so the dedup rule 'half of the smaller block in bytes' reduces to containment or equality.",
+        "CodeBlock::signature_span (bytes of a declaration's head) was added because span-based dedup needed it.",
+        "name_match_boost already reads CodeBlock::name (moved in §39), so the name-boost work does not depend on the span PRs and can branch from main.",
+        "Verification suite: just lint, just test, just rg-compare, just changesets, just bench. rg-compare baselines: 58/59, 17/18, 15/16, Rust 22/24, held-out 32/33 and 22/22, held-out Rust 34/36.",
+        "Bench allowance is 5%; stress/many moved 459.9 to 470.3 ms (+2.3%) using the minimum p50 of alternating old/new runs.",
+        "Changesets for user-visible output changes use a minor bump with 'Breaking:' notes."
+      ],
+      "code": [],
+      "workflow": [
+        "Subagent results are reported as the agent's claims; the diff was not independently read, so review before merging.",
+        "Independent follow-up work can be parallelized by branching from main when it has no dependency on the stacked PRs.",
+        "Snippet output changes (184 of 421 queries) affect what downstream agents read, so a before/after on a real query is worth checking before merging."
+      ]
+    },
+    "friction": [
+      "PR #107 is UNSTABLE because CI checks are still pending.",
+      "Stacked PR ordering means #107 cannot merge until #105 does."
+    ],
+    "open_items": [
+      "User should review a before/after snippet on a real query before merging #107.",
+      "Wait for CI on #107 and merge in order: #106, #105, #107.",
+      "Release PR #97 is waiting.",
+      "Variant V name-boost PR in progress; it should list every pinned-harness query whose top 5 changes and explain each.",
+      "The agent says nothing planned remains of ADR 0005."
+    ]
+  }
+}
