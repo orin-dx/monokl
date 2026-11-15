@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Every commit on main keeps its own run, so a red one is never hidden by the next merge.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -137,3 +138,29 @@ jobs:
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
+
+  # Runs only after a merge. The merge queue should keep main green; this catches whatever slips past it.
+  main-red:
+    name: Main is red
+    needs: [ci]
+    if: always() && github.event_name == 'push' && needs.ci.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          body="CI failed on main at $SHA: $RUN_URL"
+          number=$(gh issue list --label ci-red --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh label create ci-red --color B60205 --description "CI failed on main" 2>/dev/null || true
+            gh issue create --label ci-red --title "CI is red on main" --body "$body"
+          fi
+          echo "::error::$body"
+          exit 1
