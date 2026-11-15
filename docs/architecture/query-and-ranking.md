@@ -57,10 +57,17 @@ pub fn rank_blocks(blocks: Vec<(CodeBlock, Vec<String>)>, query_terms: &[&str], 
 
 Per block: `bm25 = bm25::score(...)`,
 `ntype = boost::node_type_boost(block.node_kind)`, `name = boost::name_match_boost(&block, query_terms)`
-(1 + 2 * share of query terms in the block's declared name, `CodeBlock.name`, so 1.0 to 3.0; 1.0 for a block with no name),
-**`final_score = round6(bm25 * name * ntype)`**.
+(1.0 to 7.0, below), **`final_score = round6(bm25 * name * ntype)`**.
 Sorted by `final_score` descending, then file, `line_start`, `line_end`, `node_kind` and `code`; 1-based `rank` is
 assigned after the sort.
+
+`name_match_boost` (`rank/boost.rs`) compares the query terms `Q` (repeats counted) with `N`, the distinct tokens of the
+block's declared name (`CodeBlock.name`, tokenized like a document, so stop words such as the `use` of `useWatch` and the
+`from` of `FromRequestParts` are not tokens): `R` is the share of `Q` found in `N`, `P` the share of `N` found in `Q`.
+`name = round6(1 + 2 * (R + P / 2) / 1.5 + 4 * exact)`, where `exact` is 1 when `R == 1` and `P == 1`. So a name that
+holds none of the terms gets 1.0, a name that holds all of them and nothing else gets 7.0, and the name that says more than
+the query (`validatePrice` for `price`) or less (`parse` for `parse other`) lands between. 1.0 for an empty query and for a
+block with no name or a name of only stop words. 05 §42 records why this shape and the variants it beat.
 
 BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` to 6dp for
 cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
