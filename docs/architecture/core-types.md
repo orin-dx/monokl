@@ -21,6 +21,7 @@ pub struct CodeBlock {
     pub name: Option<String>,
     pub code: String,
     pub symbol_signature: Option<String>,
+    pub signature_span: Option<Range<usize>>,
     pub matched_lines: Vec<usize>,
     pub parent: Option<ParentContext>,
 }
@@ -36,7 +37,8 @@ pub struct ParentContext { pub kind: SymbolKind, pub name: String }
 
 `RankedBlock` nests its `CodeBlock`; the output layer picks the columns it prints.
 `CodeBlock.name` is the identifier the block declares, read from the syntax tree by the analyzer (`Trait for Target` for a trait `impl`); it is `None` for a re-export, an anonymous default export, a destructuring declaration, a macro call and an `extern` block. Ranking reads it for the name boost, and nothing prints it.
-`CodeBlock.span` is the byte range of the analyzed source the block covers, so `source[span] == code`. The analyzer receives the file's lossy UTF-8 decoding, so offsets match the file's own bytes only until the first invalid sequence. `CodeBlock.parent_index` is the position of the enclosing block in `FileAnalysis::blocks` followed by `FileAnalysis::test_blocks`; it is `Some` exactly when `parent` is, and the parent is earlier in that order and its span contains the block's. A Rust test member of a non-test `impl` therefore points from `test_blocks` into `blocks`. Nothing reads either field yet ([ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md), step 1).
+`CodeBlock.span` is the byte range of the analyzed source the block covers, so `source[span] == code`. The analyzer receives the file's lossy UTF-8 decoding, so offsets match the file's own bytes only until the first invalid sequence. `CodeBlock.parent_index` is the position of the enclosing block in `FileAnalysis::blocks` followed by `FileAnalysis::test_blocks`; it is `Some` exactly when `parent` is, and the parent is earlier in that order and its span contains the block's. A Rust test member of a non-test `impl` therefore points from `test_blocks` into `blocks`. Hit ownership reads both (`pipeline`, [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md) step 2) and dedup reads `span` (step 3).
+`CodeBlock.signature_span` is the byte range of the declaration's head, of which `symbol_signature` is the one-line form: it starts at the first byte after any decorators, attributes and doc comments (so `export` and `pub` are inside it) and ends after the `{` that opens a block body, after the `}` of a body with nothing in it, at the start of an expression body or an initializer, or at the end of a declaration with no body. It is `Some` exactly when `symbol_signature` is and lies inside `span`. The snippet leaves out a matched line whose text lies inside it.
 `CodeBlock.parent` is the enclosing class or object literal of a member block and `None` for a top-level block; the analyzer sets it, and the agent output prints it as the `parent` column (`<kind> <name>`).
 `final_score` is the only score `RankedBlock` carries; see `query-and-ranking.md` for the ranking algorithm itself, not covered here.
 

@@ -75,6 +75,14 @@ cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
 `node_type_boost` (`rank/boost.rs`): Function 1.5; Class/Method/Constructor 1.4; Interface/Struct
 1.3; TypeAlias/Enum 1.2; Variable/Impl 1.1; Property/Field/Macro 1.0; Module 0.9; Other 0.7.
 
+## Dedup and snippets
+
+Both read the byte spans the analyzers fill ([ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md)); neither reads line numbers or compares text.
+
+`dedup_blocks` (`dedup.rs`) walks the ranked blocks best first and drops a block that shares more than half of the smaller span's bytes with a block already kept in the same file, then renumbers `rank`. The spans of one analyzed file nest or are disjoint, so this drops a block inside a kept block, equal to it, or holding it, and keeps two blocks that share a line but no byte (`const a = 1; const b = 2;`). A member (a block with a `parent`) never duplicates the top-level block that strictly encloses it, in either rank order. A block with an empty span overlaps nothing. A segment tree over the kept spans' ends keeps the walk near-linear (`tests/scaling.rs`).
+
+The snippet (`output/agent.rs`) shows the matched lines of a block, at most three, each cut to 160 characters, with the rest counted. A matched line is left out when its text lies wholly inside the block's `signature_span`, because the signature column already shows it.
+
 ## Determinism and bounds
 
 Resolved findings, kept so they are not reopened:

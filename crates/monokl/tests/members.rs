@@ -203,9 +203,18 @@ fn a_comment_after_a_members_closing_brace_stays_with_the_class() {
 #[test]
 fn a_match_that_spans_the_edge_of_every_block_on_its_line_is_still_found() {
     let dir = project(&[("a.ts", "const a = 1; const b = 2;\n")]);
-    let result = library_search(&dir, "regex:1; const");
-    assert_eq!(result.ranked.len(), 1);
-    assert_eq!(result.ranked[0].block.matched_lines, [1]);
+    // One match that starts in the first block and runs into the second belongs to the block it starts in.
+    let result = library_search(&dir, "regex:1;.const");
+    assert_eq!(found(&result), [(1, 1, vec![1])]);
+    assert_eq!(result.ranked.iter().map(|r| r.block.code.as_str()).collect::<Vec<_>>(), ["const a = 1;"]);
+}
+
+#[test]
+fn two_statements_sharing_a_line_are_both_returned_when_each_holds_a_match() {
+    let dir = project(&[("a.ts", "const a = 1; const b = 2;\n")]);
+    let result = library_search(&dir, "regex:1;.const const");
+    let blocks: Vec<_> = result.ranked.iter().map(|r| (r.block.code.as_str(), r.block.matched_lines.clone())).collect();
+    assert_eq!(blocks, [("const a = 1;", vec![1]), ("const b = 2;", vec![1])]);
 }
 
 #[test]

@@ -1,83 +1,21 @@
-use std::collections::BTreeSet;
-
 use camino::Utf8PathBuf;
 use proptest::prelude::*;
 
 use super::*;
 use crate::types::{ParentContext, SymbolKind};
 
-fn block_strategy() -> impl Strategy<Value = RankedBlock> {
-    (prop::sample::select(vec!["a.ts", "b.ts", "c/d.ts"]), 0usize..14, 0usize..14, 0usize..100).prop_map(
-        |(file, line_start, line_end, rank)| RankedBlock {
-            block: CodeBlock {
-                file: Utf8PathBuf::from(file),
-                line_start,
-                line_end,
-                node_kind: SymbolKind::Function,
-                span: 0..0,
-                parent_index: None,
-                code: String::new(),
-                symbol_signature: None,
-                name: None,
-                matched_lines: Vec::new(),
-                parent: None,
-            },
-            final_score: 0.0,
-            rank,
-        },
-    )
-}
-
-/// The lines a block covers, empty for an inverted range.
-fn lines(block: &RankedBlock) -> BTreeSet<usize> {
-    (block.block.line_start..=block.block.line_end).collect()
-}
-
-/// Set-based restatement of the rule: a block is dropped when it shares more than half of the smaller block's lines
-/// with a block already kept in the same file.
-fn reference(blocks: &[RankedBlock]) -> Vec<(Utf8PathBuf, usize, usize, usize)> {
-    let mut kept: Vec<&RankedBlock> = Vec::new();
-    for candidate in blocks {
-        let candidate_lines = lines(candidate);
-        let duplicate = kept.iter().any(|earlier| {
-            let earlier_lines = lines(earlier);
-            let shared = earlier_lines.intersection(&candidate_lines).count();
-            let smaller = earlier_lines.len().min(candidate_lines.len());
-            earlier.block.file == candidate.block.file && smaller > 0 && shared * 2 > smaller
-        });
-        if !duplicate {
-            kept.push(candidate);
-        }
-    }
-    kept.iter()
-        .enumerate()
-        .map(|(idx, r)| (r.block.file.clone(), r.block.line_start, r.block.line_end, idx + 1))
-        .collect()
-}
-
-proptest! {
-    #[test]
-    fn dedup_blocks_matches_the_set_based_reference(blocks in prop::collection::vec(block_strategy(), 0..64)) {
-        let expected = reference(&blocks);
-        let actual: Vec<_> = dedup_blocks(blocks)
-            .iter()
-            .map(|r| (r.block.file.clone(), r.block.line_start, r.block.line_end, r.rank))
-            .collect();
-        prop_assert_eq!(actual, expected);
-    }
-}
-
-fn ranked(line_start: usize, line_end: usize, parent: Option<ParentContext>) -> RankedBlock {
+fn ranked(file: &str, span: Range<usize>, parent: Option<ParentContext>) -> RankedBlock {
     RankedBlock {
         block: CodeBlock {
-            file: Utf8PathBuf::from("a.ts"),
-            line_start,
-            line_end,
+            file: Utf8PathBuf::from(file),
+            line_start: 1,
+            line_end: 1,
             node_kind: SymbolKind::Method,
-            span: 0..0,
+            span,
             parent_index: None,
             code: String::new(),
             symbol_signature: None,
+            signature_span: None,
             name: None,
             matched_lines: Vec::new(),
             parent,
@@ -87,19 +25,132 @@ fn ranked(line_start: usize, line_end: usize, parent: Option<ParentContext>) -> 
     }
 }
 
-/// A class block over lines `1..` and members of at least three lines that never overlap each other, in any order.
+/// Whether `later` repeats `earlier` under the rule the docs state: neither is a member the other encloses, and they
+/// share more than half of the smaller span.
+fn repeats(earlier: &CodeBlock, later: &CodeBlock) -> bool {
+    !encloses_member(earlier, later) && !encloses_member(later, earlier) && overlaps_significantly(earlier, later)
+}
+
+/// Blocks that may be members, many per file, with nested and partly overlapping spans of widely varying length, some
+/// empty and some inverted.
+fn dense_block_strategy() -> impl Strategy<Value = RankedBlock> {
+    let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
+    (
+        prop::sample::select(vec!["a.ts", "b.rs", "c/d.ts"]),
+        0usize..120,
+        prop_oneof![8 => 0usize..24, 3 => 24usize..120, 1 => Just(0usize)],
+        prop::option::weighted(0.4, Just(parent)),
+        0usize..100,
+        prop::bool::weighted(0.05),
+    )
+        .prop_map(|(file, start, len, parent, rank, inverted)| {
+            let span = if inverted { start + len..start } else { start..start + len };
+            RankedBlock { rank, ..ranked(file, span, parent) }
+        })
+}
+
+proptest! {
+    // These three together say what dedup keeps: the survivors are a subsequence of the input, no survivor repeats an
+    // earlier one, and every other block repeats a survivor before it.
+    #[test]
+    fn survivors_are_in_input_order_with_consecutive_ranks(blocks in prop::collection::vec(dense_block_strategy(), 0..120)) {
+        let input: Vec<_> = blocks.iter().map(|r| (r.block.file.clone(), r.block.span.clone())).collect();
+        let out = dedup_blocks(blocks);
+        prop_assert_eq!(out.iter().map(|r| r.rank).collect::<Vec<_>>(), (1..=out.len()).collect::<Vec<_>>());
+        let mut remaining = input.iter();
+        for survivor in &out {
+            let found = remaining.any(|(file, span)| *file == survivor.block.file && *span == survivor.block.span);
+            prop_assert!(found, "{:?} is not in the input in order", survivor.block.span);
+        }
+    }
+
+    #[test]
+    fn no_survivor_repeats_an_earlier_survivor_in_its_file(blocks in prop::collection::vec(dense_block_strategy(), 0..120)) {
+        let out = dedup_blocks(blocks);
+        for (later_at, later) in out.iter().enumerate() {
+            for earlier in &out[..later_at] {
+                prop_assert!(
+                    earlier.block.file != later.block.file || !repeats(&earlier.block, &later.block),
+                    "{:?} repeats {:?}",
+                    later.block.span,
+                    earlier.block.span
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_dropped_block_repeats_a_survivor_before_it(blocks in prop::collection::vec(dense_block_strategy(), 0..120)) {
+        // The score numbers each block, so a survivor is told from an identical block that was dropped.
+        let blocks: Vec<_> = blocks
+            .into_iter()
+            .enumerate()
+            .map(|(id, block)| RankedBlock { final_score: f64::from(u32::try_from(id).unwrap()), ..block })
+            .collect();
+        let out = dedup_blocks(blocks.clone());
+        let mut survivors = out.iter().peekable();
+        let mut before: Vec<&CodeBlock> = Vec::new();
+        for block in &blocks {
+            let is_survivor = survivors.next_if(|s| s.final_score.to_bits() == block.final_score.to_bits()).is_some();
+            if is_survivor {
+                before.push(&block.block);
+                continue;
+            }
+            let repeated = before.iter().any(|earlier| earlier.file == block.block.file && repeats(earlier, &block.block));
+            prop_assert!(repeated, "{:?} was dropped without repeating a survivor", block.block.span);
+        }
+        prop_assert!(survivors.next().is_none());
+    }
+}
+
+/// Spans that share no byte with each other, in a shuffled order, each claiming the same line.
+fn disjoint_spans() -> impl Strategy<Value = Vec<Range<usize>>> {
+    prop::collection::vec((0usize..4, 1usize..12), 0..40)
+        .prop_map(|layout| {
+            let mut at = 0;
+            layout
+                .into_iter()
+                .map(|(gap, len)| {
+                    at += gap;
+                    let span = at..at + len;
+                    at += len;
+                    span
+                })
+                .collect::<Vec<_>>()
+        })
+        .prop_shuffle()
+}
+
+proptest! {
+    #[test]
+    fn blocks_that_share_no_byte_all_survive_whatever_lines_they_claim(spans in disjoint_spans(), lines in 0usize..4) {
+        let blocks: Vec<_> = spans
+            .iter()
+            .map(|span| {
+                let mut block = ranked("a.ts", span.clone(), None);
+                block.block.line_start = lines;
+                block.block.line_end = lines;
+                block
+            })
+            .collect();
+        let out = dedup_blocks(blocks);
+        prop_assert_eq!(out.iter().map(|r| r.block.span.clone()).collect::<Vec<_>>(), spans);
+    }
+}
+
+/// A class span over `0..` and members of at least three bytes that never overlap each other, in any order.
 fn class_with_members() -> impl Strategy<Value = Vec<RankedBlock>> {
     prop::collection::vec((0usize..3, 3usize..8), 0..6)
         .prop_map(|layout| {
             let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
             let mut members = Vec::new();
-            let mut line = 2;
+            let mut at = 2;
             for (gap, len) in layout {
-                line += gap;
-                members.push(ranked(line, line + len - 1, Some(parent.clone())));
-                line += len;
+                at += gap;
+                members.push(ranked("a.ts", at..at + len, Some(parent.clone())));
+                at += len;
             }
-            let mut blocks = vec![ranked(1, line, None)];
+            let mut blocks = vec![ranked("a.ts", 1..at + 1, None)];
             blocks.extend(members);
             blocks
         })
@@ -109,66 +160,10 @@ fn class_with_members() -> impl Strategy<Value = Vec<RankedBlock>> {
 proptest! {
     #[test]
     fn a_class_and_all_of_its_members_survive_in_any_rank_order(blocks in class_with_members()) {
-        let mut expected: Vec<_> = blocks.iter().map(|r| (r.block.line_start, r.block.line_end)).collect();
+        let mut expected: Vec<_> = blocks.iter().map(|r| (r.block.span.start, r.block.span.end)).collect();
         expected.sort_unstable();
-        let mut actual: Vec<_> = dedup_blocks(blocks).iter().map(|r| (r.block.line_start, r.block.line_end)).collect();
+        let mut actual: Vec<_> = dedup_blocks(blocks).iter().map(|r| (r.block.span.start, r.block.span.end)).collect();
         actual.sort_unstable();
-        prop_assert_eq!(actual, expected);
-    }
-}
-
-/// Blocks that may be members, many per file, with nested and partly overlapping ranges of widely varying length.
-fn dense_block_strategy() -> impl Strategy<Value = RankedBlock> {
-    let parent = ParentContext { kind: SymbolKind::Class, name: "Foo".to_owned() };
-    (
-        prop::sample::select(vec!["a.ts", "b.ts"]),
-        0usize..60,
-        prop_oneof![8 => 0usize..12, 3 => 12usize..60, 1 => Just(0usize)],
-        prop::option::weighted(0.4, Just(parent)),
-    )
-        .prop_map(|(file, line_start, len, parent)| {
-            let mut block = ranked(line_start, line_start + len, parent);
-            block.block.file = Utf8PathBuf::from(file);
-            block
-        })
-}
-
-/// The rule applied to every earlier kept block in turn, with no index.
-fn quadratic_reference(blocks: &[RankedBlock]) -> Vec<(Utf8PathBuf, usize, usize, usize)> {
-    let mut kept: Vec<&RankedBlock> = Vec::new();
-    for candidate in blocks {
-        let duplicate = kept.iter().any(|earlier| {
-            earlier.block.file == candidate.block.file
-                && !encloses_member(&earlier.block, &candidate.block)
-                && !encloses_member(&candidate.block, &earlier.block)
-                && overlaps_significantly(&earlier.block, &candidate.block)
-        });
-        if !duplicate {
-            kept.push(candidate);
-        }
-    }
-    kept.iter()
-        .enumerate()
-        .map(|(idx, r)| (r.block.file.clone(), r.block.line_start, r.block.line_end, idx + 1))
-        .collect()
-}
-
-proptest! {
-    #[test]
-    fn dedup_blocks_matches_the_unindexed_rule_on_dense_files_with_members(
-        mut blocks in prop::collection::vec(dense_block_strategy(), 0..200),
-        inverted in prop::collection::vec((0usize..200, 1usize..20), 0..6),
-    ) {
-        for (at, back) in inverted {
-            if let Some(block) = blocks.get_mut(at) {
-                block.block.line_end = block.block.line_start.saturating_sub(back);
-            }
-        }
-        let expected = quadratic_reference(&blocks);
-        let actual: Vec<_> = dedup_blocks(blocks)
-            .iter()
-            .map(|r| (r.block.file.clone(), r.block.line_start, r.block.line_end, r.rank))
-            .collect();
         prop_assert_eq!(actual, expected);
     }
 }

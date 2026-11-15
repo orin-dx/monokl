@@ -7,16 +7,16 @@ use std::borrow::Cow;
 use camino::Utf8Path;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingIdentifier, BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
-    Function, MethodDefinition, MethodDefinitionKind, ObjectExpression, ObjectProperty, ObjectPropertyKind,
-    PropertyDefinition, PropertyKind, Statement, VariableDeclaration,
+    ArrowFunctionBody, BindingIdentifier, BindingPattern, Class, ClassElement, Declaration,
+    ExportDefaultDeclarationKind, Expression, Function, MethodDefinition, MethodDefinitionKind, ObjectExpression,
+    ObjectProperty, ObjectPropertyKind, PropertyDefinition, PropertyKind, Statement, VariableDeclaration,
 };
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SourceType, Span};
 
-use crate::analysis::Degradation;
 use crate::analysis::nesting::{self, Syntax};
 use crate::analysis::parse_stack::on_parse_stack;
+use crate::analysis::{Degradation, block_head_len};
 use crate::types::{CodeBlock, ParentContext, SymbolKind};
 
 /// The fewest lines a class or object member needs to get a block of its own. A shorter one is a stub or accessor that
@@ -110,6 +110,19 @@ impl LineIndex {
     }
 }
 
+/// A function's body, and whether it is a block: an arrow function's body can be an expression.
+#[derive(Clone, Copy)]
+struct Body {
+    span: Span,
+    is_block: bool,
+}
+
+/// A declaration's `symbol_signature` and `signature_span`.
+struct Signature {
+    text: String,
+    head: std::ops::Range<usize>,
+}
+
 /// The block a member block belongs to: where it is in the block list, and the context its `parent` field carries.
 struct Holder {
     context: ParentContext,
@@ -134,15 +147,43 @@ impl Extractor<'_> {
         }
     }
 
-    /// The function's text up to its body, on one line: `function f(a: A): B`.
-    fn function_signature(&self, function: &Function<'_>) -> String {
-        let end = function.body.as_ref().map_or(function.span.end, |body| body.span.start);
-        self.signature_text(Span::new(function.span.start, end))
+    /// The signature of a top-level function: its text up to its body on one line (`function f(a: A): B`), and a head
+    /// that starts where the `statement` holding it does, so `export` is inside it.
+    fn function_signature(&self, statement: Span, function: &Function<'_>) -> Signature {
+        let Some(body) = &function.body else {
+            return self.signature(Span::new(function.span.start, function.span.end), statement.start, statement.end);
+        };
+        let head_end = self.head_end(Body { span: body.span, is_block: true });
+        self.signature(Span::new(function.span.start, body.span.start), statement.start, head_end)
     }
 
-    /// The text of `span` on one line, without a trailing `;`.
-    fn signature_text(&self, span: Span) -> String {
-        self.text(span).split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';').trim_end().to_owned()
+    /// Where the head that runs up to `body` ends: at the start of an expression body, past the opening `{` of a block,
+    /// or past the closing `}` of a block with nothing in it.
+    fn head_end(&self, body: Body) -> u32 {
+        if !body.is_block {
+            return body.span.start;
+        }
+        let head_len = block_head_len(self.text(body.span));
+        body.span.start + u32::try_from(head_len).unwrap_or(1)
+    }
+
+    /// The signature of a member whose head runs from `head_start` to `body`, which is where the head's text ends.
+    fn member_signature(&self, head_start: u32, body: Body) -> Signature {
+        self.signature(Span::new(head_start, body.span.start), head_start, self.head_end(body))
+    }
+
+    /// A signature whose text is that of `text` on one line without a trailing `;`, and whose head is the bytes
+    /// `head_start..head_end`.
+    fn signature(&self, text: Span, head_start: u32, head_end: u32) -> Signature {
+        let text = self
+            .text(text)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim_end_matches(';')
+            .trim_end()
+            .to_owned();
+        Signature { text, head: head_start as usize..head_end as usize }
     }
 
     /// Pushes the block of a top-level statement and returns its position in the block list, or `None` when the
@@ -152,11 +193,11 @@ impl Extractor<'_> {
         if matches!(statement, Statement::ImportDeclaration(_)) {
             return None;
         }
-        let symbol_signature = match (node_kind, statement_function(statement)) {
-            (SymbolKind::Function, Some(function)) => Some(self.function_signature(function)),
+        let signature = match (node_kind, statement_function(statement)) {
+            (SymbolKind::Function, Some(function)) => Some(self.function_signature(statement.span(), function)),
             _ => None,
         };
-        self.push_block(statement.span(), node_kind, statement_name(statement), symbol_signature, None)
+        self.push_block(statement.span(), node_kind, statement_name(statement), signature, None)
     }
 
     /// Pushes a block over `span` and returns its position in the block list, unless it holds nothing but whitespace.
@@ -165,7 +206,7 @@ impl Extractor<'_> {
         span: Span,
         node_kind: SymbolKind,
         name: Option<String>,
-        symbol_signature: Option<String>,
+        signature: Option<Signature>,
         parent: Option<&Holder>,
     ) -> Option<usize> {
         let code = self.text(span);
@@ -181,7 +222,8 @@ impl Extractor<'_> {
             parent_index: parent.map(|holder| holder.block),
             name,
             code: code.to_owned(),
-            symbol_signature,
+            symbol_signature: signature.as_ref().map(|signature| signature.text.clone()),
+            signature_span: signature.map(|signature| signature.head),
             matched_lines: Vec::new(),
             parent: parent.map(|holder| holder.context.clone()),
         };
@@ -260,30 +302,30 @@ impl Extractor<'_> {
             MethodDefinitionKind::Constructor => SymbolKind::Constructor,
             MethodDefinitionKind::Method | MethodDefinitionKind::Get | MethodDefinitionKind::Set => SymbolKind::Method,
         };
-        let head = Span::new(method.decorators.last().map_or(method.span.start, |d| d.span.end), body.span.start);
-        let signature = self.signature_text(head);
+        let head_start = method.decorators.last().map_or(method.span.start, |d| d.span.end);
+        let signature = self.member_signature(head_start, Body { span: body.span, is_block: true });
         self.member_block(method.span, node_kind, method.key.name(), signature, parent);
     }
 
     /// A property holding an arrow or function expression: `handle = async (req) => { ... }`. Any other value is data,
     /// which the class block shows well enough.
     fn property_block(&mut self, property: &PropertyDefinition<'_>, parent: &Holder) {
-        let Some(body_start) = property.value.as_ref().and_then(function_body_start) else { return };
-        let head = Span::new(property.decorators.last().map_or(property.span.start, |d| d.span.end), body_start);
-        let signature = self.signature_text(head);
+        let Some(body) = property.value.as_ref().and_then(function_body) else { return };
+        let head_start = property.decorators.last().map_or(property.span.start, |d| d.span.end);
+        let signature = self.member_signature(head_start, body);
         self.member_block(property.span, SymbolKind::Property, property.key.name(), signature, parent);
     }
 
     /// An object property that is a method (`async f() { ... }`, a getter or a setter) or holds an arrow or function
     /// expression (`f: () => { ... }`). Any other value is data, which the object's block shows well enough.
     fn object_property_block(&mut self, property: &ObjectProperty<'_>, parent: &Holder) {
-        let Some(body_start) = function_body_start(&property.value) else { return };
+        let Some(body) = function_body(&property.value) else { return };
         let node_kind = if property.method || property.kind != PropertyKind::Init {
             SymbolKind::Method
         } else {
             SymbolKind::Property
         };
-        let signature = self.signature_text(Span::new(property.span.start, body_start));
+        let signature = self.member_signature(property.span.start, body);
         self.member_block(property.span, node_kind, property.key.name(), signature, parent);
     }
 
@@ -292,7 +334,7 @@ impl Extractor<'_> {
         span: Span,
         node_kind: SymbolKind,
         name: Option<Cow<'_, str>>,
-        signature: String,
+        signature: Signature,
         parent: &Holder,
     ) {
         let lines = self.lines.line(span.end) - self.lines.line(span.start) + 1;
@@ -393,12 +435,16 @@ fn declaration_kind(decl: &Declaration<'_>) -> Option<SymbolKind> {
     }
 }
 
-/// Where the body of an arrow function or function expression starts; `None` for any other expression and for a
-/// function without a body.
-fn function_body_start(expression: &Expression<'_>) -> Option<u32> {
+/// The body of an arrow function or function expression; `None` for any other expression and for a function without a
+/// body.
+fn function_body(expression: &Expression<'_>) -> Option<Body> {
     match expression {
-        Expression::ArrowFunctionExpression(arrow) => Some(arrow.body.span().start),
-        Expression::FunctionExpression(function) => function.body.as_ref().map(|body| body.span.start),
+        Expression::ArrowFunctionExpression(arrow) => {
+            Some(Body { span: arrow.body.span(), is_block: matches!(arrow.body, ArrowFunctionBody::FunctionBody(_)) })
+        }
+        Expression::FunctionExpression(function) => {
+            function.body.as_ref().map(|body| Body { span: body.span, is_block: true })
+        }
         _ => None,
     }
 }
