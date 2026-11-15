@@ -5,6 +5,8 @@
 //! pass [`PARSE_STACK_BYTES`], and every parse runs on a stack of exactly that size. Neither depends on the input's
 //! length.
 
+use std::cell::Cell;
+use std::panic::{self, AssertUnwindSafe};
 use std::thread;
 
 use super::file_analysis::Degradation;
@@ -18,20 +20,46 @@ use super::file_analysis::Degradation;
 /// what the worst accepted file needs. Only the pages a parse touches are committed.
 pub(crate) const PARSE_STACK_BYTES: usize = 256 << 20;
 
-/// Runs `run` on a thread with [`PARSE_STACK_BYTES`] of stack. A panic in it, or a thread that cannot be started,
-/// yields the [`Degradation`] that says so.
+thread_local! {
+    /// Whether [`with_parse_threads`] started this thread, with [`PARSE_STACK_BYTES`] of stack.
+    static HAS_PARSE_STACK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `run` on a stack of [`PARSE_STACK_BYTES`]: the calling thread when [`with_parse_threads`] started it, a new
+/// scoped thread otherwise. A panic in it, or a thread that cannot be started, yields the [`Degradation`] that says so.
 ///
-/// A scoped thread per call costs about 30 microseconds (1,000 in 0.02 s, 256 MiB stack each) against the milliseconds a
-/// parse takes, and shares nothing, so it keeps the analyzers `Send` and `Sync` without a pool to size.
+/// A scoped thread per call costs about 30 microseconds on an idle machine, but 20,000 of them across every core of a
+/// busy one took 3.5 s of CPU against 35 ms of parsing, mostly mapping and unmapping 256 MiB stacks. A caller that
+/// analyzes many files starts its threads once with [`with_parse_threads`] instead.
 pub(crate) fn on_parse_stack<T: Send>(run: impl FnOnce() -> T + Send) -> Result<T, Degradation> {
+    // The closure's output is discarded on a panic, so no torn state is observable afterwards.
+    if HAS_PARSE_STACK.get() {
+        return panic::catch_unwind(AssertUnwindSafe(run)).map_err(|_panic| Degradation::Panicked);
+    }
     thread::scope(|scope| {
         let builder = thread::Builder::new().name("monokl-parse".to_owned()).stack_size(PARSE_STACK_BYTES);
         let Ok(handle) = builder.spawn_scoped(scope, run) else {
             return Err(Degradation::ThreadUnavailable);
         };
-        // The closure's output is discarded on a panic, so no torn state is observable afterwards.
         handle.join().map_err(|_panic| Degradation::Panicked)
     })
+}
+
+/// Runs `run` on a pool of threads that each have [`PARSE_STACK_BYTES`] of stack, so an [`on_parse_stack`] made by a
+/// rayon task inside it parses where it stands instead of starting a thread. The pool is as wide as the one `run` is
+/// called from. When it cannot be started, `run` goes ahead on the calling thread and every parse starts its own thread,
+/// as it does outside this function.
+pub(crate) fn with_parse_threads<T: Send>(run: impl FnOnce() -> T + Send) -> T {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon::current_num_threads())
+        .stack_size(PARSE_STACK_BYTES)
+        .thread_name(|index| format!("monokl-parse-{index}"))
+        .start_handler(|_| HAS_PARSE_STACK.set(true))
+        .build();
+    match pool {
+        Ok(pool) => pool.install(run),
+        Err(_) => run(),
+    }
 }
 
 #[cfg(test)]
@@ -73,5 +101,33 @@ mod tests {
         // Not an assertion about speed: it only fails if starting a thread is so slow that a search of many files is
         // not viable, which a second per thousand would be.
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_pool_thread_parses_where_it_stands_and_any_other_thread_starts_one() {
+        let here = thread::current().id();
+        assert_ne!(on_parse_stack(|| thread::current().id()), Ok(here));
+        let (pool_thread, parse_thread) =
+            with_parse_threads(|| (thread::current().id(), on_parse_stack(|| thread::current().id())));
+        assert_ne!(pool_thread, here);
+        assert_eq!(parse_thread, Ok(pool_thread));
+    }
+
+    #[test]
+    fn a_pool_thread_has_the_fixed_stack_and_survives_a_panic() {
+        let results = with_parse_threads(|| {
+            (
+                on_parse_stack(|| recurse(8 << 10)),
+                on_parse_stack(|| -> () { panic!("boom") }),
+                on_parse_stack(|| recurse(8 << 10)),
+            )
+        });
+        assert_eq!(results, (Ok(8 << 10), Err(Degradation::Panicked), Ok(8 << 10)));
+    }
+
+    #[test]
+    fn the_pool_is_as_wide_as_the_pool_it_is_started_from() {
+        let two = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        assert_eq!(two.install(|| with_parse_threads(rayon::current_num_threads)), 2);
     }
 }

@@ -454,8 +454,8 @@ fn a_tiny_timeout_returns_a_partial_result_that_says_so_and_still_succeeds() {
     let dir = project_of_many_matching_files(20_000);
     let output = monokl_in(dir.path(), &["search", "needle", ".", "--timeout", "0.001", "--max-results", "1"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    // Text search always finishes its first batch, which is 16 files per thread.
-    let reached = rayon::current_num_threads() * 16;
+    // Text search always finishes its first batch, which is 64 files per thread.
+    let reached = rayon::current_num_threads() * 64;
     let expected = format!("partial result: 0.001 s timeout expired after searching {reached} of 20000 files");
     assert!(stdout(&output).contains(&expected), "wanted `{expected}` in: {}", stdout(&output));
     assert_eq!(stderr(&output), "");

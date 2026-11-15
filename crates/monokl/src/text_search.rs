@@ -19,7 +19,7 @@ use crate::types::LineHit;
 
 /// How many files each thread searches per batch. A batch ends in a wait for its slowest file, so a small batch costs
 /// speed; a large one holds more hits at once.
-const BATCH_FILES_PER_THREAD: usize = 16;
+pub(crate) const BATCH_FILES_PER_THREAD: usize = 64;
 
 /// The default for [`TextSearchOptions::max_files`].
 pub const DEFAULT_MAX_FILES: usize = 100_000;
