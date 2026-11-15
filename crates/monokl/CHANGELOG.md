@@ -1,5 +1,56 @@
 # monokl
 
+## 0.6.0
+
+_2026-11-15 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.5.0...monokl@0.6.0)_
+
+### Minor Changes
+
+- Blocks carry the byte span they cover and the position of the block that encloses them, so later stages can tell blocks apart by where they are and not by their text.
+
+  - **Span.** `CodeBlock::span` is the byte range of the analyzed source the block covers, so `source[span] == code`. Offsets count bytes of the text the analyzer received, which is the lossy UTF-8 decoding of a file with invalid bytes.
+  - **Parent.** `CodeBlock::parent_index` is the position of the enclosing block in `FileAnalysis::blocks` followed by `FileAnalysis::test_blocks`. It is set exactly when `parent` is, for the members of a class, object literal, `impl`, trait or inline module.
+  - **No change to results.** Nothing reads either field yet: `monokl search` output and the harness scores are unchanged.
+
+  **Breaking:** `CodeBlock` has two new public fields. Code that builds one must set `span` and `parent_index`.
+- Blocks carry the name their analyzer read from the syntax tree, and the name boost in `monokl search` uses it instead of cutting the signature text.
+
+  - **Name from the tree.** `CodeBlock::name` is the declared identifier of a function, class, interface, type alias, enum, namespace, method, property or constant, and the target of an `impl` (`Trait for Target` for a trait impl). It is `None` for a re-export, an anonymous default export, a destructuring declaration, a macro call and an `extern` block, which get no name boost.
+  - **Scores can change.** `finalScore` differs only where the old text head held a word the name does not, such as a modifier (`get`, `static`) or a variable's type, and for `export default Button;`, which declares no name. No column is added and the harness scores are unchanged: identifier 58/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 23/24 and 12/12.
+  - **Library.** `CodeBlock` has a new public field, so code that builds one must set `name`. `rank::name_match_boost` reads `block.name`, not the signature or the first line of `code`.
+
+  Breaking: construct `CodeBlock` with a `name` field.
+- **A match is credited to the block it sits in.** `monokl search` decides which block holds a matching line by where in the line each match starts, not by comparing the text of the line, so a match is never given to a block that only shares its line, and a line a block covers is never lost.
+
+  - **Why it matters.** A class or object keeps a match that is its own even when a method on the same line matches another term, and blocks that share a line (`} b() {`, `}, // note`, `const a = 1; const needle = 2;`) are told apart by the byte where the match begins. A test function and the module that holds it are never both credited.
+  - **Terms are searched one by one.** `regex:class.* m` finds the method `m` that starts on the line `class.*` matches; the terms used to be joined, and the first match hid the second.
+  - **End of a declaration.** `regex:$` and other matches at the end of a declaration belong to it.
+  - **Output.** Same columns and the same order. On the pinned repositories the shown rows are identical, `totalCount` is 1 to 3 lower in a few queries, and `finalScore` moves in its later digits where fewer blocks change the document frequencies. Harness scores are unchanged.
+  - **A shrunken file.** Matching lines past the end of a file that changed after it was searched are counted in a warning.
+
+  **Breaking:** `LineHit` has a new public field, `match_starts`, the offsets in the hit's text at which a match starts. Code that builds a `LineHit` must set it, and `text_search` fills it.
+- `monokl search` now ranks the declaration a query names above longer names that merely contain its words, so `use watch` style questions find `useWatch` and `create form control` finds `createFormControl`.
+
+  - **Name match.** The name boost compares the query words with the words of the block's declared name, with stop words such as `use` and `from` left out of the name. It rises with the share of the query the name holds, falls with the share of the name the query does not ask for, and is 7.0 when the two are the same words. Before it was `1 + 2 * share of the query in the name`, 1.0 to 3.0; it is now 1.0 to 7.0.
+  - **Scores and order change.** `finalScore` values and row order change on 110 of the 250 pinned-harness queries, 48 of them in the first row. The answer file of a multi-word question is in the first three files for 17 of 18 questions (unchanged), a declaration for 59 of 59 identifiers (was 58), and 14 of 14 in the report-only react-hook-form set (was 12). No earlier hit is lost.
+  - **Library.** `rank::name_match_boost` returns 1.0 to 7.0 instead of 1.0 to 3.0; its signature is unchanged. This is a behavior change and not a breaking API change, so the bump is minor, as for the earlier name-boost change, and not patch.
+- `monokl search` is faster on trees with many matching files: 20,000 one-line files take 545 ms instead of 759 ms (about 28% less), and a broad query over zod 31 ms instead of 37 ms. Output is byte-identical.
+
+  - **One parse thread per worker, not per file.** Analysis used to start a thread with a 256 MiB stack for every file, which cost 3.5 s of CPU against 35 ms of parsing over 20,000 files. A search now starts its analysis threads once with that stack, and only as many as it has files to analyze: a query that matches nothing starts none. Each parse still runs on a stack of exactly that size, behind the same nesting scan and 4 MiB cap, and a parse made outside a search still gets a thread of its own.
+  - **Ranking runs in parallel.** Scoring and sorting spent 42 ms of that run on one thread and now take 6 ms. `rank::rank_blocks` now requires its hasher `S` to be `Sync`; every standard and `FxHash` hasher is.
+  - **Larger batches.** A search hands out 64 files per thread to text search and 32 to analysis, up from 16 and 8, so threads wait less for the slowest file of a batch. After the first batch a `--timeout` is checked every 576 files on an 18-core machine instead of every 144.
+
+  **Breaking:** `rank::rank_blocks<S>` now requires `S: BuildHasher + Sync`. A caller that passes a `df` map with a hasher that is not `Sync` must switch to one that is.
+- **Two blocks that share a line are no longer taken for one.** `monokl search` removes a block that repeats a better one by the bytes the two share, not the lines, and decides what a snippet leaves out by where the signature ends, not by comparing text.
+
+  - **Why it matters.** `const first = 1; const second = 2;` and `fn a() {} fn b() {}` each used to give one row, because both blocks claimed line 1 and the second counted as a copy of the first. Each block that holds a match now gets its row. A block inside another, or equal to it, is still dropped as before.
+  - **Snippets.** A matching line is left out when the signature column already shows all of it, wherever that line is in the block: the lines of a multi-line signature, and the signature line of a Rust item below its attributes or doc comments, no longer repeat the signature in the snippet. A line that says more than the signature stays: a decorator, the start of an arrow function's expression body, or a body on the same line.
+  - **Output.** Same columns and the same order. A search can return more rows where blocks shared a line, and fewer snippet lines where the signature spans several.
+
+  **Breaking:** `CodeBlock` has a new public field, `signature_span`, the bytes of the declaration's head that `symbol_signature` is the one-line form of. Code that builds a `CodeBlock` must set it, with `None` for a block that has no signature.
+
+  **Breaking:** `dedup_blocks` compares `CodeBlock::span`, not `line_start` and `line_end`. A caller that built blocks with an empty span (`0..0`) now has every one of them kept; set each block's real span.
+
 ## 0.5.0
 
 _2026-11-12 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.4.0...monokl@0.5.0)_
