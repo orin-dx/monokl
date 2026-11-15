@@ -2,13 +2,15 @@
 //!
 //! The parse owns its syntax tree. Everything leaving this module is owned data, so no tree node escapes.
 
+use std::ops::Range;
+
 use camino::Utf8Path;
 use ra_ap_syntax::ast::{self, AstNode, HasAttrs, HasModuleItem, HasName};
-use ra_ap_syntax::{Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange};
+use ra_ap_syntax::{Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange, TextSize};
 
-use crate::analysis::Degradation;
 use crate::analysis::nesting::{self, Syntax};
 use crate::analysis::parse_stack::on_parse_stack;
+use crate::analysis::{Degradation, block_head_len};
 use crate::types::{CodeBlock, ParentContext, SymbolKind};
 
 /// The fewest lines an `impl` or trait method needs to get a block of its own. A shorter one is a stub or accessor
@@ -213,7 +215,7 @@ impl Walker<'_> {
         holder: Option<&Holder>,
         in_test: bool,
     ) -> usize {
-        let signature = self.signature(node);
+        let (signature, head) = self.signature(node);
         let range = node.text_range();
         let block = CodeBlock {
             file: self.path.to_owned(),
@@ -225,6 +227,7 @@ impl Walker<'_> {
             name,
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
+            signature_span: Some(head),
             matched_lines: Vec::new(),
             parent: holder.map(|holder| holder.context.clone()),
         };
@@ -258,11 +261,13 @@ impl Walker<'_> {
         out
     }
 
-    /// The item's header on one line: everything from its visibility or first keyword up to its body or initializer,
-    /// without attributes and doc comments. `pub fn f<T>(a: &str) -> T where T: Clone`.
-    fn signature(&self, node: &SyntaxNode) -> String {
+    /// The item's header on one line, and the bytes of its head. The header is everything from its visibility or first
+    /// keyword up to its body or initializer, without attributes and doc comments: `pub fn f<T>(a: &str) -> T where T:
+    /// Clone`. The head's bytes run on through the `{` that opens a block body, or to the end of an item with no body.
+    fn signature(&self, node: &SyntaxNode) -> (String, Range<usize>) {
         let mut start = None;
         let mut end = node.text_range().end();
+        let mut head_end = end;
         for element in node.children_with_tokens() {
             let kind = element.kind();
             if start.is_none() {
@@ -286,11 +291,18 @@ impl Walker<'_> {
             };
             if is_body {
                 end = element.text_range().start();
+                let body = self.text(element.text_range());
+                let head_len = if body.starts_with('{') { block_head_len(body) } else { 0 };
+                head_end = end + TextSize::try_from(head_len).unwrap_or_default();
                 break;
             }
         }
-        let Some(start) = start else { return String::new() };
-        collapse(self.text(TextRange::new(start, end.max(start)))).trim_end_matches([';', ',']).trim_end().to_owned()
+        let Some(start) = start else { return (String::new(), usize::from(end)..usize::from(end)) };
+        let text = collapse(self.text(TextRange::new(start, end.max(start))))
+            .trim_end_matches([';', ','])
+            .trim_end()
+            .to_owned();
+        (text, usize::from(start)..usize::from(head_end.max(start)))
     }
 }
 

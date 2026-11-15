@@ -25,7 +25,8 @@ We recommend identifying hits and blocks by byte spans and linking blocks into a
 - Ownership is per match, in this order. Each match goes to the innermost block whose span contains its first byte (equal spans resolve by parent depth, not text). A match no block contains, which sits where a block's span ends, goes to the innermost block that ends there; the end is inclusive only when no block contains the offset, so a zero-width `$` after a declaration belongs to it. A hit that no match credited goes to the innermost blocks at each byte of its line. A hit goes once to every block credited. (Decided per match, not per hit: `const a = 1; const needle = 2;` searched for `const` has a match in each block, and the line-based rule credited both.)
 - The invariant: every matched line with a byte in at least one block credits at least one block, so a block is never dropped for lack of a hit while a match touches it. A line no block touches is a match outside every declaration and has no block to return.
 - The sink finds the starts of each pattern on its own and merges them. The searcher's alternation matches left to right without overlap, so one pattern's match (`class.*`) could hide another's (`m`).
-- Snippets are cut from spans and dedup compares spans.
+- A block carries the span of its declaration's head (`signature_span`), which the signature is the one-line form of. The snippet cuts its lines from the block and leaves out a matched line that lies inside the head.
+- Dedup compares spans: a block is dropped when it shares more than half of the smaller span's bytes with a block already kept in the same file. The spans of one analyzed file nest or are disjoint, so that is containment or equality.
 
 ## Consequences
 
@@ -35,7 +36,7 @@ Costs:
 
 - `LineHit` grows a list of match start offsets. The searcher does not give them: `SinkMatch` in `grep-searcher` 0.1.17 (`sink.rs:379-423`) exposes only `bytes()`, `absolute_byte_offset()` and `line_number()` for the whole line. In-line offsets need `Matcher::find_iter` (`grep-matcher` 0.1.9, `lib.rs:629`) over each matching line. `LineCollector::text_matches` (`text_search.rs`) already makes that second pass for CRLF lines.
 - Offsets must mean the same bytes on both sides. The searcher sees raw file bytes and the analyzer sees the lossy-decoded `String`, which differ after any invalid UTF-8.
-- Each block gains a span (16 bytes) and a parent index (4 to 8 bytes). `code` stays, so nested blocks keep duplicating text.
+- Each block gains a span (16 bytes), a parent index (4 to 8 bytes) and a head span (24 bytes with its `Option` tag). `code` stays, so nested blocks keep duplicating text.
 - Dedup compares bytes instead of lines, the one stage whose output can change beyond the old bugs.
 
 ## Alternatives considered
@@ -52,4 +53,4 @@ Three PRs. After each, `scripts/rg-compare.py` must not drop: identifier 58/59, 
 
 ## Not measured
 
-Memory and time of the second regex pass and the spans on a large repo. How many harness queries change under byte-based dedup. Whether mapping lossy offsets beats searching decoded text. How many of the 87 sites would change.
+Memory and time of the second regex pass and the spans on a large repo. How many harness queries change under byte-based dedup (none of 421; decision log 43). Whether mapping lossy offsets beats searching decoded text. How many of the 87 sites would change.

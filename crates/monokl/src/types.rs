@@ -74,6 +74,13 @@ pub struct CodeBlock {
     pub name: Option<String>,
     pub code: String,
     pub symbol_signature: Option<String>,
+    /// The bytes of the declaration's head, which `symbol_signature` is the one-line form of: from the first byte after
+    /// any decorators, attributes and doc comments (so a modifier such as `export` or `pub` is inside) through the
+    /// opening `{` of a block body, or, for a declaration with no body, through its last byte. A body that is an
+    /// expression, or an initializer after `=`, is not part of it. `Some` exactly when `symbol_signature` is, and
+    /// within `span`. The snippet leaves out a matched line whose text lies inside it, because the signature already
+    /// shows that line.
+    pub signature_span: Option<Range<usize>>,
     pub matched_lines: Vec<usize>,
     /// The block this one is a member of, such as the class of a method; `None` for a top-level block.
     pub parent: Option<ParentContext>,

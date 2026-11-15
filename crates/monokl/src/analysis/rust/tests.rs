@@ -1158,3 +1158,64 @@ fn the_language_filter_isolates_rust_from_typescript() {
     assert_eq!(run(Some(Language::TypeScript)), ["b.ts"]);
     assert_eq!(run(Some(Language::JavaScript)), Vec::<String>::new());
 }
+
+/// The source each block's head covers.
+fn heads<'a>(source: &'a str, blocks: &[&'a CodeBlock]) -> Vec<&'a str> {
+    blocks.iter().map(|b| &source[b.signature_span.clone().unwrap()]).collect()
+}
+
+#[test]
+fn a_signature_span_covers_the_head_without_attributes_through_the_opening_brace_of_a_body() {
+    let analysis = analyze_source(KINDS);
+    assert_eq!(
+        heads(KINDS, &listed(&analysis)),
+        [
+            "pub fn add<T: Add>(a: T, b: T) -> T\nwhere\n    T: Copy,\n{",
+            "pub(crate) struct Point<T> {",
+            "struct Unit;",
+            "pub enum Mode {",
+            "pub trait Shape {",
+            // An initializer is not part of the head.
+            "pub type Result<T> ",
+            "const LIMIT: usize ",
+            "static mut COUNT: u32 ",
+            "macro_rules! twice {",
+            "union Bits {",
+        ]
+    );
+}
+
+#[test]
+fn a_member_signature_span_covers_its_head_and_a_test_member_has_one_too() {
+    let analysis = analyze_source(TESTED);
+    assert_eq!(
+        heads(TESTED, &listed(&analysis)),
+        [
+            "struct Cart;",
+            "impl Cart {",
+            "pub fn new() -> Self {",
+            "pub mod outer {",
+            "mod inner {",
+            "pub fn two() -> u8 {",
+            "fn checks() {",
+            "mod tests {",
+            "fn adds() {",
+            // An empty block adds nothing to the head.
+            "fn short() {}",
+        ]
+    );
+}
+
+#[test]
+fn a_signature_span_lies_within_its_block_and_collapses_to_the_signature() {
+    for source in [KINDS, IMPLS, TESTED] {
+        let analysis = analyze_source(source);
+        for block in listed(&analysis) {
+            let head = block.signature_span.clone().unwrap();
+            assert!(block.span.start <= head.start && head.end <= block.span.end);
+            let collapsed = source[head].split_whitespace().collect::<Vec<_>>().join(" ");
+            let signature = block.symbol_signature.as_deref().unwrap();
+            assert!(collapsed.contains(signature), "{collapsed:?} lacks {signature:?}");
+        }
+    }
+}

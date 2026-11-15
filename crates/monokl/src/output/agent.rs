@@ -21,22 +21,27 @@ const SNIPPET_LINE_CHARS: usize = 160;
 
 /// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
 ///
-/// The block's first line is left out when the signature column already shows all of it. A variable or type alias has
-/// no signature, so its first line is the best thing to show; so is a first line that says more than the signature,
-/// such as a decorator or the start of an arrow function's body. At most [`SNIPPET_LINES`] lines appear, each cut to
-/// [`SNIPPET_LINE_CHARS`] characters, and the lines beyond that are counted, not dropped silently.
+/// A line the signature column already shows is left out: one whose text lies inside the block's
+/// [`signature_span`](crate::types::CodeBlock::signature_span). A variable or type alias has no signature, so its first
+/// line is the best thing to show; so is a first line that says more than the signature, such as a decorator or the
+/// start of an arrow function's body. At most [`SNIPPET_LINES`] lines appear, each cut to [`SNIPPET_LINE_CHARS`]
+/// characters, and the lines beyond that are counted, not dropped silently.
 fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
-    let lines: Vec<&str> = block.code.split('\n').collect();
-    let first_line_in_signature = match (block.symbol_signature.as_deref(), lines.first()) {
-        (Some(signature), Some(line)) => signature_shows(signature, line),
-        _ => false,
-    };
-    let first = if first_line_in_signature { block.line_start + 1 } else { block.line_start };
+    let mut lines = Vec::new();
+    let mut start = block.span.start;
+    for text in block.code.split('\n') {
+        lines.push((start, text));
+        start += text.len() + 1;
+    }
     let mut shown: Vec<usize> = block
         .matched_lines
         .iter()
         .copied()
-        .filter(|&line| line >= first && line - block.line_start < lines.len())
+        .filter(|&line| line >= block.line_start && line - block.line_start < lines.len())
+        .filter(|&line| {
+            let (start, text) = lines[line - block.line_start];
+            !block.signature_span.as_ref().is_some_and(|head| inside(head, start, text))
+        })
         .collect();
     shown.sort_unstable();
     shown.dedup();
@@ -45,7 +50,7 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
         .iter()
         .take(SNIPPET_LINES)
         .map(|&line| {
-            let text = lines[line - block.line_start].trim();
+            let text = lines[line - block.line_start].1.trim();
             let mut chars = text.chars();
             let head: String = chars.by_ref().take(SNIPPET_LINE_CHARS).collect();
             let ellipsis = if chars.next().is_some() { "…" } else { "" };
@@ -61,23 +66,11 @@ fn snippet(block: &crate::types::CodeBlock) -> Option<String> {
     Some(out.join("\n"))
 }
 
-/// Whether `signature` already shows everything on the block's first `line`: the line is the signature plus an opening
-/// brace, or the signature runs on past the line. Whitespace and leading modifiers (`export`, `async` and the like),
-/// which signatures drop, do not count.
-fn signature_shows(signature: &str, line: &str) -> bool {
-    const MODIFIERS: [&str; 10] =
-        ["export", "default", "declare", "async", "abstract", "static", "public", "private", "protected", "override"];
-    let normalized = |text: &str| -> String {
-        let mut words = text.split_whitespace().peekable();
-        while words.next_if(|word| MODIFIERS.contains(word)).is_some() {}
-        words.collect::<Vec<_>>().join(" ")
-    };
-    let (signature, line) = (normalized(signature), normalized(line));
-    let line_core = line.trim_end_matches(['{', '}', ' ', ';', ',']);
-    signature.contains(line_core)
-        || line
-            .strip_prefix(signature.as_str())
-            .is_some_and(|rest| rest.trim_matches(['{', '}', ' ', ';', ',']).is_empty())
+/// Whether the text of a line, which starts at byte `start`, holds something and lies wholly inside `head`.
+fn inside(head: &std::ops::Range<usize>, start: usize, text: &str) -> bool {
+    let content = text.trim();
+    let content_start = start + (text.len() - text.trim_start().len());
+    !content.is_empty() && head.start <= content_start && content_start + content.len() <= head.end
 }
 
 /// The `parent` cell: the kind and name of the block's parent, such as `class Foo` for a method; `null` for a
@@ -168,21 +161,37 @@ mod snippet_tests {
     use crate::types::{CodeBlock, SymbolKind};
     use camino::Utf8PathBuf;
 
+    /// Where the test blocks start in their file, so a span offset is not mistaken for an offset in the code.
+    const START: usize = 100;
+
+    /// A block whose head is its first line, as for a function whose body opens at the end of that line.
     fn block(line_start: usize, code: &str, matched_lines: &[usize]) -> CodeBlock {
+        let first_line = code.split('\n').next().unwrap_or("");
         CodeBlock {
             file: Utf8PathBuf::from("src/a.ts"),
             line_start,
             line_end: line_start + code.split('\n').count() - 1,
             node_kind: SymbolKind::Function,
-            span: 0..code.len(),
+            span: START..START + code.len(),
             parent_index: None,
             code: code.to_owned(),
-            // What the analyzer would give: the first line without its opening brace.
-            symbol_signature: Some(code.lines().next().unwrap_or("").trim_end_matches(['{', ' ']).to_owned()),
+            symbol_signature: Some(first_line.trim_end_matches(['{', ' ']).to_owned()),
+            signature_span: Some(START..START + first_line.len()),
             name: None,
             matched_lines: matched_lines.to_vec(),
             parent: None,
         }
+    }
+
+    /// `block` with the head set to the text `head`, which `code` must hold.
+    fn headed(line_start: usize, code: &str, head: &str, matched_lines: &[usize]) -> CodeBlock {
+        let at = START + code.find(head).expect("the code holds the head");
+        CodeBlock { signature_span: Some(at..at + head.len()), ..block(line_start, code, matched_lines) }
+    }
+
+    /// `block` with no signature, as for a variable or a type alias.
+    fn unsigned(line_start: usize, code: &str, matched_lines: &[usize]) -> CodeBlock {
+        CodeBlock { symbol_signature: None, signature_span: None, ..block(line_start, code, matched_lines) }
     }
 
     #[test]
@@ -199,51 +208,62 @@ mod snippet_tests {
 
     #[test]
     fn a_block_without_a_signature_shows_its_first_line_when_it_matched() {
-        let mut b = block(3, "export const price = 1;", &[3]);
-        b.symbol_signature = None;
+        let b = unsigned(3, "export const price = 1;", &[3]);
         assert_eq!(snippet(&b), Some("3: export const price = 1;".to_owned()));
     }
 
     #[test]
-    fn a_block_with_a_signature_does_not_repeat_it_in_the_snippet() {
-        let mut b = block(3, "function price() {\n  return price;\n}", &[3, 4]);
-        b.symbol_signature = Some("function price()".to_owned());
-        assert_eq!(snippet(&b), Some("4: return price;".to_owned()));
-    }
-
-    #[test]
-    fn a_decorator_line_the_signature_leaves_out_is_shown_when_it_matched() {
-        let mut b = block(2, "@Dec('needle')\nmulti(a: number): void {\n}", &[2]);
-        b.symbol_signature = Some("multi(a: number): void".to_owned());
+    fn a_decorator_line_the_head_leaves_out_is_shown_when_it_matched() {
+        let b = headed(2, "@Dec('needle')\nmulti(a: number): void {\n}", "\nmulti(a: number): void {", &[2]);
         assert_eq!(snippet(&b), Some("2: @Dec('needle')".to_owned()));
     }
 
     #[test]
     fn a_decorator_sharing_its_line_with_the_member_is_shown_when_it_matched() {
-        let mut b = block(9, "@Dec2() prop2 = () => {\n  return 1;\n}", &[9]);
-        b.symbol_signature = Some("prop2 = () =>".to_owned());
+        let b = headed(9, "@Dec2() prop2 = () => {\n  return 1;\n}", " prop2 = () => {", &[9]);
         assert_eq!(snippet(&b), Some("9: @Dec2() prop2 = () => {".to_owned()));
     }
 
     #[test]
-    fn a_first_line_that_says_more_than_the_signature_is_shown() {
-        let mut b = block(2, "load = () => needle(\n  1,\n);", &[2]);
-        b.symbol_signature = Some("load = () =>".to_owned());
+    fn a_first_line_that_says_more_than_the_head_is_shown() {
+        let b = headed(2, "load = () => needle(\n  1,\n);", "load = () => ", &[2]);
         assert_eq!(snippet(&b), Some("2: load = () => needle(".to_owned()));
     }
 
     #[test]
-    fn an_export_keyword_does_not_make_a_covered_first_line_look_new() {
-        let mut b = block(1, "export async function f(x) {\n  return x;\n}", &[1]);
-        b.symbol_signature = Some("function f(x)".to_owned());
+    fn a_one_line_body_after_the_head_is_shown() {
+        let b = headed(4, "function f() { return needle; }", "function f() {", &[4]);
+        assert_eq!(snippet(&b), Some("4: function f() { return needle; }".to_owned()));
+    }
+
+    #[test]
+    fn an_export_keyword_inside_the_head_does_not_make_a_covered_first_line_look_new() {
+        let b = block(1, "export async function f(x) {\n  return x;\n}", &[1]);
         assert_eq!(snippet(&b), None);
     }
 
     #[test]
-    fn a_signature_that_spans_the_first_line_covers_it() {
-        let mut b = block(1, "multi(\n  a: number,\n): void {\n}", &[1]);
-        b.symbol_signature = Some("multi( a: number, ): void".to_owned());
-        assert_eq!(snippet(&b), None);
+    fn every_line_of_a_head_that_spans_lines_is_covered_and_a_body_line_is_not() {
+        let b = headed(
+            1,
+            "multi(\n  a: number,\n): void {\n  return;\n}",
+            "multi(\n  a: number,\n): void {",
+            &[1, 2, 3, 4],
+        );
+        assert_eq!(snippet(&b), Some("4: return;".to_owned()));
+    }
+
+    #[test]
+    fn a_head_below_attributes_and_doc_comments_is_covered_and_they_are_not() {
+        let code = "/// needle docs\n#[inline]\npub fn needle() {\n    needle();\n}";
+        let b = headed(7, code, "pub fn needle() {", &[7, 8, 9, 10]);
+        assert_eq!(snippet(&b), Some("7: /// needle docs\n8: #[inline]\n10: needle();".to_owned()));
+    }
+
+    #[test]
+    fn a_blank_matched_line_is_shown_as_the_empty_line_it_is() {
+        let b = block(1, "head\n\nbody", &[2]);
+        assert_eq!(snippet(&b), Some("2: ".to_owned()));
     }
 
     #[test]
@@ -294,6 +314,14 @@ mod snippet_tests {
         let b = block(1, "head\nbody", &[2, 2]);
         assert_eq!(snippet(&b), Some("2: body".to_owned()));
     }
+
+    #[test]
+    fn a_head_is_read_in_the_offsets_of_the_file_not_of_the_code() {
+        // The same head at offsets that do not hold this line leaves the line in the snippet.
+        let mut b = block(1, "head\nbody", &[1]);
+        b.signature_span = Some(0..4);
+        assert_eq!(snippet(&b), Some("1: head".to_owned()));
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +346,7 @@ mod projection_tests {
                     parent_index: None,
                     code: "fn foo(x) {\n    let y = foo(x);\n    unrelated();\n    y\n}".to_string(),
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
+                    signature_span: Some(0..11),
                     name: None,
                     matched_lines: vec![5, 6],
                     parent: None,
@@ -353,6 +382,7 @@ mod projection_tests {
                 parent_index: None,
                 code: String::new(),
                 symbol_signature: None,
+                signature_span: None,
                 name: None,
                 matched_lines: Vec::new(),
                 parent,
@@ -474,6 +504,7 @@ mod projection_tests {
                     parent_index: None,
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
+                    signature_span: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
@@ -512,6 +543,7 @@ mod projection_tests {
                     parent_index: None,
                     code: String::new(),
                     symbol_signature: None,
+                    signature_span: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
