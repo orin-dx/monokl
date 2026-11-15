@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BDHvYZuYSQxrxKUbaiUBwr",
+  "agent_id": "a11a4b217424e47b8",
+  "subagent_type": "general-purpose",
+  "task_description": "Recover stress/many parse/read cost",
+  "token_usage": {
+    "input_tokens": 214,
+    "cache_creation_tokens": 227046,
+    "cache_read_tokens": 17244974,
+    "output_tokens": 66083,
+    "api_call_count": 107
+  },
+  "started_at": "2026-11-14T17:34:59.693481-08:00",
+  "completed_at": "2026-11-14T17:59:52.409253-08:00"
+}
