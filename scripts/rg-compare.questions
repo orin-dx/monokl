@@ -97,3 +97,80 @@ date-fns | format relative date | pkgs/core/src/formatRelative/index.ts | format
 date-fns | parse iso string | pkgs/core/src/parseISO/index.ts | parseISO | held_out
 date-fns | intervals overlapping | pkgs/core/src/areIntervalsOverlapping/index.ts | areIntervalsOverlapping | held_out
 date-fns | start of week year | pkgs/core/src/startOfWeekYear/index.ts | startOfWeekYear | held_out
+
+# Widened held-out set (report-only until a repository passes 0.9; see rg-compare.repos). Written from each repository's
+# README, docs and source with rg before monokl was run on them. tokio and axum are Rust (macro-heavy and trait/impl-heavy),
+# react-hook-form is a hooks library with types and no classes, commander is a class-based JavaScript CLI.
+# tokio (macro_rules! cfg wrappers around items; top-level items plus members of impl blocks)
+tokio | copy bidirectional between streams | tokio/src/io/util/copy_bidirectional.rs | copy_bidirectional | held_out
+tokio | in memory duplex stream | tokio/src/io/util/mem.rs | duplex | held_out
+tokio | timeout future deadline | tokio/src/time/timeout.rs | timeout | held_out
+tokio | interval start period | tokio/src/time/interval.rs | interval_at | held_out
+tokio | sleep until instant | tokio/src/time/sleep.rs | sleep_until | held_out
+tokio | cancellation token cancel | tokio-util/src/sync/cancellation_token.rs | CancellationToken | held_out
+tokio | unconstrained cooperative budget | tokio/src/task/coop/unconstrained.rs | unconstrained | held_out
+tokio | yield now task | tokio/src/task/yield_now.rs | yield_now | held_out
+tokio | cfg net feature gate | tokio/src/macros/cfg.rs | cfg_net | held_out
+tokio | pin macro stack | tokio/src/macros/pin.rs | pin | held_out
+tokio | semaphore forget permits | tokio/src/sync/semaphore.rs | member:forget_permits | held_out
+tokio | notify waiters wake all | tokio/src/sync/notify.rs | member:notify_waiters | held_out
+tokio | mutex try lock | tokio/src/sync/mutex.rs | member:try_lock | held_out
+tokio | join set detach all | tokio/src/task/join_set.rs | member:detach_all | held_out
+tokio | interval missed tick behavior | tokio/src/time/interval.rs | member:set_missed_tick_behavior | held_out
+tokio | cancellation token child token | tokio-util/src/sync/cancellation_token.rs | member:child_token | held_out
+# axum (traits, generic impls and macro_rules! tuple expansions)
+axum | websocket upgrade handshake | axum/src/extract/ws.rs | WebSocketUpgrade | held_out
+axum | server sent events stream | axum/src/response/sse.rs | Sse | held_out
+axum | redirect response location | axum/src/response/redirect.rs | Redirect | held_out
+axum | map request middleware | axum/src/middleware/map_request.rs | map_request | held_out
+axum | from fn middleware state | axum/src/middleware/from_fn.rs | from_fn_with_state | held_out
+axum | default body limit request | axum-core/src/extract/default_body_limit.rs | DefaultBodyLimit | held_out
+axum | matched path route | axum/src/extract/matched_path.rs | MatchedPath | held_out
+axum | listener extension | axum/src/serve/listener.rs | ListenerExt | held_out
+axum | extractor from request parts | axum-core/src/extract/mod.rs | FromRequestParts | held_out
+axum | optional extractor | axum-core/src/extract/option.rs | OptionalFromRequest | held_out
+axum | define rejection macro | axum-core/src/macros.rs | __define_rejection | held_out
+axum | all the tuples impl | axum-core/src/macros.rs | all_the_tuples | held_out
+axum | keep alive server events | axum/src/response/sse.rs | member:keep_alive | held_out
+axum | event retry duration | axum/src/response/sse.rs | member:retry | held_out
+axum | route layer method router | axum/src/routing/method_routing.rs | member:route_layer | held_out
+axum | fallback service method router | axum/src/routing/method_routing.rs | member:fallback_service | held_out
+axum | handle error method router | axum/src/routing/method_routing.rs | member:handle_error | held_out
+axum | websocket protocols | axum/src/extract/ws.rs | member:protocols | held_out
+axum | failed upgrade callback | axum/src/extract/ws.rs | member:on_failed_upgrade | held_out
+axum | graceful shutdown serve | axum/src/serve/mod.rs | member:with_graceful_shutdown | held_out
+# react-hook-form (hooks and components, many type aliases; no classes, so no member rows)
+react-hook-form | form context provider | src/useFormContext.tsx | FormProvider | held_out
+react-hook-form | controller render field | src/controller.tsx | Controller | held_out
+react-hook-form | use field array | src/useFieldArray.ts | useFieldArray | held_out
+react-hook-form | watch form values subscribe | src/useWatch.ts | useWatch | held_out
+react-hook-form | form state subscribe | src/formState.tsx | FormStateSubscribe | held_out
+react-hook-form | error message component | src/errorMessage.tsx | ErrorMessage | held_out
+react-hook-form | isomorphic layout effect | src/useIsomorphicLayoutEffect.ts | useIsomorphicLayoutEffect | held_out
+react-hook-form | resync form state reconnect | src/useResyncOnReconnect.ts | useResyncOnReconnect | held_out
+react-hook-form | mark dirty fields | src/logic/getDirtyFields.ts | markFieldsDirty | held_out
+react-hook-form | iterate fields by action | src/logic/iterateFieldsByAction.ts | iterateFieldsByAction | held_out
+react-hook-form | multiple field errors | src/types/errors.ts | MultipleFieldErrors | held_out
+react-hook-form | register options validation | src/types/validator.ts | RegisterOptions | held_out
+react-hook-form | swap field array items | src/types/fieldArray.ts | UseFieldArraySwap | held_out
+react-hook-form | create form control | src/logic/createFormControl.ts | createFormControl | held_out
+# commander (JavaScript; a few functions and large classes, so mostly member rows)
+commander | suggest similar command | lib/suggestSimilar.js | suggestSimilar | held_out
+commander | edit distance words | lib/suggestSimilar.js | editDistance | held_out
+commander | human readable argument name | lib/argument.js | humanReadableArgName | held_out
+commander | camelcase option attribute | lib/option.js | camelcase | held_out
+commander | split option flags short long | lib/option.js | splitOptionFlags | held_out
+commander | use color output | lib/command.js | useColor | held_out
+commander | node inspector port | lib/command.js | incrementNodeInspectorPort | held_out
+commander | invalid argument error | lib/error.js | InvalidArgumentError | held_out
+commander | dual options negate | lib/option.js | DualOptions | held_out
+commander | execute subcommand executable file | lib/command.js | member:_executeSubCommand | held_out
+commander | check missing mandatory options | lib/command.js | member:_checkForMissingMandatoryOptions | held_out
+commander | parse options env variables | lib/command.js | member:_parseOptionsEnv | held_out
+commander | name from filename | lib/command.js | member:nameFromFilename | held_out
+commander | help option flags | lib/command.js | member:helpOption | held_out
+commander | visible global options | lib/help.js | member:visibleGlobalOptions | held_out
+commander | format item list heading | lib/help.js | member:formatItemList | held_out
+commander | make option mandatory | lib/option.js | member:makeOptionMandatory | held_out
+commander | value from option | lib/option.js | member:valueFromOption | held_out
+commander | exit override throw | lib/command.js | member:exitOverride | held_out
