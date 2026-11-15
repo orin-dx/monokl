@@ -88,8 +88,8 @@ The snippet (`output/agent.rs`) shows the matched lines of a block, at most `--s
 `budget.rs` cuts the ranked, deduplicated list in three steps, in this order. Core holds none of them; it returns every ranked block.
 
 1. **Relevance cut** (`--min-score`, default 0.3). Keep the leading rows whose `final_score` is at least `min_score * top`, where `top` is the first row's score. The scores fall down the list, so the kept rows are a prefix. A score equal to the threshold is kept, so rows that tie with the top survive `--min-score 1`. A top score of 0 keeps every row (the threshold is 0). `--min-score 0` turns the cut off.
-2. **Floor.** The first three rows are kept whatever their score, or all of them when there are fewer. The floor lifts the relevance cut only.
-3. **Row cap** (`--max-results`, default 15). Applies to what is left and wins over the floor: `--max-results 1` prints one row.
+2. **Floor.** The first eight rows are kept whatever their score, or all of them when there are fewer. The floor lifts the relevance cut only.
+3. **Row cap** (`--max-results`, default 20). Applies to what is left and wins over the floor: `--max-results 1` prints one row.
 4. **Token cap** (`--max-tokens`, default 20,000). The longest prefix whose printed rows fit; a row larger than the whole cap leaves no rows. It counts the printed rows, so it sees the snippet length.
 
 When any rule dropped rows the response is truncated: `totalCount` is the number of ranked blocks and the help line names the flag for each rule that cut: `showing 4 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`, or `--max-tokens N` when the tokens ran out before the rows. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation` and `blocks_cut_by_relevance` only.

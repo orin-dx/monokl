@@ -23,7 +23,7 @@ Member questions use the same file format with the symbol cell written `member:n
 constructor, accessor or arrow-function property declared on an indented line inside a class. The script re-checks that
 line with rg and scores them on their own line, apart from the top-level questions. A member question is a hit when the
 answer file is in monokl's first `--top` files and the member's declaration line is in the output; the gate is
-`--min-member-recall`, 0.85 since the lean default output (05 §46): the lean rows cost one member of 16.
+`--min-member-recall`.
 
 Each repository has a language (the optional fourth column of rg-compare.repos, default `ts`). A `rust` repository is
 searched with `*.rs`, its declarations are `fn|struct|enum|trait|type|const|static|mod|macro_rules!` at the start of a
@@ -32,7 +32,7 @@ line (optional `pub`, `pub(crate)`), and its members are `fn` and `const` on an 
 script works on whole files and cannot split them, so a `mod tests` is skipped when sampling and test code inside
 source files still counts as source here. monokl runs without `--language`, which searches every registered language,
 so no flag is passed. Rust rows (identifiers, questions and members together) are scored apart from the TypeScript
-gates and gated by `--min-rust-recall`, which defaults to 0.85: 0.9 when the analyzer shipped, lowered by one row of 24 for the lean default output (05 §46). A Rust repository that monokl
+gates and gated by `--min-rust-recall`, which defaults to 0.9 now that the analyzer ships. A Rust repository that monokl
 cannot search yet scores 0 hits, which the report states.
 
 Held-out rows guard against tuning to the pinned set. A repository whose options include `held-out` in rg-compare.repos is
@@ -314,12 +314,12 @@ def main():
     parser.add_argument("--min-recall", type=float, default=0.95, help="fail when the share of hits is lower")
     parser.add_argument("--min-question-recall", type=float, default=0.9,
                         help="fail when the share of questions with the answer file in the top files is lower")
-    parser.add_argument("--min-member-recall", type=float, default=0.85,
+    parser.add_argument("--min-member-recall", type=float, default=0.9,
                         help="fail when the share of member questions with the answer file in the top files and the "
                              "member's declaration in the output is lower")
-    parser.add_argument("--min-rust-recall", type=float, default=0.85,
+    parser.add_argument("--min-rust-recall", type=float, default=0.9,
                         help="fail when the share of Rust hits (identifiers, questions and members pooled) is lower; "
-                             "0.85 by default")
+                             "0.9 by default")
     parser.add_argument("--min-heldout-recall", type=float, default=0.9,
                         help="fail when the share of held-out questions with the answer file in the top files is lower; "
                              "0.9 by default")

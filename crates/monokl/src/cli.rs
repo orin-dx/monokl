@@ -58,13 +58,13 @@ struct SearchArgs {
     /// Searches only this language: typescript, javascript or rust.
     #[arg(long, value_enum)]
     language: Option<Language>,
-    /// The most results to print. It also caps the rows `--min-score` keeps, so it can cut below the first three.
+    /// The most results to print. It also caps the rows `--min-score` keeps, so it can cut below the first eight.
     #[arg(long, default_value_t = Budget::default().max_results)]
     max_results: usize,
     /// The most estimated tokens (one per three bytes) across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
-    /// Drops the rows scoring below this fraction of the top row's score, but never one of the first three. 0 keeps every
+    /// Drops the rows scoring below this fraction of the top row's score, but never one of the first eight. 0 keeps every
     /// row up to `--max-results`; 1 keeps only the rows that tie with the top.
     #[arg(long, value_name = "FRACTION", default_value_t = Budget::default().min_score, value_parser = parse_min_score)]
     min_score: f64,
@@ -345,7 +345,7 @@ mod tests {
         assert!(out.contains("[default: 0.3]"), "got: {out}");
         assert!(out.contains("--snippet-lines <N>"), "got: {out}");
         assert!(out.contains("[default: 1]"), "got: {out}");
-        assert!(out.contains("[default: 15]"), "got: {out}");
+        assert!(out.contains("[default: 20]"), "got: {out}");
     }
 
     #[test]

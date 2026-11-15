@@ -386,40 +386,157 @@ fn the_flags_that_restore_the_whole_output_print_every_row_with_a_three_line_sni
 }
 
 #[test]
-fn by_default_a_search_prints_the_rows_above_the_relevance_cut_with_a_one_line_snippet() {
-    // The top score is 0.436924, so the cut is 0.131077: rows 1 to 3 stay, row 4 (0.09468) goes.
+fn by_default_a_result_of_up_to_eight_rows_is_printed_whole_with_one_line_snippets() {
+    // The top score is 0.436924, so the relevance cut is 0.131077 and rows 4 to 8 lie below it, but the floor keeps
+    // the first eight rows, which are all there are.
     let output = monokl(&["search", "price", "."]);
     assert_eq!(
         stdout(&output),
-        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
          \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n...and 1 more matching line\",1,0.436924\n\
          \x20 src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693\n\
          \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n...and 1 more matching line\",3,0.164513\n\
-         totalCount: 8\n\
-         help[1]: \"showing 3 of 8; --min-score 0 for more, or refine with +term/-term\"\n"
+         \x20 src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",4,0.09468\n\
+         \x20 src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",5,0.090782\n\
+         \x20 src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",6,0.086106\n\
+         \x20 src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",7,0.052697\n\
+         \x20 src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",8,0.047174\n"
+    );
+}
+
+/// The `price` function, two functions that name it in a parameter or a template, and ten that only call it: thirteen
+/// matching blocks in all, the last ten far below the top score.
+fn pricing_ts() -> String {
+    let callers: String = ('A'..='J')
+        .map(|letter| {
+            "\nexport function listL(items: Item[]): number {\n  return items.map(price).length;\n}\n"
+                .replace('L', &letter.to_string())
+        })
+        .collect();
+    format!(
+        "export function price(item: Item): number {{\n  return item.cents;\n}}\n\n\
+         export function applyPrice(item: Item, price: number): Item {{\n  return {{ ...item, cents: price }};\n}}\n\n\
+         export function priceLabel(item: Item): string {{\n  return `${{price(item)}} cents`;\n}}\n\
+         {callers}\nexport interface Item {{\n  cents: number;\n}}\n"
+    )
+}
+
+/// The same shape in Rust.
+fn pricing_rs() -> String {
+    let callers: String = ('a'..='j')
+        .map(|letter| {
+            "\npub fn list_L(items: &[Item]) -> usize {\n    items.iter().map(price).count()\n}\n"
+                .replace('L', &letter.to_string())
+        })
+        .collect();
+    format!(
+        "pub fn price(item: &Item) -> u64 {{\n    item.cents\n}}\n\n\
+         pub fn apply_price(item: &Item, price: u64) -> Item {{\n    Item {{ cents: price, ..*item }}\n}}\n\n\
+         pub fn price_label(item: &Item) -> String {{\n    format!(\"{{}} cents\", price(item))\n}}\n\
+         {callers}\npub struct Item {{\n    pub cents: u64,\n}}\n"
+    )
+}
+
+fn pricing_project(file: &str, text: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src").join(file), text).unwrap();
+    dir
+}
+
+/// The ranks of the rows a search printed, read from the end of each row (the score is the last cell, the rank the one
+/// before).
+fn printed_ranks(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(1)
+        .filter(|row| row.starts_with("  "))
+        .filter_map(|row| row.rsplit(',').nth(1))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn by_default_a_typescript_search_keeps_the_rows_above_the_cut_and_up_to_the_floor_then_says_how_to_see_more() {
+    // The top score is 0.565047, so the cut is 0.169514: rows 1 to 3 reach it. The floor keeps rows 4 to 8 (0.054906)
+    // and drops rows 9 to 13.
+    let dir = pricing_project("pricing.ts", &pricing_ts());
+    let output = monokl_in(dir.path(), &["search", "price", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/pricing.ts,1,3,function,null,\"function price(item: Item): number\",null,1,0.565047\n\
+         \x20 src/pricing.ts,5,7,function,null,\"function applyPrice(item: Item, price: number): Item\",\"6: return { ...item, cents: price };\",2,0.269552\n\
+         \x20 src/pricing.ts,9,11,function,null,\"function priceLabel(item: Item): string\",\"10: return `${price(item)} cents`;\",3,0.240512\n\
+         \x20 src/pricing.ts,13,15,function,null,\"function listA(items: Item[]): number\",\"14: return items.map(price).length;\",4,0.054906\n\
+         \x20 src/pricing.ts,17,19,function,null,\"function listB(items: Item[]): number\",\"18: return items.map(price).length;\",5,0.054906\n\
+         \x20 src/pricing.ts,21,23,function,null,\"function listC(items: Item[]): number\",\"22: return items.map(price).length;\",6,0.054906\n\
+         \x20 src/pricing.ts,25,27,function,null,\"function listD(items: Item[]): number\",\"26: return items.map(price).length;\",7,0.054906\n\
+         \x20 src/pricing.ts,29,31,function,null,\"function listE(items: Item[]): number\",\"30: return items.map(price).length;\",8,0.054906\n\
+         totalCount: 13\n\
+         help[1]: \"showing 8 of 13; --min-score 0 for more, or refine with +term/-term\"\n"
+    );
+}
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn by_default_a_rust_search_keeps_the_rows_above_the_cut_and_up_to_the_floor_then_says_how_to_see_more() {
+    // The top score is 0.575631, so the cut is 0.172689: rows 1 to 3 reach it. The floor keeps rows 4 to 8 (0.054839)
+    // and drops rows 9 to 13.
+    let dir = pricing_project("pricing.rs", &pricing_rs());
+    let output = monokl_in(dir.path(), &["search", "price", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/pricing.rs,1,3,function,null,\"pub fn price(item: &Item) -> u64\",null,1,0.575631\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn apply_price(item: &Item, price: u64) -> Item\",\"6: Item { cents: price, ..*item }\",2,0.26858\n\
+         \x20 src/pricing.rs,9,11,function,null,\"pub fn price_label(item: &Item) -> String\",\"10: format!(\\\"{} cents\\\", price(item))\",3,0.240124\n\
+         \x20 src/pricing.rs,13,15,function,null,\"pub fn list_a(items: &[Item]) -> usize\",\"14: items.iter().map(price).count()\",4,0.054839\n\
+         \x20 src/pricing.rs,17,19,function,null,\"pub fn list_b(items: &[Item]) -> usize\",\"18: items.iter().map(price).count()\",5,0.054839\n\
+         \x20 src/pricing.rs,21,23,function,null,\"pub fn list_c(items: &[Item]) -> usize\",\"22: items.iter().map(price).count()\",6,0.054839\n\
+         \x20 src/pricing.rs,25,27,function,null,\"pub fn list_d(items: &[Item]) -> usize\",\"26: items.iter().map(price).count()\",7,0.054839\n\
+         \x20 src/pricing.rs,29,31,function,null,\"pub fn list_e(items: &[Item]) -> usize\",\"30: items.iter().map(price).count()\",8,0.054839\n\
+         totalCount: 13\n\
+         help[1]: \"showing 8 of 13; --min-score 0 for more, or refine with +term/-term\"\n"
     );
 }
 
 #[test]
-fn a_min_score_of_zero_keeps_every_row_up_to_the_cap_and_leaves_the_snippet_at_one_line() {
-    let output = monokl(&["search", "price", ".", "--min-score", "0"]);
-    let text = stdout(&output);
-    assert_eq!(text.lines().next(), Some(PRICE_HEADER.replace('N', "8").as_str()));
+fn a_min_score_of_zero_prints_every_row_up_to_the_cap_and_no_help_line() {
+    let dir = pricing_project("pricing.ts", &pricing_ts());
+    let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--min-score", "0"]));
     assert_eq!(
-        text.lines().skip(1).map(|row| row.rsplit(',').nth(1).unwrap_or("")).collect::<Vec<_>>(),
-        ["1", "2", "3", "4", "5", "6", "7", "8"],
-        "got: {text}"
+        text.lines().next(),
+        Some("search[13]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:")
     );
+    assert_eq!(printed_ranks(&text), (1..=13).map(|rank| rank.to_string()).collect::<Vec<_>>(), "got: {text}");
     assert!(!text.contains("help["), "got: {text}");
     assert!(!text.contains("totalCount"), "got: {text}");
 }
 
 #[test]
-fn the_relevance_cut_and_the_cap_both_say_so_in_the_help_line() {
+fn a_min_score_of_one_keeps_the_floor_and_the_rows_that_tie_with_the_top() {
+    let dir = pricing_project("pricing.ts", &pricing_ts());
+    let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--min-score", "1"]));
+    assert_eq!(printed_ranks(&text), (1..=8).map(|rank| rank.to_string()).collect::<Vec<_>>(), "got: {text}");
+}
+
+#[test]
+fn the_row_cap_wins_over_the_floor_and_the_help_line_names_both_flags_when_both_cut() {
+    let dir = pricing_project("pricing.ts", &pricing_ts());
+    let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--max-results", "5"]));
+    assert_eq!(printed_ranks(&text), ["1", "2", "3", "4", "5"], "got: {text}");
+    assert_eq!(
+        text.lines().last(),
+        Some("help[1]: \"showing 5 of 13; --min-score 0 or --max-results N for more, or refine with +term/-term\"")
+    );
+}
+
+#[test]
+fn the_help_line_names_only_the_row_cap_when_the_relevance_cut_dropped_nothing() {
     let output = monokl(&["search", "price", ".", "--max-results", "2"]);
     assert_eq!(
         stdout(&output).lines().last(),
-        Some("help[1]: \"showing 2 of 8; --min-score 0 or --max-results N for more, or refine with +term/-term\"")
+        Some("help[1]: \"showing 2 of 8; --max-results N for more, or refine with +term/-term\"")
     );
 }
 
@@ -525,22 +642,22 @@ pub struct Item {
 
 #[cfg(feature = "lang-rust")]
 #[test]
-fn a_rust_search_keeps_the_first_three_rows_below_the_relevance_cut_and_drops_the_rest() {
+fn a_rust_snippet_is_one_line_by_default_and_the_old_three_lines_on_request() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/pricing.rs"), PRICING_RS).unwrap();
 
-    // The top score is 3.316866, so the cut is 0.995: only the first two rows reach it, and the floor keeps the third
-    // (0.8735). The fourth (0.538908) and the fifth (0.446085) are dropped.
+    // Five rows are fewer than the floor, so every row prints; only the second row's second matching line is counted
+    // instead of shown.
     let output = monokl_in(dir.path(), &["search", "price money", "."]);
     assert_eq!(
         stdout(&output),
-        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
          \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
          \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n...and 1 more matching line\",2,2.939514\n\
          \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
-         totalCount: 5\n\
-         help[1]: \"showing 3 of 5; --min-score 0 for more, or refine with +term/-term\"\n"
+         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
+         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
     );
 
     let output = monokl_in(dir.path(), &["search", "price money", ".", "--min-score", "0", "--snippet-lines", "3"]);

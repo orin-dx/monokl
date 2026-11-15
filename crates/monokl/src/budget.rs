@@ -13,7 +13,7 @@ use michi::TruncationOutcome;
 use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
 /// The rows the relevance cut always keeps, when that many exist.
-pub const MIN_ROWS: usize = 3;
+pub const MIN_ROWS: usize = 8;
 
 /// What one search response must stay within: a relevance cut and two caps.
 ///
@@ -25,7 +25,7 @@ pub const MIN_ROWS: usize = 3;
 /// use monokl::budget::Budget;
 ///
 /// let budget = Budget::default();
-/// assert_eq!((budget.max_results, budget.max_tokens, budget.min_score), (15, 20_000, 0.3));
+/// assert_eq!((budget.max_results, budget.max_tokens, budget.min_score), (20, 20_000, 0.3));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -40,7 +40,7 @@ pub struct Budget {
 
 impl Default for Budget {
     fn default() -> Self {
-        Self { max_results: 15, max_tokens: 20_000, min_score: 0.3 }
+        Self { max_results: 20, max_tokens: 20_000, min_score: 0.3 }
     }
 }
 
@@ -187,24 +187,36 @@ mod tests {
         ranks(&apply_budget(ranked, total, &budget, &texts, Vec::new()))
     }
 
+    /// The scores `head` followed by `n` copies of `low`.
+    fn then(head: &[f64], low: f64, n: usize) -> Vec<f64> {
+        head.iter().copied().chain(std::iter::repeat_n(low, n)).collect()
+    }
+
+    fn one_to(n: usize) -> Vec<usize> {
+        (1..=n).collect()
+    }
+
     #[test]
     fn default_budget_is_the_agent_default() {
-        assert_eq!(Budget::default(), Budget { max_results: 15, max_tokens: 20_000, min_score: 0.3 });
+        assert_eq!(Budget::default(), Budget { max_results: 20, max_tokens: 20_000, min_score: 0.3 });
+        assert_eq!(MIN_ROWS, 8);
     }
 
     #[test]
     fn a_row_is_kept_when_it_scores_at_least_the_fraction_of_the_top_score() {
-        // 0.5 * 0.5 is exactly 0.25 in binary, so the boundary is exact.
-        assert_eq!(relevant(&[0.5, 0.4, 0.25, 0.2499, 0.1], 0.5), [1, 2, 3]);
-        assert_eq!(relevant(&[1.0, 0.9, 0.5, 0.5, 0.4999, 0.1], 0.5), [1, 2, 3, 4]);
-        assert_eq!(relevant(&[8.0, 4.0, 2.4, 2.4, 2.3999, 0.1], 0.3), [1, 2, 3, 4]);
+        // 0.5 * 0.5 is exactly 0.25 in binary, so the boundary is exact. Nine rows lie above it, so the floor of 8
+        // does not decide these.
+        assert_eq!(relevant(&[vec![0.5; 9], vec![0.25, 0.2499, 0.1]].concat(), 0.5), one_to(10));
+        assert_eq!(relevant(&[vec![1.0; 9], vec![0.5, 0.4999]].concat(), 0.5), one_to(10));
+        assert_eq!(relevant(&[vec![8.0, 4.0], vec![2.4; 8], vec![2.3999, 0.1]].concat(), 0.3), one_to(10));
     }
 
     #[test]
-    fn the_first_three_rows_are_kept_whatever_their_score() {
-        assert_eq!(relevant(&[1.0, 0.1, 0.05, 0.04, 0.01], 0.3), [1, 2, 3]);
-        assert_eq!(relevant(&[1.0, 0.9, 0.05, 0.04, 0.01], 0.3), [1, 2, 3]);
-        assert_eq!(relevant(&[1.0, 0.9, 0.8, 0.04, 0.01], 0.3), [1, 2, 3]);
+    fn the_first_eight_rows_are_kept_whatever_their_score() {
+        assert_eq!(relevant(&then(&[1.0], 0.05, 11), 0.3), one_to(8));
+        assert_eq!(relevant(&then(&[1.0; 3], 0.05, 9), 0.3), one_to(8));
+        assert_eq!(relevant(&then(&[1.0; 8], 0.01, 4), 0.3), one_to(8));
+        assert_eq!(relevant(&then(&[1.0; 9], 0.01, 3), 0.3), one_to(9));
     }
 
     #[test]
@@ -212,27 +224,29 @@ mod tests {
         assert_eq!(relevant(&[], 0.3), Vec::<usize>::new());
         assert_eq!(relevant(&[1.0], 0.3), [1]);
         assert_eq!(relevant(&[1.0, 0.0], 0.3), [1, 2]);
+        assert_eq!(relevant(&then(&[1.0], 0.0, 6), 0.3), one_to(7));
+        assert_eq!(relevant(&then(&[1.0], 0.0, 7), 0.3), one_to(8));
     }
 
     #[test]
     fn a_row_that_ties_with_the_top_is_kept_at_the_strictest_fraction() {
-        assert_eq!(relevant(&[1.0, 1.0, 1.0, 1.0, 0.99, 0.1], 1.0), [1, 2, 3, 4]);
-        assert_eq!(relevant(&[1.0, 0.9, 0.8, 0.7, 0.6], 1.0), [1, 2, 3]);
+        assert_eq!(relevant(&[vec![1.0; 10], vec![0.99, 0.1]].concat(), 1.0), one_to(10));
+        assert_eq!(relevant(&then(&[1.0], 0.9, 11), 1.0), one_to(8));
     }
 
     #[test]
     fn a_top_score_of_zero_cuts_nothing() {
-        assert_eq!(relevant(&[0.0, 0.0, 0.0, 0.0, 0.0], 0.3), [1, 2, 3, 4, 5]);
+        assert_eq!(relevant(&[0.0; 12], 0.3), one_to(12));
     }
 
     #[test]
     fn a_fraction_of_zero_turns_the_relevance_cut_off() {
-        assert_eq!(relevant(&[1.0, 0.1, 0.01, 0.001, 0.0001, 0.0], 0.0), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(relevant(&then(&[1.0, 0.1, 0.01, 0.001], 0.0, 8), 0.0), one_to(12));
     }
 
     #[test]
     fn a_not_a_number_score_ends_the_relevant_rows_but_the_floor_still_holds() {
-        assert_eq!(relevant(&[1.0, f64::NAN, 0.9, 0.8, 0.7], 0.3), [1, 2, 3]);
+        assert_eq!(relevant(&then(&[1.0, f64::NAN], 0.9, 10), 0.3), one_to(8));
     }
 
     #[test]
@@ -244,43 +258,42 @@ mod tests {
             let budget = Budget { max_results, max_tokens: usize::MAX, min_score: 0.3 };
             apply_budget(ranked, total, &budget, &texts, Vec::new())
         };
-        assert_eq!(ranks(&at(1, &[1.0, 0.1, 0.1, 0.1])), [1]);
-        assert_eq!(ranks(&at(2, &[1.0, 0.9, 0.8, 0.7])), [1, 2]);
+        assert_eq!(ranks(&at(1, &then(&[1.0], 0.1, 3))), [1]);
+        assert_eq!(ranks(&at(5, &[1.0; 10])), one_to(5));
         assert_eq!(ranks(&at(0, &[1.0, 0.9, 0.8])), Vec::<usize>::new());
-        let fifteen_of_twenty = at(15, &[1.0; 20]);
-        assert_eq!(fifteen_of_twenty.results.len(), 15);
-        assert_eq!(fifteen_of_twenty.total_blocks_before_truncation, 20);
+        let twenty_of_thirty = at(20, &[1.0; 30]);
+        assert_eq!(twenty_of_thirty.results.len(), 20);
+        assert_eq!(twenty_of_thirty.total_blocks_before_truncation, 30);
     }
 
     #[test]
     fn the_response_counts_the_rows_each_rule_cut() {
-        let scores = [1.0, 0.9, 0.8, 0.7, 0.1, 0.05];
-        let ranked = scored(&scores);
+        let ranked = scored(&then(&[1.0; 9], 0.1, 2));
         let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
 
-        let by_relevance = apply_budget(ranked.clone(), 6, &Budget::default(), &texts, Vec::new());
-        assert_eq!(ranks(&by_relevance), [1, 2, 3, 4]);
-        assert_eq!((by_relevance.blocks_cut_by_relevance, by_relevance.total_blocks_before_truncation), (2, 6));
+        let by_relevance = apply_budget(ranked.clone(), 11, &Budget::default(), &texts, Vec::new());
+        assert_eq!(ranks(&by_relevance), one_to(9));
+        assert_eq!((by_relevance.blocks_cut_by_relevance, by_relevance.total_blocks_before_truncation), (2, 11));
         assert!(by_relevance.truncated);
 
         let by_both =
-            apply_budget(ranked.clone(), 6, &Budget { max_results: 3, ..Budget::default() }, &texts, Vec::new());
-        assert_eq!(ranks(&by_both), [1, 2, 3]);
-        assert_eq!((by_both.blocks_cut_by_relevance, by_both.total_blocks_before_truncation), (2, 6));
+            apply_budget(ranked.clone(), 11, &Budget { max_results: 5, ..Budget::default() }, &texts, Vec::new());
+        assert_eq!(ranks(&by_both), one_to(5));
+        assert_eq!((by_both.blocks_cut_by_relevance, by_both.total_blocks_before_truncation), (2, 11));
 
-        let by_cap_only = apply_budget(ranked, 6, &caps(3, 1000), &texts, Vec::new());
-        assert_eq!(ranks(&by_cap_only), [1, 2, 3]);
-        assert_eq!((by_cap_only.blocks_cut_by_relevance, by_cap_only.total_blocks_before_truncation), (0, 6));
+        let by_cap_only = apply_budget(ranked, 11, &caps(5, 1000), &texts, Vec::new());
+        assert_eq!(ranks(&by_cap_only), one_to(5));
+        assert_eq!((by_cap_only.blocks_cut_by_relevance, by_cap_only.total_blocks_before_truncation), (0, 11));
     }
 
     #[test]
     fn the_token_cap_applies_to_the_rows_the_relevance_cut_kept() {
-        let ranked = scored(&[1.0, 0.9, 0.8, 0.7, 0.1]);
-        let texts = vec!["abc".to_owned(); 5];
-        let budget = Budget { max_results: 15, max_tokens: 2, min_score: 0.3 };
-        let response = apply_budget(ranked, 5, &budget, &texts, Vec::new());
+        let ranked = scored(&then(&[1.0; 9], 0.1, 1));
+        let texts = vec!["abc".to_owned(); 10];
+        let budget = Budget { max_results: 20, max_tokens: 2, min_score: 0.3 };
+        let response = apply_budget(ranked, 10, &budget, &texts, Vec::new());
         assert_eq!(ranks(&response), [1, 2]);
-        assert_eq!((response.blocks_cut_by_relevance, response.total_blocks_before_truncation), (1, 5));
+        assert_eq!((response.blocks_cut_by_relevance, response.total_blocks_before_truncation), (1, 10));
     }
 
     #[test]

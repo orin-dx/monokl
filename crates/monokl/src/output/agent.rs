@@ -27,7 +27,7 @@ const SNIPPET_LINE_CHARS: usize = 160;
 /// use monokl::output::agent::SearchView;
 ///
 /// let view = SearchView::default();
-/// assert_eq!((view.snippet_lines, view.max_results), (1, 15));
+/// assert_eq!((view.snippet_lines, view.max_results), (1, 20));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchView {
@@ -629,10 +629,10 @@ mod projection_tests {
 
     #[test]
     fn the_help_line_names_the_min_score_flag_when_the_relevance_cut_dropped_rows() {
-        let scores = [1.0, 0.9, 0.8, 0.7, 0.1, 0.05];
+        let scores = [vec![1.0; 9], vec![0.1, 0.05]].concat();
         assert_eq!(
             help_line(&scores, &crate::budget::Budget::default()).as_deref(),
-            Some("showing 4 of 6; --min-score 0 for more, or refine with +term/-term")
+            Some("showing 9 of 11; --min-score 0 for more, or refine with +term/-term")
         );
     }
 
@@ -647,10 +647,11 @@ mod projection_tests {
 
     #[test]
     fn the_help_line_names_both_flags_when_both_rules_dropped_rows() {
-        let budget = crate::budget::Budget { max_results: 3, ..crate::budget::Budget::default() };
+        let budget = crate::budget::Budget { max_results: 5, ..crate::budget::Budget::default() };
+        let scores = [vec![1.0; 9], vec![0.1]].concat();
         assert_eq!(
-            help_line(&[1.0, 0.9, 0.8, 0.7, 0.1], &budget).as_deref(),
-            Some("showing 3 of 5; --min-score 0 or --max-results N for more, or refine with +term/-term")
+            help_line(&scores, &budget).as_deref(),
+            Some("showing 5 of 10; --min-score 0 or --max-results N for more, or refine with +term/-term")
         );
     }
 
