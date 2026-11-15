@@ -65,6 +65,16 @@ pub fn rank_blocks<S: BuildHasher>(
     query_terms: &[&str],
     df: &HashMap<String, usize, S>,
 ) -> Vec<RankedBlock> {
+    rank_counting(blocks, query_terms, df, &mut || {})
+}
+
+/// [`rank_blocks`] that calls `on_compare` once for every pair of blocks the sort compares, so a test can count the work.
+fn rank_counting<S: BuildHasher>(
+    blocks: Vec<(CodeBlock, Vec<String>)>,
+    query_terms: &[&str],
+    df: &HashMap<String, usize, S>,
+    on_compare: &mut dyn FnMut(),
+) -> Vec<RankedBlock> {
     if blocks.is_empty() {
         return Vec::new();
     }
@@ -80,7 +90,10 @@ pub fn rank_blocks<S: BuildHasher>(
             RankedBlock { block, final_score, rank: 0 }
         })
         .collect();
-    ranked.sort_by(best_first);
+    ranked.sort_by(|a, b| {
+        on_compare();
+        best_first(a, b)
+    });
     for (rank, block) in (1..).zip(&mut ranked) {
         block.rank = rank;
     }
@@ -139,6 +152,28 @@ mod tests {
 
     fn tokens(words: &[&str]) -> Vec<String> {
         words.iter().map(ToString::to_string).collect()
+    }
+
+    /// Four times the blocks must cost a little over four times the sort comparisons (n log n): a quadratic step would
+    /// cost 16 times as many. Counting them gives the same answer on every machine and load.
+    #[test]
+    fn ranking_compares_a_near_linear_number_of_pairs() {
+        let comparisons = |count: usize| {
+            let input: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut b = block(&format!("src/f{index}.ts"), 1, 5, SymbolKind::Function, Vec::new());
+                    b.code = format!("function handle{index}() {{ return needle; }}");
+                    (b, tokens(&["needle", "handle"]))
+                })
+                .collect();
+            let df: HashMap<String, usize> = HashMap::from([("needle".to_string(), count)]);
+            let mut compared = 0;
+            rank_counting(input, &["needle"], &df, &mut || compared += 1);
+            compared
+        };
+        let (small, large) = (comparisons(2_500), comparisons(10_000));
+        assert!(small > 0, "nothing was compared");
+        assert!(large <= 6 * small, "{large} comparisons for 10000 blocks against {small} for 2500");
     }
 
     // Only the signature differs, and it is not a sort key, so the sort must be stable for these to keep input order.

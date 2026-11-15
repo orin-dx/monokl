@@ -26,7 +26,7 @@ Every stage states its bound in its doc comment. Work and memory are bounded by 
 1. No thread stack is sized by input. Parse on a fixed-size stack and reject deep nesting with an O(n) pre-scan.
 2. Check file size before reading, and cap hit text length.
 3. A global `--timeout` stops analysis early and reports what it skipped in a diagnostic.
-4. No step is super-linear in match count. A scaling test in CI asserts the time ratio between two input sizes.
+4. No step is super-linear in match count. A scaling test in CI counts the work (comparisons, reads, filter calls) at two input sizes and asserts the ratio. No test asserts elapsed time: it passes on an idle machine and fails under load.
 5. Results are deterministic regardless of thread timing: fold in walk order.
 6. A file no analyzer owns is never opened.
 
@@ -38,7 +38,7 @@ Rules 2 to 4 are done:
 
 - Rule 2: a file over 4 MiB (the analyzers' parse cap) is checked on its open handle and never read, and is reported as one grouped `over 4 MiB` line. A matching line is kept to 4,096 bytes and the cut lines are counted in a warning. 40 files of 5 MB went from 479 MB to 5 MB of RSS, and one 300 MB line from 752 MB to 5 MB.
 - Rule 3: `--timeout <SECONDS>` (default 30, `0` for none) is checked between files in text search and between batches in analysis. Each stage finishes its first batch, and an expired search reports `partial result: ... expired after searching|analyzing N of M files`.
-- Rule 4: `tests/scaling.rs` asserts that 4 times the blocks or files takes under 10 times as long, for ranking and dedup (three layouts), text search and a whole search.
+- Rule 4: unit tests next to each stage count work. Dedup (three layouts) and ranking count the pairs compared and assert that 4 times the blocks costs at most 5 (dedup) or 6 (ranking) times as many; a quadratic step costs 16. Text search asserts that the file filter is asked once per file, and a whole search that each matching file is read once, at two sizes. The failed-lookahead budget of the nesting scan is shown by a scan that only that budget can end.
 - Rule 5 is what the ordered batch fold already does.
 - Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
 

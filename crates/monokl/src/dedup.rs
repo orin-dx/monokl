@@ -45,12 +45,18 @@ use crate::types::{CodeBlock, RankedBlock};
 /// assert_eq!(kept, [(1, 1), (20, 2)]);
 /// ```
 pub fn dedup_blocks(blocks: Vec<RankedBlock>) -> Vec<RankedBlock> {
+    dedup_counting(blocks, &mut || {})
+}
+
+/// [`dedup_blocks`] that calls `on_compare` once for every pair of blocks it compares, so a test can count the work.
+fn dedup_counting(blocks: Vec<RankedBlock>, on_compare: &mut dyn FnMut()) -> Vec<RankedBlock> {
     let mut files = group_by_file(&blocks);
     let mut is_kept = vec![true; blocks.len()];
     for (idx, block) in blocks.iter().enumerate() {
         let Some(slot) = files.slot_of[idx] else { continue };
         let file = &mut files.groups[files.group_of[idx]];
         let is_duplicate = file.any_kept_overlap(block.block.line_start, block.block.line_end, |earlier| {
+            on_compare();
             let earlier = &blocks[earlier].block;
             !encloses_member(earlier, &block.block)
                 && !encloses_member(&block.block, earlier)
@@ -397,6 +403,44 @@ mod tests {
     fn a_plain_block_inside_another_plain_block_is_still_a_duplicate() {
         let out = dedup_blocks(vec![ranked("a.ts", 1, 20, 1), ranked("a.ts", 5, 10, 2)]);
         assert_eq!(survivors(&out), [kept("a.ts", 1, 20, 1)]);
+    }
+
+    /// How the blocks of the scaling tests lie over files.
+    #[derive(Clone, Copy)]
+    enum Layout {
+        /// Five blocks per file, none overlapping.
+        ManyFiles,
+        /// Every block in one file, none overlapping.
+        OneFile,
+        /// Every block in one file, each overlapping the ones around it.
+        OneFileOverlapping,
+    }
+
+    /// How many pairs `dedup_blocks` compares for `count` blocks laid out as `layout`.
+    fn comparisons(count: usize, layout: Layout) -> usize {
+        let blocks = (0..count)
+            .map(|index| match layout {
+                Layout::ManyFiles => {
+                    ranked(&format!("src/f{}.ts", index / 5), 1 + (index % 5) * 10, 8 + (index % 5) * 10, index + 1)
+                }
+                Layout::OneFile => ranked("src/one.ts", 1 + index * 4, 3 + index * 4, index + 1),
+                Layout::OneFileOverlapping => ranked("src/one.ts", 1 + index, 20 + index, index + 1),
+            })
+            .collect();
+        let mut compared = 0;
+        dedup_counting(blocks, &mut || compared += 1);
+        compared
+    }
+
+    /// Four times the blocks must cost about four times the comparisons: a pass that compares every pair would cost 16
+    /// times as many. Counting comparisons instead of timing them gives the same answer on every machine and load.
+    #[rstest]
+    fn dedup_compares_a_linear_number_of_pairs(
+        #[values(Layout::ManyFiles, Layout::OneFile, Layout::OneFileOverlapping)] layout: Layout,
+    ) {
+        let (small, large) = (comparisons(2_500, layout), comparisons(10_000, layout));
+        // Blocks that overlap nothing are never compared at all, so the small count can be zero.
+        assert!(large <= 5 * small.max(1), "{large} comparisons for 10000 blocks against {small} for 2500");
     }
 
     #[rstest]
