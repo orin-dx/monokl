@@ -393,7 +393,7 @@ Resolves [07](./07-edge-cases-and-failure-modes.md) Part 1 #2 and replaces §21'
 
 - **Decision.** A class method, constructor, getter or setter, a class property holding an arrow or function expression, and the same kinds of member in a top-level or exported `const`/`let`/`var` object literal or `export default { ... }`, get a block next to the block that holds them when they span three or more lines. A new `parent` column after `nodeKind` names the holder (`class Foo`, `variable api`); `CodeBlock.parent` carries it and ranking copies it into `RankedBlock.parent_context`.
 - **Why.** A query naming a method returned the whole class, so the row neither named nor ranked the member. On the pinned repositories the member questions went from 2 of 16 to 15 of 16 with the declaration line in the output.
-- **A match goes to one place.** (Replaced by §41, which decides by the match's byte position.) A hit goes to the innermost block whose own text on that line matches, and to every block on the line when none matches, so a match is never lost. A holder keeps only the hits outside its members and is dropped when it has none. Rejected: giving the hit to the smallest block by line range, which credited a member that only shared the line (`} b() {`, `}, // note`) and lost `const needle` in `const a = 1; const needle = 2;`.
+- **A match goes to one place.** (Replaced by §42, which decides by the match's byte position.) A hit goes to the innermost block whose own text on that line matches, and to every block on the line when none matches, so a match is never lost. A holder keeps only the hits outside its members and is dropped when it has none. Rejected: giving the hit to the smallest block by line range, which credited a member that only shared the line (`} b() {`, `}, // note`) and lost `const needle` in `const a = 1; const needle = 2;`.
 - **Dedup.** A member is exempt only against the holder that strictly encloses it; same-level overlap behaves as before.
 - **Not split.** Interface and type members, hooks, members of anonymous classes, `module.exports = { ... }`, nested functions and nested object literals, and members under three lines (found through their holder).
 - **Open.** Hooks inside components. The parent of an object member renders as `variable api` because there is no object symbol kind.
@@ -426,7 +426,7 @@ Follows [ADR 0004](../adr/0004-search-stays-stateless-and-every-stage-has-a-stat
 - **Decision.** Text search reads at most 4 MiB of a file (`MAX_FILE_BYTES`), checked on the open handle. A larger file is skipped unread and reported as one grouped line. A hit line is kept to 4096 bytes (`MAX_LINE_BYTES`) and the cut lines are counted in a warning. `--timeout SECONDS` defaults to 30, accepts fractions, and 0 disables it. It is checked between files in text search and between batches in analysis. Each stage always finishes its first batch, so a tiny timeout still returns something. An expired run prints `partial result: ... expired after searching|analyzing N of M files` and exits 0. `tests/scaling.rs` takes the fastest of 5 runs at 2,500 and 10,000 inputs for rank and dedup, text search and a whole search, and asserts the time ratio stays under 10 (a quadratic step gives 16). It never asserts absolute times.
 - **Why.** The limit equals the 4 MiB parse cap, so a larger file could only come back as too large to parse after being read whole. On the PR's measurements a directory of forty 5 MB files peaked at 479 MB and one 300 MB line at 752 MB; both are now about 5 MB.
 - **Partial results.** They are the only output that differs between runs, because which files are reached depends on speed. A `-term` exclusion applies only to the files reached. Without a timeout, output is deterministic.
-- **Cost of the line cap.** A term that matches only past byte 4096 of a line is not seen by required-term and keyword checks, and since §41 the hit has no match range, so it owns no block. The warning says so.
+- **Cost of the line cap.** A term that matches only past byte 4096 of a line is not seen by required-term and keyword checks, and since §42 the hit has no match range, so it owns no block. The warning says so.
 
 ## 36. Parse on a fixed stack behind a nesting scan (2026-11-11)
 
@@ -438,6 +438,7 @@ Replaces §23's per-byte stack and its size caps (PR 83).
 - **Three soundness bugs found by review, fixed.** `for await (` lost its loop head to `await`. A `;` in JSX text reset what the open elements had charged. Each ambiguous `/` rescanned its whole line. Each has a test that parses the input in a child process on a small stack to show the hazard is real.
 - **A differential fuzzer.** `soundness_tests.rs` generates nesting-heavy token soups, scans them under a cap scaled to an 8 MiB stack, and parses every accepted input in a child process. An abort is a counterexample. It found more under-estimates, all fixed with regression tests: a template `}` inside a possible regex flipped backtick parity; Rust 2024 `#"` is a prefix, not a string; unterminated strings, templates, comments and raw strings hid the rest of the source; and the Rust cap let trees deeper than the drop thread holds (now 256 levels). On the final code the PR run found no counterexample.
 - **Evidence, not proof.** The fuzzer samples inputs; it does not prove the scan never under-estimates. `MONOKL_FUZZ_SECONDS` sets the run length. The estimate stays a deliberate over-estimate wherever the scan cannot tell syntax apart.
+- **Threads are reused within a search.** A thread per parse cost 3.5 s of CPU against 35 ms of parsing over 20,000 files on 18 cores, mostly mapping and unmapping 256 MiB stacks. A search now starts its analysis threads once with that stack (`with_parse_threads`), no more than it has files, and none when nothing matched; a parse on one of them runs in place. A parse anywhere else still gets its own thread. The stack, the nesting scan and the 4 MiB cap are unchanged.
 - **Open.** A valid file over the cap loses its results and the user sees it by name.
 
 ## 37. Deletions of code nothing reads (2026-11-11)
@@ -470,7 +471,13 @@ PRs 84 to 87. Each removed code whose only reader was a test or nothing.
 - **Offsets are the analyzer's.** `span` counts bytes of the lossy-decoded source the analyzer received, not of the file. Mapping the searcher's raw offsets onto it is step 2's work, as ADR 0005 states.
 - **Output.** None. No reader, no wire change, harness unchanged.
 
-## 41. A match is credited to the block it starts in (2026-11-14)
+## 41. The held-out set widens to Rust and two more TypeScript and JavaScript styles (2026-11-14)
+
+- **Decision.** Four repositories join the held-out rows, none sampled for identifiers and none tuned on: tokio v1.54.1 (macro-heavy), axum v0.8.9 (trait and impl heavy), react-hook-form v7.92.0 (hooks library) and commander v15.1.0 (class-based JavaScript CLI). Questions were written from READMEs and source with `rg` before monokl ran on them. A repository marked `report-only` in `rg-compare.repos` is scored and printed but never gates. Gated held-out Rust rows pool on a `held-out rust` line (`--min-heldout-rust-recall`, 0.9).
+- **First scores.** tokio 16 of 16, axum 18 of 20, commander 19 of 19 (now gated), react-hook-form 12 of 14 (report-only). The older held-out lines are unchanged in rows, now pooled with commander.
+- **Misses, left as written.** axum `listener extension` (ListenerExt, answer file at rank 9; `extension.rs` and extractor files outrank it on the word `extension`), axum `extractor from request parts` (FromRequestParts, rank 4; `axum-macros/src/lib.rs` and `with_rejection.rs` outrank the trait file), react-hook-form `watch form values subscribe` (useWatch, rank 4; `types/form.ts`, `useFormContext.tsx` and an `app/` page outrank it) and `create form control` (createFormControl, rank 12; `useFormControlContext.ts`, `useForm.ts` and `examples/` files outrank it).
+
+## 42. A match is credited to the block it starts in (2026-11-14)
 
 Step 2 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-and-blocks-form-a-tree.md). Replaces the line-text rule of §31.
 

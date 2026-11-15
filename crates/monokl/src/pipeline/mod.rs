@@ -13,8 +13,8 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::Language;
 use crate::analysis::registry::AnalyzerRegistry;
+use crate::analysis::{Language, with_parse_threads};
 use crate::dedup::dedup_blocks;
 use crate::error::{MonoklError, Result};
 use crate::file_io::FileIoError;
@@ -145,7 +145,7 @@ type Candidate = (CodeBlock, Vec<String>);
 
 /// How many files each thread analyzes per batch. The deadline is checked between batches, and a batch ends in a wait
 /// for its slowest file.
-const ANALYSIS_FILES_PER_THREAD: usize = 8;
+const ANALYSIS_FILES_PER_THREAD: usize = 32;
 
 /// [`search_with_timeout`] with the file ceiling as a parameter, so tests can reach it without 100,000 files.
 fn search_with_ceiling(
@@ -238,29 +238,34 @@ fn search_with_ceiling(
     // Files are analyzed on separate threads a batch at a time, but each result is kept in path order, so the output
     // never depends on which thread finished first. The deadline is checked between batches, never before the first.
     let ctx = FileContext { registry, language, allow_tests, max_file_bytes: MAX_FILE_BYTES };
-    let batch_size = rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD;
+    // Asking rayon for its width starts its pool, which a search with nothing to analyze must not do.
+    let batch_size = if survivors.is_empty() { 1 } else { rayon::current_num_threads() * ANALYSIS_FILES_PER_THREAD };
     let mut candidates: Vec<Candidate> = Vec::new();
-    let mut analyzed = 0_usize;
-    for batch in survivors.chunks(batch_size.max(1)) {
-        if analyzed > 0 && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            let reached = Incomplete { reached: analyzed as u64, total: survivors.len() as u64 };
-            partial = partial.or_else(|| Some(incomplete_diagnostic(timeout, "analyzing", reached, "")));
-            break;
+    // The threads that analyze are started once with the stack a parse needs, instead of one thread per file, and
+    // only as many as there are files to give them.
+    with_parse_threads(survivors.len(), || {
+        let mut analyzed = 0_usize;
+        for batch in survivors.chunks(batch_size) {
+            if analyzed > 0 && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let reached = Incomplete { reached: analyzed as u64, total: survivors.len() as u64 };
+                partial = partial.take().or_else(|| Some(incomplete_diagnostic(timeout, "analyzing", reached, "")));
+                break;
+            }
+            let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = batch
+                .par_iter()
+                .map(|&(path, hits)| {
+                    let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
+                    retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
+                    (blocks, file_diagnostics)
+                })
+                .collect();
+            for (blocks, file_diagnostics) in per_file {
+                candidates.extend(blocks);
+                diagnostics.extend(file_diagnostics);
+            }
+            analyzed += batch.len();
         }
-        let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = batch
-            .par_iter()
-            .map(|&(path, hits)| {
-                let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
-                retrieve_blocks(&ctx, path, hits, &read_source, &mut blocks, &mut file_diagnostics);
-                (blocks, file_diagnostics)
-            })
-            .collect();
-        for (blocks, file_diagnostics) in per_file {
-            candidates.extend(blocks);
-            diagnostics.extend(file_diagnostics);
-        }
-        analyzed += batch.len();
-    }
+    });
     diagnostics.extend(partial);
 
     let bm25_terms = bm25_terms(&plan);
@@ -561,6 +566,7 @@ mod tests {
     use super::*;
     use crate::analysis::file_analysis::{Degradation, FileAnalysis};
     use crate::analysis::lang::LanguageAnalyzer;
+    use crate::text_search::BATCH_FILES_PER_THREAD;
     use crate::types::{ParentContext, SymbolKind};
 
     type MakeBlocks = dyn Fn(&Utf8Path, &str) -> Result<(Vec<CodeBlock>, bool)> + Send + Sync;
@@ -1741,7 +1747,9 @@ class Foo {
 
     #[test]
     fn an_expired_timeout_stops_text_search_after_its_first_batch_and_says_so() {
-        let (_dir, root) = tree_of(&numbered_files(100));
+        let (searched, analyzed) = (2 * BATCH_FILES_PER_THREAD, 2 * ANALYSIS_FILES_PER_THREAD);
+        let total = searched + 20;
+        let (_dir, root) = tree_of(&numbered_files(total));
         let result = on_two_threads(|| {
             search_with_ceiling(
                 &whole_file_registry(),
@@ -1751,18 +1759,18 @@ class Foo {
             )
         })
         .unwrap();
-        // 32 files were searched; the first analysis batch of 16 of them was analyzed.
-        assert_eq!(result.files_total, 32);
-        assert_eq!(result.ranked.len(), 16);
-        assert_eq!(
-            summary(&result.diagnostics),
-            [(DiagnosticKind::Warning, None, "partial result: 0 s timeout expired after searching 32 of 100 files")]
-        );
+        // The first text search batch was searched, and the first analysis batch of it was analyzed.
+        assert_eq!(result.files_total, searched as u64);
+        assert_eq!(result.ranked.len(), analyzed);
+        let message = format!("partial result: 0 s timeout expired after searching {searched} of {total} files");
+        assert_eq!(summary(&result.diagnostics), [(DiagnosticKind::Warning, None, message.as_str())]);
     }
 
     #[test]
     fn an_expired_timeout_stops_analysis_between_batches_and_says_so() {
-        let (_dir, root) = tree_of(&numbered_files(20));
+        let analyzed = 2 * ANALYSIS_FILES_PER_THREAD;
+        let total = analyzed + 4;
+        let (_dir, root) = tree_of(&numbered_files(total));
         let result = on_two_threads(|| {
             search_with_ceiling(
                 &whole_file_registry(),
@@ -1772,12 +1780,10 @@ class Foo {
             )
         })
         .unwrap();
-        assert_eq!(result.files_total, 20);
-        assert_eq!(result.ranked.len(), 16);
-        assert_eq!(
-            summary(&result.diagnostics),
-            [(DiagnosticKind::Warning, None, "partial result: 0 s timeout expired after analyzing 16 of 20 files")]
-        );
+        assert_eq!(result.files_total, total as u64);
+        assert_eq!(result.ranked.len(), analyzed);
+        let message = format!("partial result: 0 s timeout expired after analyzing {analyzed} of {total} files");
+        assert_eq!(summary(&result.diagnostics), [(DiagnosticKind::Warning, None, message.as_str())]);
     }
 
     #[test]
