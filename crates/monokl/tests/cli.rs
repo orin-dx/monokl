@@ -44,7 +44,7 @@ fn search_prints_ranked_blocks_with_relative_paths() {
 
 #[test]
 fn a_row_shows_the_matching_lines_inside_its_block_and_nothing_else() {
-    let output = monokl(&["search", "format price", "src/", "--max-results", "3"]);
+    let output = monokl(&["search", "format price", "src/", "--max-results", "3", "--snippet-lines", "3"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let rows: Vec<&str> = text.lines().skip(1).take(3).collect();
@@ -321,40 +321,131 @@ const PRICE_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,sym
 const PRICE_ROW_1: &str = "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,0.436924";
 const PRICE_ROW_2: &str = "  src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693";
 
-/// The expected output for the first `rows` of the `price` query, cut from 8.
-fn price_cut(rows: &[&str]) -> String {
+/// The flags that give the output the shape it had before the relevance cut and the one-line snippet: every row up to
+/// the cap, and a snippet of up to three lines. The row and token cap tests below use them so that each tests one cap.
+const WHOLE_ROWS: [&str; 4] = ["--min-score", "0", "--snippet-lines", "3"];
+
+/// `args` followed by `WHOLE_ROWS`.
+fn with_whole_rows<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().chain(WHOLE_ROWS.iter()).copied().collect()
+}
+
+/// The expected output for the first `rows` of the `price` query, cut from 8, whose help line names `flag`.
+fn price_cut(rows: &[&str], flag: &str) -> String {
     let n = rows.len();
     let header = PRICE_HEADER.replace('N', &n.to_string());
     let body: String = rows.iter().flat_map(|row| [*row, "\n"]).collect();
     format!(
-        "{header}\n{body}totalCount: 8\nhelp[1]: showing {n} of 8; raise the cap or refine the query with +term or -term\n"
+        "{header}\n{body}totalCount: 8\nhelp[1]: \"showing {n} of 8; {flag} for more, or refine with +term/-term\"\n"
     )
 }
 
 #[test]
 fn a_cut_by_rows_keeps_the_first_rows_and_says_so() {
-    let output = monokl(&["search", "price", ".", "--max-results", "2"]);
-    assert_eq!(stdout(&output), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
+    let output = monokl(&with_whole_rows(&["search", "price", ".", "--max-results", "2"]));
+    assert_eq!(stdout(&output), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "--max-results N"));
 }
 
 #[test]
 fn a_cut_by_tokens_counts_the_printed_rows_and_not_the_blocks() {
     let printed = monokl::budget::count_tokens(PRICE_ROW_1) + monokl::budget::count_tokens(PRICE_ROW_2);
-    let at = monokl(&["search", "price", ".", "--max-tokens", &printed.to_string()]);
-    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2]));
-    let under = monokl(&["search", "price", ".", "--max-tokens", &(printed - 1).to_string()]);
-    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1]));
+    let at = monokl(&with_whole_rows(&["search", "price", ".", "--max-tokens", &printed.to_string()]));
+    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "--max-tokens N"));
+    let under = monokl(&with_whole_rows(&["search", "price", ".", "--max-tokens", &(printed - 1).to_string()]));
+    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1], "--max-tokens N"));
 }
 
 #[test]
 fn a_first_row_larger_than_the_budget_prints_no_rows_and_says_so() {
-    let output =
-        monokl(&["search", "price", ".", "--max-tokens", &(monokl::budget::count_tokens(PRICE_ROW_1) - 1).to_string()]);
+    let tokens = (monokl::budget::count_tokens(PRICE_ROW_1) - 1).to_string();
+    let output = monokl(&with_whole_rows(&["search", "price", ".", "--max-tokens", &tokens]));
     assert_eq!(
         stdout(&output),
-        "search: []\ntotalCount: 8\nhelp[2]: showing 0 of 8; raise the cap or refine the query with +term or -term,\
+        "search: []\ntotalCount: 8\nhelp[2]: \"showing 0 of 8; --max-tokens N for more, or refine with +term/-term\",\
          \"only declarations and the members of their classes, objects, impls and traits are searched; for text in tests, calls or config try rg\"\n"
     );
+}
+
+/// The rows of the `price` query in `small-ts` before any cut, with the snippet at three lines.
+const PRICE_ROWS_WHOLE: [&str; 8] = [
+    PRICE_ROW_1,
+    PRICE_ROW_2,
+    "  src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n14: <button onClick={onClick} disabled={disabled || !priceValid}>\",3,0.164513",
+    "  src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",4,0.09468",
+    "  src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",5,0.090782",
+    "  src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",6,0.086106",
+    "  src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",7,0.052697",
+    "  src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",8,0.047174",
+];
+
+#[test]
+fn the_flags_that_restore_the_whole_output_print_every_row_with_a_three_line_snippet() {
+    let output = monokl(&["search", "price", ".", "--min-score", "0", "--snippet-lines", "3", "--max-results", "50"]);
+    let rows: String = PRICE_ROWS_WHOLE.iter().flat_map(|row| [*row, "\n"]).collect();
+    assert_eq!(stdout(&output), format!("{}\n{rows}", PRICE_HEADER.replace('N', "8")));
+}
+
+#[test]
+fn by_default_a_search_prints_the_rows_above_the_relevance_cut_with_a_one_line_snippet() {
+    // The top score is 0.436924, so the cut is 0.131077: rows 1 to 3 stay, row 4 (0.09468) goes.
+    let output = monokl(&["search", "price", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n...and 1 more matching line\",1,0.436924\n\
+         \x20 src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693\n\
+         \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n...and 1 more matching line\",3,0.164513\n\
+         totalCount: 8\n\
+         help[1]: \"showing 3 of 8; --min-score 0 for more, or refine with +term/-term\"\n"
+    );
+}
+
+#[test]
+fn a_min_score_of_zero_keeps_every_row_up_to_the_cap_and_leaves_the_snippet_at_one_line() {
+    let output = monokl(&["search", "price", ".", "--min-score", "0"]);
+    let text = stdout(&output);
+    assert_eq!(text.lines().next(), Some(PRICE_HEADER.replace('N', "8").as_str()));
+    assert_eq!(
+        text.lines().skip(1).map(|row| row.rsplit(',').nth(1).unwrap_or("")).collect::<Vec<_>>(),
+        ["1", "2", "3", "4", "5", "6", "7", "8"],
+        "got: {text}"
+    );
+    assert!(!text.contains("help["), "got: {text}");
+    assert!(!text.contains("totalCount"), "got: {text}");
+}
+
+#[test]
+fn the_relevance_cut_and_the_cap_both_say_so_in_the_help_line() {
+    let output = monokl(&["search", "price", ".", "--max-results", "2"]);
+    assert_eq!(
+        stdout(&output).lines().last(),
+        Some("help[1]: \"showing 2 of 8; --min-score 0 or --max-results N for more, or refine with +term/-term\"")
+    );
+}
+
+#[test]
+fn a_snippet_of_no_lines_prints_null_and_a_snippet_of_two_prints_two() {
+    let none = stdout(&monokl(&["search", "price", ".", "--snippet-lines", "0"]));
+    let snippets: Vec<&str> = none.lines().skip(1).take(3).map(|row| row.rsplit(',').nth(2).unwrap_or("")).collect();
+    assert_eq!(snippets, ["null", "null", "null"], "got: {none}");
+
+    let two = stdout(&monokl(&["search", "price", ".", "--snippet-lines", "2"]));
+    assert_eq!(
+        two.lines().nth(1),
+        Some(
+            "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,0.436924"
+        )
+    );
+}
+
+#[test]
+fn a_flag_out_of_range_is_a_usage_error_with_no_output() {
+    for args in [["--min-score", "1.5"], ["--snippet-lines", "4"]] {
+        let output = monokl(&["search", "price", ".", args[0], args[1]]);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert_eq!(stdout(&output), "", "{args:?}");
+        assert!(stderr(&output).contains(&format!("invalid value '{}' for '{} <", args[1], args[0])), "{args:?}");
+    }
 }
 
 #[test]
@@ -401,6 +492,67 @@ fn mixed_project() -> tempfile::TempDir {
     std::fs::write(dir.path().join("src/cart.ts"), "export function total_price(): number {\n  return 1;\n}\n")
         .unwrap();
     dir
+}
+
+const PRICING_RS: &str = "\
+pub struct Money {
+    cents: u64,
+}
+
+pub fn price(item: &Item) -> Money {
+    Money { cents: item.cents }
+}
+
+pub fn total_price(items: &[Item]) -> Money {
+    let sum = items.iter().map(|i| price(i).cents).sum();
+    Money { cents: sum }
+}
+
+pub fn format_money(money: &Money) -> String {
+    format!(\"{}.{:02}\", money.cents / 100, money.cents % 100)
+}
+
+pub fn describe(item: &Item) -> String {
+    let shown = format_money(&price(item));
+    format!(\"{} costs {}\", item.name, shown)
+}
+
+pub struct Item {
+    pub name: String,
+    pub cents: u64,
+}
+";
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn a_rust_search_keeps_the_first_three_rows_below_the_relevance_cut_and_drops_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/pricing.rs"), PRICING_RS).unwrap();
+
+    // The top score is 3.316866, so the cut is 0.995: only the first two rows reach it, and the floor keeps the third
+    // (0.8735). The fourth (0.538908) and the fifth (0.446085) are dropped.
+    let output = monokl_in(dir.path(), &["search", "price money", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
+         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n...and 1 more matching line\",2,2.939514\n\
+         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
+         totalCount: 5\n\
+         help[1]: \"showing 3 of 5; --min-score 0 for more, or refine with +term/-term\"\n"
+    );
+
+    let output = monokl_in(dir.path(), &["search", "price money", ".", "--min-score", "0", "--snippet-lines", "3"]);
+    assert_eq!(
+        stdout(&output),
+        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
+         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n11: Money { cents: sum }\",2,2.939514\n\
+         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
+         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
+         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
+    );
 }
 
 #[cfg(feature = "lang-rust")]

@@ -1,13 +1,21 @@
 //! The agent-layer search budget: cuts a fully ranked, uncapped result down to what one response may carry.
 //!
 //! Core returns every ranked block and holds no caps; this module is the first thing a caller does with that result.
-//! The token cap counts the text the caller prints for each row, which the caller supplies, so a cap means what the
-//! reader sees and not the size of the code blocks behind the rows.
+//! Three rules cut it, in this order:
+//!
+//! 1. The relevance cut drops the rows scoring below [`Budget::min_score`] times the top score, but never one of the
+//!    first [`MIN_ROWS`].
+//! 2. The row cap, [`Budget::max_results`], applies to what is left and wins over the relevance cut's floor.
+//! 3. The token cap counts the text the caller prints for each row, which the caller supplies, so a cap means what the
+//!    reader sees and not the size of the code blocks behind the rows.
 use michi::TruncationOutcome;
 
 use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 
-/// The two caps one search response must stay within.
+/// The rows the relevance cut always keeps, when that many exist.
+pub const MIN_ROWS: usize = 3;
+
+/// What one search response must stay within: a relevance cut and two caps.
 ///
 /// `max_tokens` counts the printed text of the kept rows, as given to [`apply_budget`].
 ///
@@ -17,19 +25,22 @@ use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 /// use monokl::budget::Budget;
 ///
 /// let budget = Budget::default();
-/// assert_eq!((budget.max_results, budget.max_tokens), (50, 20_000));
+/// assert_eq!((budget.max_results, budget.max_tokens, budget.min_score), (15, 20_000, 0.3));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
-    /// The most rows a response may carry.
+    /// The most rows a response may carry. It wins over the floor of [`MIN_ROWS`].
     pub max_results: usize,
     /// The most estimated tokens (see [`count_tokens`]) the kept rows' printed text may total.
     pub max_tokens: usize,
+    /// The share of the top score a row needs to be kept, from `0.0` (no relevance cut) to `1.0` (only rows that tie
+    /// with the top row). The first [`MIN_ROWS`] rows are kept whatever their score.
+    pub min_score: f64,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Self { max_results: 50, max_tokens: 20_000 }
+        Self { max_results: 15, max_tokens: 20_000, min_score: 0.3 }
     }
 }
 
@@ -51,13 +62,26 @@ pub fn count_tokens(text: &str) -> usize {
     text.len().div_ceil(3)
 }
 
-/// Keeps the longest rank-order prefix of `ranked` whose printed rows fit `budget` and reports what was cut.
+/// How many leading rows of `ranked` the relevance cut keeps: those scoring at least `min_score` times the top row's
+/// score, and never fewer than [`MIN_ROWS`] (or all rows, when there are fewer). `ranked` is in rank order, so the
+/// scores fall and the kept rows are a prefix. A top score of 0 makes every row relevant.
+fn relevant_rows(ranked: &[RankedBlock], min_score: f64) -> usize {
+    let Some(top) = ranked.first() else { return 0 };
+    let floor = min_score * top.final_score;
+    let above = ranked.iter().take_while(|row| row.final_score >= floor).count();
+    above.max(MIN_ROWS.min(ranked.len()))
+}
+
+/// Keeps the longest rank-order prefix of `ranked` that passes the relevance cut and whose printed rows fit `budget`,
+/// and reports what was cut.
 ///
 /// `row_texts` holds the text that is printed for each block, in the same order; the token cap counts that text, not
-/// the block's code. Blocks are never split or reordered. The cut falls at the first block that would break either
-/// cap, so a row larger than the whole token budget leaves no results. `total_before` is the count the caller had before any
-/// cap, which may exceed `ranked.len()` when an earlier stage already dropped candidates; the response is truncated
-/// whenever fewer blocks are kept than that. `diagnostics` pass through untouched.
+/// the block's code. Blocks are never split or reordered. The relevance cut keeps the rows scoring at least
+/// [`Budget::min_score`] times the top score, and at least [`MIN_ROWS`] rows; the row cap then applies to what it kept,
+/// so a `max_results` below [`MIN_ROWS`] wins. The token cut falls at the first block that would break the cap, so a row
+/// larger than the whole token budget leaves no results. `total_before` is the count the caller had before any cut,
+/// which may exceed `ranked.len()` when an earlier stage already dropped candidates; the response is truncated whenever
+/// fewer blocks are kept than that. `diagnostics` pass through untouched.
 ///
 /// # Examples
 ///
@@ -67,6 +91,7 @@ pub fn count_tokens(text: &str) -> usize {
 /// let response = apply_budget(Vec::new(), 0, &Budget::default(), &[], Vec::new());
 /// assert!(!response.truncated);
 /// assert_eq!(response.total_blocks_before_truncation, 0);
+/// assert_eq!(response.blocks_cut_by_relevance, 0);
 /// ```
 pub fn apply_budget(
     ranked: Vec<RankedBlock>,
@@ -78,7 +103,9 @@ pub fn apply_budget(
     let mut kept = Vec::new();
     let mut total_tokens = 0usize;
     debug_assert_eq!(ranked.len(), row_texts.len(), "each block needs its printed row");
-    for (block, text) in ranked.into_iter().zip(row_texts) {
+    let relevant = relevant_rows(&ranked, budget.min_score);
+    let blocks_cut_by_relevance = ranked.len() - relevant;
+    for (block, text) in ranked.into_iter().zip(row_texts).take(relevant) {
         if kept.len() >= budget.max_results {
             break;
         }
@@ -92,6 +119,7 @@ pub fn apply_budget(
     let outcome = TruncationOutcome::new(kept, total_before);
     SearchResponse {
         total_blocks_before_truncation: outcome.total_before,
+        blocks_cut_by_relevance,
         truncated: outcome.truncated(),
         results: outcome.kept,
         diagnostics,
@@ -140,13 +168,119 @@ mod tests {
         (1..=n).map(|rank| block(code, rank)).collect()
     }
 
+    /// Caps with the relevance cut off, so a test of a cap does not depend on scores.
     fn caps(max_results: usize, max_tokens: usize) -> Budget {
-        Budget { max_results, max_tokens }
+        Budget { max_results, max_tokens, min_score: 0.0 }
+    }
+
+    /// One block per score, in the order given, ranked from 1.
+    fn scored(scores: &[f64]) -> Vec<RankedBlock> {
+        scores.iter().zip(1..).map(|(&final_score, rank)| RankedBlock { final_score, ..block("a", rank) }).collect()
+    }
+
+    /// The ranks that survive the relevance cut of `min_score` alone, with the row and token caps out of the way.
+    fn relevant(scores: &[f64], min_score: f64) -> Vec<usize> {
+        let budget = Budget { max_results: usize::MAX, max_tokens: usize::MAX, min_score };
+        let ranked = scored(scores);
+        let total = ranked.len();
+        let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
+        ranks(&apply_budget(ranked, total, &budget, &texts, Vec::new()))
     }
 
     #[test]
     fn default_budget_is_the_agent_default() {
-        assert_eq!(Budget::default(), caps(50, 20_000));
+        assert_eq!(Budget::default(), Budget { max_results: 15, max_tokens: 20_000, min_score: 0.3 });
+    }
+
+    #[test]
+    fn a_row_is_kept_when_it_scores_at_least_the_fraction_of_the_top_score() {
+        // 0.5 * 0.5 is exactly 0.25 in binary, so the boundary is exact.
+        assert_eq!(relevant(&[0.5, 0.4, 0.25, 0.2499, 0.1], 0.5), [1, 2, 3]);
+        assert_eq!(relevant(&[1.0, 0.9, 0.5, 0.5, 0.4999, 0.1], 0.5), [1, 2, 3, 4]);
+        assert_eq!(relevant(&[8.0, 4.0, 2.4, 2.4, 2.3999, 0.1], 0.3), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_first_three_rows_are_kept_whatever_their_score() {
+        assert_eq!(relevant(&[1.0, 0.1, 0.05, 0.04, 0.01], 0.3), [1, 2, 3]);
+        assert_eq!(relevant(&[1.0, 0.9, 0.05, 0.04, 0.01], 0.3), [1, 2, 3]);
+        assert_eq!(relevant(&[1.0, 0.9, 0.8, 0.04, 0.01], 0.3), [1, 2, 3]);
+    }
+
+    #[test]
+    fn fewer_rows_than_the_floor_are_all_kept() {
+        assert_eq!(relevant(&[], 0.3), Vec::<usize>::new());
+        assert_eq!(relevant(&[1.0], 0.3), [1]);
+        assert_eq!(relevant(&[1.0, 0.0], 0.3), [1, 2]);
+    }
+
+    #[test]
+    fn a_row_that_ties_with_the_top_is_kept_at_the_strictest_fraction() {
+        assert_eq!(relevant(&[1.0, 1.0, 1.0, 1.0, 0.99, 0.1], 1.0), [1, 2, 3, 4]);
+        assert_eq!(relevant(&[1.0, 0.9, 0.8, 0.7, 0.6], 1.0), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_top_score_of_zero_cuts_nothing() {
+        assert_eq!(relevant(&[0.0, 0.0, 0.0, 0.0, 0.0], 0.3), [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_fraction_of_zero_turns_the_relevance_cut_off() {
+        assert_eq!(relevant(&[1.0, 0.1, 0.01, 0.001, 0.0001, 0.0], 0.0), [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn a_not_a_number_score_ends_the_relevant_rows_but_the_floor_still_holds() {
+        assert_eq!(relevant(&[1.0, f64::NAN, 0.9, 0.8, 0.7], 0.3), [1, 2, 3]);
+    }
+
+    #[test]
+    fn the_row_cap_wins_over_the_floor_and_over_the_relevance_cut() {
+        let at = |max_results, scores: &[f64]| {
+            let ranked = scored(scores);
+            let total = ranked.len();
+            let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
+            let budget = Budget { max_results, max_tokens: usize::MAX, min_score: 0.3 };
+            apply_budget(ranked, total, &budget, &texts, Vec::new())
+        };
+        assert_eq!(ranks(&at(1, &[1.0, 0.1, 0.1, 0.1])), [1]);
+        assert_eq!(ranks(&at(2, &[1.0, 0.9, 0.8, 0.7])), [1, 2]);
+        assert_eq!(ranks(&at(0, &[1.0, 0.9, 0.8])), Vec::<usize>::new());
+        let fifteen_of_twenty = at(15, &[1.0; 20]);
+        assert_eq!(fifteen_of_twenty.results.len(), 15);
+        assert_eq!(fifteen_of_twenty.total_blocks_before_truncation, 20);
+    }
+
+    #[test]
+    fn the_response_counts_the_rows_each_rule_cut() {
+        let scores = [1.0, 0.9, 0.8, 0.7, 0.1, 0.05];
+        let ranked = scored(&scores);
+        let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
+
+        let by_relevance = apply_budget(ranked.clone(), 6, &Budget::default(), &texts, Vec::new());
+        assert_eq!(ranks(&by_relevance), [1, 2, 3, 4]);
+        assert_eq!((by_relevance.blocks_cut_by_relevance, by_relevance.total_blocks_before_truncation), (2, 6));
+        assert!(by_relevance.truncated);
+
+        let by_both =
+            apply_budget(ranked.clone(), 6, &Budget { max_results: 3, ..Budget::default() }, &texts, Vec::new());
+        assert_eq!(ranks(&by_both), [1, 2, 3]);
+        assert_eq!((by_both.blocks_cut_by_relevance, by_both.total_blocks_before_truncation), (2, 6));
+
+        let by_cap_only = apply_budget(ranked, 6, &caps(3, 1000), &texts, Vec::new());
+        assert_eq!(ranks(&by_cap_only), [1, 2, 3]);
+        assert_eq!((by_cap_only.blocks_cut_by_relevance, by_cap_only.total_blocks_before_truncation), (0, 6));
+    }
+
+    #[test]
+    fn the_token_cap_applies_to_the_rows_the_relevance_cut_kept() {
+        let ranked = scored(&[1.0, 0.9, 0.8, 0.7, 0.1]);
+        let texts = vec!["abc".to_owned(); 5];
+        let budget = Budget { max_results: 15, max_tokens: 2, min_score: 0.3 };
+        let response = apply_budget(ranked, 5, &budget, &texts, Vec::new());
+        assert_eq!(ranks(&response), [1, 2]);
+        assert_eq!((response.blocks_cut_by_relevance, response.total_blocks_before_truncation), (1, 5));
     }
 
     #[test]

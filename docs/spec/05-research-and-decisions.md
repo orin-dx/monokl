@@ -521,3 +521,28 @@ Step 3 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-an
 - **Harness.** Unchanged: identifier 58/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 32/33 and 22/22, held-out rust 34/36.
 - **Open.** ADR 0005 is complete: analyzers emit spans, hits carry match starts, and ownership, snippets and dedup read them. `code` is still stored in every block, so nested blocks duplicate text; a block could slice its text from the file instead.
 
+
+## 46. The default output is lean: one snippet line and a relevance cut (2026-11-15)
+
+- **Decision.** `monokl search` prints, by default, the rows whose `finalScore` is at least 0.3 times the top row's (`--min-score`, 0 turns it off), always the first 3 rows when that many exist, at most 15 (`--max-results`, was 50; the cap wins over the floor), and one snippet line per row (`--snippet-lines`, 0 to 3, was a fixed 3; the lines past the shown ones are still counted). The help line names the flag for each rule that cut rows: `showing 4 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`. `--snippet-lines 0` is allowed and documented as losing the declaration text of variable and type rows, which have no signature. The old output is `--min-score 0 --max-results 50 --snippet-lines 3`, checked to match the previous output byte for byte on the fixture. No `--offset`: rows past the cap are reached by a narrower query or `--max-results`, a known gap.
+- **Why.** An output-economics sweep of the 222 harness rows (the rows of `just rg-compare`, as an agent runs them with default flags) found a median default output of 10 KB, 91% of the bytes in rows past rank 3, an answer in those rows for only 6% of the questions, the snippet half of every row, and 58% of the bytes past rank 3 repeating a file already shown. Cutting to 1 snippet line and the relevance rule was the cheapest change that kept the answer.
+- **Measured** (`scripts/agent-cost.py` from the agent-workflow-cost branch, which is not part of this change, run from a separate checkout against the built binary, before and after; 222 rows; bytes of one `monokl search <words> .`):
+
+  | set | n | median before | median after | p90 before | p90 after | answerable in one turn before / after |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | identifiers | 59 | 474 | 463 | 3,258 | 1,111 | 59 / 59 |
+  | questions | 18 | 9,985 | 1,592 | 13,658 | 3,063 | 14 / 14 |
+  | members | 16 | 11,208 | 682 | 13,323 | 3,752 | 14 / 14 |
+  | rust (fd) | 24 | 5,062 | 818 | 10,843 | 2,957 | 20 / 20 |
+  | held-out questions | 33 | 10,737 | 1,007 | 14,640 | 3,055 | 32 / 32 |
+  | held-out members | 22 | 11,286 | 918 | 14,217 | 1,994 | 22 / 22 |
+  | held-out rust | 36 | 12,253 | 2,847 | 14,215 | 3,653 | 30 / 30 |
+  | report-only | 14 | 11,460 | 1,720 | 12,293 | 3,040 | 13 / 13 |
+  | all | 222 | 10,012 | 902 | 13,351 | 3,207 | 204 / 204 |
+
+  The total over the 222 rows falls from 1,714,350 to 316,502 bytes. A median of 3,338 tokens becomes 301.
+- **Harness** (`just rg-compare`, which runs monokl with its defaults, so it scores the lean shape; no explicit cap is passed). Identifiers 59/59, questions 17/18, held-out 32/33 and 22/22, held-out rust 34/36 and react-hook-form 14/14 are unchanged. Members go 15/16 to 14/16 (zod `registry add schema`: the member row fell past rank 15) and the pooled Rust rows 22/24 to 21/24 (one fd identifier fell out of the first 3 files). Each set lost at most one question, so the gates of `--min-member-recall` and `--min-rust-recall` went from 0.9 to 0.85, which 14/16 and 21/24 (87.5%) clear. The gates of the other sets are unchanged.
+- **Time.** Search work is unchanged; only the rows printed shrink. `just bench` rows move by 1 to 10% in both directions on rows whose output did not change, which is the noise of a 10 ms run. An alternating run of the old and new binaries, 300 runs each, differs by at most 0.6%.
+- **What it does not prove.** Not a model evaluation: it counts bytes and whether the expected declaration is in the first 3 rows, not whether a model finds the answer. The value of snippet lines 2 and 3 to an agent that is not trying to answer in one turn (reading context, deciding between candidates) was not measured; `--snippet-lines 3` is there for that. The 0.3 fraction, the floor of 3 and the cap of 15 come from one sweep on the harness rows, which are questions written with `rg` in hand, so a different distribution of queries may want different values. A query whose answer sits past the cap, as with `registry add schema`, now needs a second call; the help line says which flag to use.
+- **Rejected.** `--snippet-lines 0` as the default: a variable or type row has no signature, so it would show nothing about what it declares and the answer would need a read.
+- **Left open.** No `--offset`. The 0.3 fraction, the floor and the cap are not tuned per language or per query shape. Two `FAIL` lines of `scripts/agent-cost.py` remain, down from nine: `questions` is answerable in one turn on 78% (unchanged), and the median bytes of the Rust set are 818 against 608 for the rg policy (were 5,062).
