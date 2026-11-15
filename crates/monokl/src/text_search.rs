@@ -610,11 +610,7 @@ impl<'m> LineCollector<'m> {
         let lossy = String::from_utf8_lossy(kept);
         let match_starts = match lossy {
             Cow::Borrowed(_) => found.starts,
-            Cow::Owned(_) => found
-                .starts
-                .into_iter()
-                .map(|run| lossy_offset(kept, run.start)..lossy_offset(kept, run.end - 1) + 1)
-                .collect(),
+            Cow::Owned(_) => lossy_runs(kept, &found.starts, &mut || {}),
         };
         self.hits.push(LineHit { line_number, text: lossy.into_owned(), match_starts });
         Ok(())
@@ -684,28 +680,50 @@ impl Sink for LineCollector<'_> {
     }
 }
 
-/// Where byte `offset` of `raw` falls in `String::from_utf8_lossy(raw)`, which replaces each invalid sequence with one
-/// U+FFFD. An offset inside an invalid sequence lands at the start of its replacement.
-fn lossy_offset(raw: &[u8], offset: usize) -> usize {
+/// Maps each run of consecutive offsets in `raw` to the same bytes of `String::from_utf8_lossy(raw)`: from where the
+/// first offset lands to just past where the last one does. `runs` must be ascending and not empty ranges. `visit` is
+/// called once for each chunk of `raw` that is read, so a test can count the work.
+fn lossy_runs(raw: &[u8], runs: &[Range<usize>], visit: &mut dyn FnMut()) -> Vec<Range<usize>> {
+    let ends = runs.iter().flat_map(|run| [run.start, run.end - 1]);
+    let mapped = lossy_offsets(raw, ends, visit);
+    mapped.as_chunks::<2>().0.iter().map(|&[first, last]| first..last + 1).collect()
+}
+
+/// Where each byte offset of `raw` falls in `String::from_utf8_lossy(raw)`, which replaces each invalid sequence with
+/// one U+FFFD. An offset inside an invalid sequence lands at the start of its replacement, and one past the end of
+/// `raw` at the end of the lossy text. `offsets` must not decrease: one forward pass over the chunks of `raw` answers
+/// them all, so the work is the length of `raw` plus the number of offsets, not their product.
+fn lossy_offsets(raw: &[u8], offsets: impl IntoIterator<Item = usize>, visit: &mut dyn FnMut()) -> Vec<usize> {
+    let replacement = char::REPLACEMENT_CHARACTER.len_utf8();
+    let mut chunks = raw.utf8_chunks();
+    // Where the current chunk starts in `raw` and in the lossy text, and its valid and invalid lengths.
     let (mut raw_at, mut lossy_at) = (0, 0);
-    for chunk in raw.utf8_chunks() {
-        let valid = chunk.valid().len();
-        if offset <= raw_at + valid {
-            return lossy_at + (offset - raw_at);
-        }
-        raw_at += valid;
-        lossy_at += valid;
-        let invalid = chunk.invalid().len();
-        if invalid > 0 {
-            let replacement = char::REPLACEMENT_CHARACTER.len_utf8();
-            if offset < raw_at + invalid {
-                return lossy_at;
+    let mut current: Option<(usize, usize)> = None;
+    let mut mapped = Vec::new();
+    for offset in offsets {
+        let lossy = loop {
+            let (valid, invalid) = if let Some(lengths) = current {
+                lengths
+            } else {
+                let Some(chunk) = chunks.next() else { break lossy_at };
+                visit();
+                let lengths = (chunk.valid().len(), chunk.invalid().len());
+                current = Some(lengths);
+                lengths
+            };
+            if offset <= raw_at + valid {
+                break lossy_at + (offset - raw_at);
             }
-            raw_at += invalid;
-            lossy_at += replacement;
-        }
+            if offset < raw_at + valid + invalid {
+                break lossy_at + valid;
+            }
+            raw_at += valid + invalid;
+            lossy_at += valid + if invalid > 0 { replacement } else { 0 };
+            current = None;
+        };
+        mapped.push(lossy);
     }
-    lossy_at
+    mapped
 }
 
 /// The first `max` bytes of `text`, or fewer so that a multi-byte character is never split.
@@ -733,6 +751,7 @@ fn without_line_terminator(line: &[u8]) -> &[u8] {
 mod tests {
     use std::fs;
 
+    use proptest::prelude::*;
     use rstest::rstest;
     use tempfile::TempDir;
 
@@ -972,6 +991,30 @@ mod tests {
         assert_eq!(result.truncated_lines, 1);
     }
 
+    /// Where byte `offset` of `raw` falls in `String::from_utf8_lossy(raw)`, found by walking the chunks from the start
+    /// for this one offset. It costs a pass over the line for each offset, so only tests use it: it is the plain
+    /// statement of what [`lossy_offsets`] computes in one pass.
+    fn lossy_offset_from_the_start(raw: &[u8], offset: usize) -> usize {
+        let (mut raw_at, mut lossy_at) = (0, 0);
+        for chunk in raw.utf8_chunks() {
+            let valid = chunk.valid().len();
+            if offset <= raw_at + valid {
+                return lossy_at + (offset - raw_at);
+            }
+            raw_at += valid;
+            lossy_at += valid;
+            let invalid = chunk.invalid().len();
+            if invalid > 0 {
+                if offset < raw_at + invalid {
+                    return lossy_at;
+                }
+                raw_at += invalid;
+                lossy_at += char::REPLACEMENT_CHARACTER.len_utf8();
+            }
+        }
+        lossy_at
+    }
+
     /// `ab\xe2\x82cd` reads `ab`, one truncated three-byte sequence of two bytes, and `cd`; lossily it is `ab\u{FFFD}cd`.
     #[rstest]
     #[case::before_the_sequence(2, 2)]
@@ -981,7 +1024,97 @@ mod tests {
     #[case::at_the_end(6, 7)]
     fn an_offset_in_raw_bytes_maps_to_the_same_place_in_the_lossy_text(#[case] offset: usize, #[case] expected: usize) {
         assert_eq!(String::from_utf8_lossy(b"ab\xe2\x82cd"), "ab\u{FFFD}cd");
-        assert_eq!(lossy_offset(b"ab\xe2\x82cd", offset), expected);
+        assert_eq!(lossy_offset_from_the_start(b"ab\xe2\x82cd", offset), expected);
+        assert_eq!(lossy_offsets(b"ab\xe2\x82cd", [offset], &mut || {}), [expected]);
+    }
+
+    #[test]
+    fn offsets_past_the_end_of_the_line_land_at_the_end_of_the_lossy_text() {
+        assert_eq!(lossy_offsets(b"ab\xe2\x82cd", [6, 7, 9], &mut || {}), [7, 7, 7]);
+        assert_eq!(lossy_offsets(b"", [0, 0, 1], &mut || {}), [0, 0, 0]);
+        assert_eq!(lossy_offsets(b"abc", [], &mut || {}), Vec::<usize>::new());
+    }
+
+    /// Bytes that make valid text, invalid sequences, and truncated ones of every length in a line.
+    fn raw_line() -> impl Strategy<Value = Vec<u8>> {
+        let bytes = [b'a', b'b', b' ', 0xff, 0xfe, 0x80, 0xc3, 0xa9, 0xe2, 0x82, 0xac, 0xf0, 0x9f, 0x98, 0x80];
+        prop::collection::vec(prop::sample::select(bytes.to_vec()), 0..48)
+    }
+
+    proptest! {
+        /// One pass over the chunks gives each offset the answer a walk from the start gives it.
+        #[test]
+        fn one_pass_maps_every_offset_as_a_walk_from_the_start_does(
+            raw in raw_line(),
+            offsets in prop::collection::vec(0_usize..60, 0..24),
+        ) {
+            let mut offsets = offsets;
+            offsets.sort_unstable();
+            let expected: Vec<usize> = offsets.iter().map(|&offset| lossy_offset_from_the_start(&raw, offset)).collect();
+            prop_assert_eq!(lossy_offsets(&raw, offsets, &mut || {}), expected);
+        }
+
+        /// A run maps to the lossy range from its first start to just past its last.
+        #[test]
+        fn runs_map_as_their_first_and_last_start_do_by_a_walk_from_the_start(
+            raw in raw_line(),
+            marks in prop::collection::btree_set(0_usize..48, 0..16),
+        ) {
+            let starts: Vec<usize> = marks.into_iter().collect();
+            let mut runs: Vec<Range<usize>> = Vec::new();
+            for start in starts {
+                match runs.last_mut() {
+                    Some(run) if run.end == start => run.end += 1,
+                    _ => runs.push(start..start + 1),
+                }
+            }
+            let expected: Vec<Range<usize>> = runs
+                .iter()
+                .map(|run| lossy_offset_from_the_start(&raw, run.start)..lossy_offset_from_the_start(&raw, run.end - 1) + 1)
+                .collect();
+            prop_assert_eq!(lossy_runs(&raw, &runs, &mut || {}), expected);
+        }
+    }
+
+    /// The chunks of a line of `len` bytes alternating an invalid byte with `a`, and the one-byte ranges a search for
+    /// `a` records, which are not consecutive.
+    fn alternating(len: usize) -> (Vec<u8>, Vec<Range<usize>>) {
+        let line: Vec<u8> = (0..len).map(|index| if index % 2 == 0 { 0xff } else { b'a' }).collect();
+        let runs = (1..len).step_by(2).map(|at| at..at + 1).collect();
+        (line, runs)
+    }
+
+    /// Mapping a line's ranges visits each chunk of the line at most once, so the work is the line plus the ranges, however
+    /// many ranges there are. Counting the visits gives the same answer on every machine and load.
+    #[rstest]
+    #[case::one_times(1024)]
+    #[case::two_times(2048)]
+    #[case::four_times(4096)]
+    fn mapping_the_ranges_of_a_line_of_invalid_bytes_visits_each_chunk_once(#[case] len: usize) {
+        let (line, runs) = alternating(len);
+        let (ranges, mut visits) = (runs.len(), 0_usize);
+        let mapped = lossy_runs(&line, &runs, &mut || visits += 1);
+        assert_eq!(mapped.len(), ranges);
+        // Each invalid byte ends a chunk, so the line has `len / 2` of them and one more for the final `a`.
+        assert_eq!(visits, len / 2 + 1);
+        assert!(visits <= len + ranges, "{visits} visits for {len} bytes and {ranges} ranges");
+    }
+
+    #[test]
+    fn the_ranges_of_an_alternating_line_land_on_the_a_after_each_replacement() {
+        // `\xff a \xff a`: each replacement is three bytes, so the `a` at raw offset 1 is at lossy offset 3, then 7.
+        let (line, runs) = alternating(4);
+        assert_eq!(String::from_utf8_lossy(&line), "\u{FFFD}a\u{FFFD}a");
+        assert_eq!(lossy_runs(&line, &runs, &mut || {}), [3..4, 7..8]);
+    }
+
+    #[test]
+    fn a_search_on_a_line_of_alternating_invalid_bytes_records_each_a_at_its_lossy_offset() {
+        let line: Vec<u8> = b"\xffa".repeat(6);
+        let (_dir, root) = tree(&[("a.ts", &[line.as_slice(), b"\n"].concat())]);
+        let result = search_files(&root, &["a"], &TextSearchOptions::default()).unwrap();
+        let expected = hit_at(1, &"\u{FFFD}a".repeat(6), &[3..4, 7..8, 11..12, 15..16, 19..20, 23..24]);
+        assert_eq!(result.hits, hits(&root, &[("a.ts", vec![expected])]));
     }
 
     #[test]
