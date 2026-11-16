@@ -154,8 +154,8 @@ fn truncation_guidance(response: &SearchResponse, view: &SearchView) -> String {
     let cut = response.blocks_cut_by_relevance;
     let relevant = response.total_blocks_before_truncation.saturating_sub(cut);
     let left = relevant.saturating_sub(response.offset + returned);
-    let below_cut =
-        (cut > 0).then(|| format!("--min-score 0 for {}", if left > 0 { "lower-scoring rows" } else { "more" }));
+    let below_cut = (cut > 0)
+        .then(|| format!("--min-score 0 for the {cut} {} below the cut", if cut == 1 { "row" } else { "rows" }));
     let mut parts = Vec::new();
     if returned == 0 && response.offset >= relevant {
         parts.push(format!("offset {} is past the last of {relevant} rows", response.offset));
@@ -649,7 +649,7 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1, 0.05]].concat();
         assert_eq!(
             help_line(&scores, &crate::budget::Budget::default()).as_deref(),
-            Some("showing 9 of 11; --min-score 0 for more, or refine with +term/-term")
+            Some("showing 9 of 11; --min-score 0 for the 2 rows below the cut, or refine with +term/-term")
         );
     }
 
@@ -668,7 +668,9 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 5 of 10; next: --offset 5, --min-score 0 for lower-scoring rows, or refine with +term/-term")
+            Some(
+                "showing 5 of 10; next: --offset 5, --min-score 0 for the 1 row below the cut, or refine with +term/-term"
+            )
         );
     }
 
@@ -724,7 +726,7 @@ mod projection_tests {
         let scores = [vec![1.0; 12], vec![0.1; 3]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 4 of 15; --min-score 0 for more, or refine with +term/-term")
+            Some("showing 4 of 15; --min-score 0 for the 3 rows below the cut, or refine with +term/-term")
         );
     }
 
@@ -749,7 +751,7 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1; 2]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 0 of 11; offset 9 is past the last of 9 rows; --min-score 0 for more")
+            Some("showing 0 of 11; offset 9 is past the last of 9 rows; --min-score 0 for the 2 rows below the cut")
         );
     }
 
