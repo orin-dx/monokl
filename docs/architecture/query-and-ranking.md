@@ -94,14 +94,13 @@ The snippet (`output/agent.rs`) shows the matched lines of a block, at most `--s
 
 1. **Relevance cut** (`--min-score`, default 0.3). Keep the leading rows whose `final_score` is at least `min_score * top`, where `top` is the first row's score. The scores fall down the list, so the kept rows are a prefix. A score equal to the threshold is kept, so rows that tie with the top survive `--min-score 1`. A top score of 0 keeps every row (the threshold is 0). `--min-score 0` turns the cut off.
 2. **Floor.** The first eight rows are kept whatever their score, or all of them when there are fewer. The floor lifts the relevance cut only.
-3. **Row cap** (`--max-results`, default 20). Applies to what is left and wins over the floor: `--max-results 1` prints one row.
-4. **Token cap** (`--max-tokens`, default 20,000). The longest prefix whose printed rows fit; a row larger than the whole cap leaves no rows. It counts the printed rows, so it sees the snippet length.
+3. **Offset** (`--offset`, default 0). Skips that many of the rows the cut kept. The cut is measured against the top row of the whole result, so it is the same whatever the offset, and a page is a slice of one deterministic ranking: pages laid end to end equal one large run. Search stays stateless (ADR 0004): every call re-runs the search, and the offset is the only cursor.
+4. **Row cap** (`--max-results`, default 20). Applies to the page and wins over the floor: `--max-results 1` prints one row.
+5. **Token cap** (`--max-tokens`, default 20,000). The longest prefix of the page whose printed rows fit; a row larger than the whole cap leaves no rows. It counts the printed rows, so it sees the snippet length, and it does not count the skipped rows.
 
-When any rule dropped rows the response is truncated: `totalCount` is the number of ranked blocks and the help line names the flag for each rule that cut: `showing 4 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`, or `--max-tokens N` when the tokens ran out before the rows. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation` and `blocks_cut_by_relevance` only.
+When any rule dropped rows, or the page starts after the first row, the response is truncated: `totalCount` is the number of ranked blocks and the help line is michi's `showing {returned} of {total}; {guidance}`. The guidance names `next: --offset N` while kept rows remain after the page (`N` is the offset plus the rows returned), `--min-score 0 for the N rows below the cut` when the cut dropped rows (the same offsets still apply with the cut off). `totalCount` and the `of T` in the line count every match, including the N rows below the cut, so the rows reachable by `--offset` alone are `T - N`; `next:` appears only while some of them remain, so following it never reaches an empty page, and `refine with +term/-term`. An empty page that the caps caused names `--max-results N` or `--max-tokens N` instead, because an offset cannot move past a row that does not fit. An offset at or past the last kept row prints no rows, keeps `totalCount`, exits 0 and says `offset 40 is past the last of 31 rows`. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation`, `blocks_cut_by_relevance` and `offset` only.
 
 Why these defaults: [05 §46](../spec/05-research-and-decisions.md). To get the output of versions before the change, run `--min-score 0 --max-results 50 --snippet-lines 3`.
-
-Known gap: there is no `--offset`, so rows past the cap or the cut are reached by `--min-score 0` and `--max-results N`, or by a narrower query (`+term`, `-term`, a path), not by paging.
 
 ## Determinism and bounds
 

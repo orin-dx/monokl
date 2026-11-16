@@ -153,6 +153,8 @@ pub struct SearchResponse {
     pub total_blocks_before_truncation: usize,
     /// How many of the blocks left out of `results` the relevance cut dropped; the row and token caps dropped the rest.
     pub blocks_cut_by_relevance: usize,
+    /// How many rows that passed the relevance cut were skipped before `results` starts: the page offset asked for.
+    pub offset: usize,
     pub truncated: bool,
     pub diagnostics: Vec<Diagnostic>,
 }

@@ -1,12 +1,14 @@
 //! The agent-layer search budget: cuts a fully ranked, uncapped result down to what one response may carry.
 //!
 //! Core returns every ranked block and holds no caps; this module is the first thing a caller does with that result.
-//! Three rules cut it, in this order:
+//! Three rules cut it, in this order, and an offset picks the page they apply to:
 //!
 //! 1. The relevance cut drops the rows scoring below [`Budget::min_score`] times the top score, but never one of the
-//!    first [`MIN_ROWS`].
-//! 2. The row cap, [`Budget::max_results`], applies to what is left and wins over the relevance cut's floor.
-//! 3. The token cap counts the text the caller prints for each row, which the caller supplies, so a cap means what the
+//!    first [`MIN_ROWS`]. It is measured against the top row of the whole result, whatever the offset.
+//! 2. [`Budget::offset`] skips that many of the rows that are left, so a second call returns the next page of the same
+//!    ranking.
+//! 3. The row cap, [`Budget::max_results`], applies to the page and wins over the relevance cut's floor.
+//! 4. The token cap counts the text the caller prints for each row, which the caller supplies, so a cap means what the
 //!    reader sees and not the size of the code blocks behind the rows.
 use michi::TruncationOutcome;
 
@@ -15,7 +17,7 @@ use crate::types::{Diagnostic, RankedBlock, SearchResponse};
 /// The rows the relevance cut always keeps, when that many exist.
 pub const MIN_ROWS: usize = 8;
 
-/// What one search response must stay within: a relevance cut and two caps.
+/// What one search response must stay within: a relevance cut, a page offset and two caps.
 ///
 /// `max_tokens` counts the printed text of the kept rows, as given to [`apply_budget`].
 ///
@@ -25,7 +27,7 @@ pub const MIN_ROWS: usize = 8;
 /// use monokl::budget::Budget;
 ///
 /// let budget = Budget::default();
-/// assert_eq!((budget.max_results, budget.max_tokens, budget.min_score), (20, 20_000, 0.3));
+/// assert_eq!((budget.max_results, budget.max_tokens, budget.min_score, budget.offset), (20, 20_000, 0.3, 0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -36,11 +38,14 @@ pub struct Budget {
     /// The share of the top score a row needs to be kept, from `0.0` (no relevance cut) to `1.0` (only rows that tie
     /// with the top row). The first [`MIN_ROWS`] rows are kept whatever their score.
     pub min_score: f64,
+    /// The rows to skip, counted after the relevance cut and before the caps, so the caps bound the page and not the
+    /// skipped rows. An offset at or past the last kept row returns no rows.
+    pub offset: usize,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Self { max_results: 20, max_tokens: 20_000, min_score: 0.3 }
+        Self { max_results: 20, max_tokens: 20_000, min_score: 0.3, offset: 0 }
     }
 }
 
@@ -72,16 +77,17 @@ fn relevant_rows(ranked: &[RankedBlock], min_score: f64) -> usize {
     above.max(MIN_ROWS.min(ranked.len()))
 }
 
-/// Keeps the longest rank-order prefix of `ranked` that passes the relevance cut and whose printed rows fit `budget`,
-/// and reports what was cut.
+/// Keeps the page of `ranked` that starts at [`Budget::offset`] among the rows passing the relevance cut and whose
+/// printed rows fit `budget`, and reports what was cut.
 ///
 /// `row_texts` holds the text that is printed for each block, in the same order; the token cap counts that text, not
 /// the block's code. Blocks are never split or reordered. The relevance cut keeps the rows scoring at least
 /// [`Budget::min_score`] times the top score, and at least [`MIN_ROWS`] rows; the row cap then applies to what it kept,
 /// so a `max_results` below [`MIN_ROWS`] wins. The token cut falls at the first block that would break the cap, so a row
-/// larger than the whole token budget leaves no results. `total_before` is the count the caller had before any cut,
+/// larger than the whole token budget leaves no results. The offset skips rows of the relevant prefix before either cap
+/// counts, so the caps bound the page, and the relevance cut does not move with it. `total_before` is the count the caller had before any cut,
 /// which may exceed `ranked.len()` when an earlier stage already dropped candidates; the response is truncated whenever
-/// fewer blocks are kept than that. `diagnostics` pass through untouched.
+/// fewer blocks are kept than that, which includes every page after the first. `diagnostics` pass through untouched.
 ///
 /// # Examples
 ///
@@ -105,7 +111,7 @@ pub fn apply_budget(
     debug_assert_eq!(ranked.len(), row_texts.len(), "each block needs its printed row");
     let relevant = relevant_rows(&ranked, budget.min_score);
     let blocks_cut_by_relevance = ranked.len() - relevant;
-    for (block, text) in ranked.into_iter().zip(row_texts).take(relevant) {
+    for (block, text) in ranked.into_iter().zip(row_texts).take(relevant).skip(budget.offset) {
         if kept.len() >= budget.max_results {
             break;
         }
@@ -120,6 +126,7 @@ pub fn apply_budget(
     SearchResponse {
         total_blocks_before_truncation: outcome.total_before,
         blocks_cut_by_relevance,
+        offset: budget.offset,
         truncated: outcome.truncated(),
         results: outcome.kept,
         diagnostics,
@@ -170,7 +177,7 @@ mod tests {
 
     /// Caps with the relevance cut off, so a test of a cap does not depend on scores.
     fn caps(max_results: usize, max_tokens: usize) -> Budget {
-        Budget { max_results, max_tokens, min_score: 0.0 }
+        Budget { max_results, max_tokens, min_score: 0.0, offset: 0 }
     }
 
     /// One block per score, in the order given, ranked from 1.
@@ -180,7 +187,7 @@ mod tests {
 
     /// The ranks that survive the relevance cut of `min_score` alone, with the row and token caps out of the way.
     fn relevant(scores: &[f64], min_score: f64) -> Vec<usize> {
-        let budget = Budget { max_results: usize::MAX, max_tokens: usize::MAX, min_score };
+        let budget = Budget { max_results: usize::MAX, max_tokens: usize::MAX, min_score, offset: 0 };
         let ranked = scored(scores);
         let total = ranked.len();
         let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
@@ -198,7 +205,7 @@ mod tests {
 
     #[test]
     fn default_budget_is_the_agent_default() {
-        assert_eq!(Budget::default(), Budget { max_results: 20, max_tokens: 20_000, min_score: 0.3 });
+        assert_eq!(Budget::default(), Budget { max_results: 20, max_tokens: 20_000, min_score: 0.3, offset: 0 });
         assert_eq!(MIN_ROWS, 8);
     }
 
@@ -255,7 +262,7 @@ mod tests {
             let ranked = scored(scores);
             let total = ranked.len();
             let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
-            let budget = Budget { max_results, max_tokens: usize::MAX, min_score: 0.3 };
+            let budget = Budget { max_results, max_tokens: usize::MAX, min_score: 0.3, offset: 0 };
             apply_budget(ranked, total, &budget, &texts, Vec::new())
         };
         assert_eq!(ranks(&at(1, &then(&[1.0], 0.1, 3))), [1]);
@@ -290,7 +297,7 @@ mod tests {
     fn the_token_cap_applies_to_the_rows_the_relevance_cut_kept() {
         let ranked = scored(&then(&[1.0; 9], 0.1, 1));
         let texts = vec!["abc".to_owned(); 10];
-        let budget = Budget { max_results: 20, max_tokens: 2, min_score: 0.3 };
+        let budget = Budget { max_results: 20, max_tokens: 2, min_score: 0.3, offset: 0 };
         let response = apply_budget(ranked, 10, &budget, &texts, Vec::new());
         assert_eq!(ranks(&response), [1, 2]);
         assert_eq!((response.blocks_cut_by_relevance, response.total_blocks_before_truncation), (1, 10));
@@ -393,6 +400,80 @@ mod tests {
     fn a_long_unbroken_run_is_counted_at_once() {
         let text = "a".repeat(200 * 1024);
         assert_eq!(count_tokens(&text), 200 * 1024 / 3 + 1);
+    }
+
+    /// The ranks the page at `offset` holds, under the default relevance cut and a row cap of `max_results`.
+    fn page(scores: &[f64], offset: usize, max_results: usize) -> SearchResponse {
+        let ranked = scored(scores);
+        let total = ranked.len();
+        let texts: Vec<String> = ranked.iter().map(|b| b.block.code.clone()).collect();
+        let budget = Budget { max_results, offset, ..Budget::default() };
+        apply_budget(ranked, total, &budget, &texts, Vec::new())
+    }
+
+    #[test]
+    fn an_offset_skips_that_many_ranked_rows_and_the_next_page_follows_the_first() {
+        let scores = [1.0; 31];
+        let first = page(&scores, 0, 8);
+        let second = page(&scores, 8, 8);
+        assert_eq!((ranks(&first), first.offset, first.total_blocks_before_truncation), (one_to(8), 0, 31));
+        assert_eq!(ranks(&second), (9..=16).collect::<Vec<_>>());
+        assert_eq!((second.offset, second.total_blocks_before_truncation, second.truncated), (8, 31, true));
+    }
+
+    #[test]
+    fn pages_laid_end_to_end_are_the_one_large_run() {
+        let scores = then(&[1.0; 12], 0.5, 19);
+        let whole = ranks(&page(&scores, 0, 100));
+        let mut paged = Vec::new();
+        for offset in (0..scores.len()).step_by(7) {
+            paged.extend(ranks(&page(&scores, offset, 7)));
+        }
+        assert_eq!(paged, whole);
+        assert_eq!(whole, one_to(31));
+    }
+
+    #[test]
+    fn the_relevance_cut_does_not_move_with_the_offset() {
+        // Nine rows at 1.0 pass the cut; the tail at 0.1 never does, whichever page is asked for.
+        let scores = then(&[1.0; 9], 0.1, 5);
+        let first = page(&scores, 0, 4);
+        let second = page(&scores, 4, 4);
+        let third = page(&scores, 8, 4);
+        assert_eq!(ranks(&first), one_to(4));
+        assert_eq!(ranks(&second), [5, 6, 7, 8]);
+        assert_eq!(ranks(&third), [9]);
+        for response in [&first, &second, &third] {
+            assert_eq!((response.blocks_cut_by_relevance, response.total_blocks_before_truncation), (5, 14));
+        }
+    }
+
+    #[test]
+    fn an_offset_at_or_past_the_last_kept_row_returns_no_rows_and_keeps_the_counts() {
+        let scores = then(&[1.0; 9], 0.1, 5);
+        for offset in [9, 10, 14, 1_000] {
+            let response = page(&scores, offset, 20);
+            assert_eq!(ranks(&response), Vec::<usize>::new(), "offset {offset}");
+            assert_eq!((response.offset, response.blocks_cut_by_relevance), (offset, 5), "offset {offset}");
+            assert_eq!((response.total_blocks_before_truncation, response.truncated), (14, true), "offset {offset}");
+        }
+        let empty = page(&[], 3, 20);
+        assert_eq!((ranks(&empty), empty.total_blocks_before_truncation, empty.truncated), (vec![], 0, false));
+    }
+
+    #[test]
+    fn the_token_cap_bounds_the_page_and_not_the_rows_skipped() {
+        // Each row is one token; the cap of 2 tokens holds two rows of the page whatever was skipped before it.
+        let ranked = scored(&[1.0; 10]);
+        let texts = vec!["abc".to_owned(); 10];
+        let budget = Budget { max_tokens: 2, offset: 6, ..Budget::default() };
+        let response = apply_budget(ranked, 10, &budget, &texts, Vec::new());
+        assert_eq!(ranks(&response), [7, 8]);
+    }
+
+    #[test]
+    fn the_row_cap_wins_over_the_floor_on_a_later_page_too() {
+        assert_eq!(ranks(&page(&[1.0; 10], 2, 3)), [3, 4, 5]);
     }
 
     #[test]
