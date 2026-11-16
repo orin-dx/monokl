@@ -116,7 +116,7 @@ which is why the hint says `below relevance P`. The first 8 rows are kept whatev
 can be printed, and only while fewer than 8 rows reach it. `relevance` compares the rows of one query; the top score
 is not comparable across queries (BM25 depends on the corpus), so it is not printed. The columns are
 `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`; the old `rank` was the row index and is
-gone. Why: [05 §51](../spec/05-research-and-decisions.md).
+gone. Why: [05 §52](../spec/05-research-and-decisions.md).
 
 Why these defaults: [05 §46](../spec/05-research-and-decisions.md). To get the output of versions before the change, run `--min-score 0 --max-results 50 --snippet-lines 3`.
 

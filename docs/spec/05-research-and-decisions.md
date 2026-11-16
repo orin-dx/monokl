@@ -667,7 +667,7 @@ Two changes, each with its own reason, shipped together because the second remov
 - **Not claimed.** The first-row judgment is against the expected declaration, not a blind human review. The held-out sets are small (36 Rust rows), so 34 to 35 is one row. `ListenerExt` is the only row the prefix rule was written for; the others gain or lose as a side effect.
 - **Output.** `finalScore` changes for blocks whose name holds a prefix and for every `impl`; no column or wire shape.
 
-## 51. A search row ends in `relevance`, not `rank` and `finalScore` (2026-11-16)
+## 52. A search row ends in `relevance`, not `rank` and `finalScore` (2026-11-16)
 
 - **Decision.** The row columns are `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`. `rank` is gone. `finalScore` is replaced by `relevance`: the row's score as an integer percent of the top row's score (top row 100, rounded to the nearest whole number, clamped to 0..=100). The float score stays in core for the sort and the relevance cut; `SearchResponse::top_score` carries the best score of the whole ranking, so a page after `--offset` still measures against the first row of the result. The output layer computes the percent from `final_score` and `top_score`, the floats the sort and the cut use, never from printed text. A top score that is not positive leaves nothing to divide by; every row then ties with the top under the cut (the threshold is 0), so each shows 100. No other column, no order and no lean default changed.
 - **Name.** `relevance`: columns are camelCase words (`lineStart`, `symbolSignature`, `nodeKind`), and one lower-case word fits that; `scorePct` would have named the unit instead of the meaning and nothing in michi's field handling needed it. The `--min-score` help, the README and the paging hint use the same word: the hint says `--min-score 0 for the 2 rows below relevance 30`, where 30 is 100 times `--min-score` (rounded to a whole number).
@@ -684,7 +684,7 @@ Two changes, each with its own reason, shipped together because the second remov
   - *`null` as an empty cell.* Judgment, not measured: the columns use `null` to say "none" (`parent`, `snippet`), and an empty cell would read as an empty string, which a snippet or a signature can be.
   - *Score at 1 or 2 decimals.* One decimal makes the top two rows tie in 7 queries, which loses exactly the ratio the study found informative; two decimals still cost the digits and the cross-query comparison the digits invite.
   - *Drop `finalScore` outright.* Loses the ratio that tells a reader whether the first row stands alone (AUC 0.80) and the link to `--min-score`, which a reader can no longer check against the rows.
-- **Measured** (the real binary, `just agent-cost --json`, 222 rows, main at 701adec8 before and this change after; bytes of one `monokl search <words> .`; tokens are bytes / 3.5 because no `o200k_base` tokenizer was available in the sandbox, so the study's token shares above are the study's and the figures below are bytes):
+- **Measured** (the real binary, `just agent-cost --json` for bytes, 222 rows, main at 701adec8 before and this change after; bytes of one `monokl search <words> .`; tokens are `o200k_base` (tiktoken) over the same output):
 
   | set | n | median before | median after | p90 before | p90 after | one turn before / after |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -698,6 +698,6 @@ Two changes, each with its own reason, shipped together because the second remov
   | report-only | 14 | 2,108 | 2,022 | 3,690 | 3,516 | 13 / 13 |
   | all | 222 | 1,456 | 1,387 | 3,623 | 3,434 | 206 / 206 |
 
-  The total falls from 383,506 to 365,518 bytes (4.7%); the median at 3.5 bytes a token falls from 417 to 397 tokens and the p90 from 1,036 to 982. This is about half of the 9% the study's token shares suggested: a float's digits cost more tokens per byte than the rest of a row, so bytes understate the saving, but that was not measured here.
+  Over the 222 queries, tokens fall from 117,884 to 107,201 in total (9.1%), the median from 447.5 to 405 (9.5%) and the p90 from 1,112 to 1,010 (9.2%). Bytes fall less: 383,506 to 365,518 in total (4.7%), the median 1,456 to 1,387, the p90 3,623 to 3,434. The digits of a 6-decimal float tokenize badly, so bytes understate the saving, as the study found.
 - **Harness** (`just rg-compare`): every set equals main's (identifiers 59/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 32/33 and 22/22, held-out Rust 35/36, react-hook-form 14/14), and `scripts/agent-cost.py` answerable in one turn is 206 of 222, as before.
 - **Left open.** A reader that wants the raw score has no way to get it. Whether a model uses `relevance` is not measured; the study counted tokens, not behavior.
