@@ -2,7 +2,7 @@
 monokl: minor
 ---
 
-**A search row drops `rank` and shows `relevance` in place of `finalScore`.** The columns are now `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`. On the 222 rows of the harness the total output falls from 117,884 to 107,201 `o200k_base` tokens (9.1%), the median from 447.5 to 405 tokens and the p90 from 1,112 to 1,010; in bytes the total falls from 383,506 to 365,518 (4.7%). Every harness score and every one-turn answer count stays at its baseline (206 of 222).
+**A search row drops `rank` and shows `relevance` in place of `finalScore`.** The columns are now `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`. On the 222 rows of the harness the total output falls from 118,601 to 107,918 `o200k_base` tokens (9.0%), the median from 448.5 to 405.5 tokens and the p90 from 1,120 to 1,033; in bytes the total falls from 385,471 to 367,483 (4.7%). Every harness score and every one-turn answer count stays at its baseline (206 of 222).
 
 - **`rank` is gone.** It equalled the row's position in every one of the 2,038 rows measured, and rows are still printed best first.
 - **`relevance` replaces `finalScore`.** It is the row's score as a whole percent of the top row's score (top row 100, rounded to the nearest whole number). It compares the rows of one query; a raw score cannot be compared across queries. A page printed with `--offset` measures against the top row of the whole result, so its first row is not 100.

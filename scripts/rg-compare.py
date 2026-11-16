@@ -188,6 +188,18 @@ def definitions(term, path, lang, member=False):
     return rg_files(declaration_pattern(term, lang, member), path, lang)
 
 
+def row_lines(out):
+    """The result rows of a `monokl search` output: the indented lines under the `search[N]{...}:` header. Other blocks
+    after the rows (`truncated[N]{row,field,removed}:`, `totalCount`) also indent their lines, and none of them is a
+    row."""
+    rows = False
+    for line in out.splitlines():
+        if not line.startswith(" "):
+            rows = line.startswith("search[")
+        elif rows:
+            yield line
+
+
 def monokl_files(binary, term, path, tests):
     """Runs monokl with its default caps, as an agent would, and returns the files in rank order and the output size."""
     args = [binary, "search", term, "."]
@@ -195,8 +207,8 @@ def monokl_files(binary, term, path, tests):
         args.append("--tests")
     out = run(args, cwd=path, check=False).stdout
     files = []
-    for line in out.splitlines():
-        if line.startswith("  ") and "," in line:
+    for line in row_lines(out):
+        if "," in line:
             file = line.strip().split(",", 1)[0].removeprefix("./")
             if file not in files:
                 files.append(file)

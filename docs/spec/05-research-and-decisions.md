@@ -667,6 +667,18 @@ Two changes, each with its own reason, shipped together because the second remov
 - **Not claimed.** The first-row judgment is against the expected declaration, not a blind human review. The held-out sets are small (36 Rust rows), so 34 to 35 is one row. `ListenerExt` is the only row the prefix rule was written for; the others gain or lose as a side effect.
 - **Output.** `finalScore` changes for blocks whose name holds a prefix and for every `impl`; no column or wire shape.
 
+## 51. michi 0.10.0: a cut cell ends in `…` and is listed in a `truncated` block (2026-11-16)
+
+- **Decision.** `michi-core` moves from 0.7.1 to 0.10.0. The output keeps michi's cut-cell form and adds nothing: no `budget:` or `provenance:` block, no `truncation_hint`, no per-cell cap change. monokl does not cut cells itself.
+- **What changes on the wire.** A cell over michi's 200-character cap used to end in `(N more chars)`. It now keeps 199 characters, ends in `…`, and a `truncated[N]{row,field,removed}:` block after the rows lists each cut (`row` is 0-based, `removed` is the characters cut). In practice only `symbolSignature` reaches the cap, because the snippet lines are already cut at 160 characters by monokl. The rest of the output is byte-identical.
+- **Measured.** 23 of the 222 harness outputs (10%) carry the block. The total output is 385,471 bytes, was 383,506 at the last measure on main (+0.5%, about +85 bytes on an affected output). The harness holds: identifiers 59/59, questions 17/18, members 15/16, Rust 22/24, held-out 32/33, 22/22 and 35/36, answerable in one turn 206/222.
+- **Why accept it.** The block is michi's definition of a cut and says what the reader did not get; the old suffix could not be told from a signature that ended that way. Cutting in monokl would hand-roll what michi provides (AGENTS.md) and drop the count. The cost is small and falls on the longest signatures.
+- **Rejected.** Raising the cap to avoid the block: a longer signature costs more on every row that has one, to save the block on a few. Cutting the signature in monokl before michi sees it: no block, but the reader cannot tell a cut signature from a whole one. Adding `truncation_hint`: it tells the reader to pass `full=true`, which monokl has no flag for.
+- **Not adopted from 0.10.0.** `BudgetSummary` and `ProvenanceBlock` cost about 66 tokens a response (+13% on the 509-token mean of a 20-query sample) and replace no line. Their types are marked unstable by michi until a second consumer uses them. `Section` is used for the one `search` list, which is how `total_count` is set now that `AgentResponse::total_count` is gone. `PartialSuccess` is per operation of a batch; a search has no operations.
+- **A bug the bump exposed.** `search_row_texts` took every line after the header as a row. With the `truncated` block that counted its lines as rows, so a debug build panicked on `each block needs its printed row` (`zustand "create store state"`) and a release build gave the budget a wrong row count. It now reads the indented lines under the header only.
+- **Errors.** michi 0.8 made `DomainError::from_error` keep only the error's own message. monokl calls `from_error_with_causes`, so `causes[N]` is still printed and a multi-line message stays whole. Supersedes the `from_error` wording of the michi entry above.
+- **Scripts.** `rg-compare.py` and `agent-cost.py` read result rows through `row_lines`, which stops at the first block that is not the `search` list.
+
 ## 52. A search row ends in `relevance`, not `rank` and `finalScore` (2026-11-16)
 
 - **Decision.** The row columns are `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`. `rank` is gone. `finalScore` is replaced by `relevance`: the row's score as an integer percent of the top row's score (top row 100, rounded to the nearest whole number, clamped to 0..=100). The float score stays in core for the sort and the relevance cut; `SearchResponse::top_score` carries the best score of the whole ranking, so a page after `--offset` still measures against the first row of the result. The output layer computes the percent from `final_score` and `top_score`, the floats the sort and the cut use, never from printed text. A top score that is not positive leaves nothing to divide by; every row then ties with the top under the cut (the threshold is 0), so each shows 100. No other column, no order and no lean default changed.
@@ -684,20 +696,20 @@ Two changes, each with its own reason, shipped together because the second remov
   - *`null` as an empty cell.* Judgment, not measured: the columns use `null` to say "none" (`parent`, `snippet`), and an empty cell would read as an empty string, which a snippet or a signature can be.
   - *Score at 1 or 2 decimals.* One decimal makes the top two rows tie in 7 queries, which loses exactly the ratio the study found informative; two decimals still cost the digits and the cross-query comparison the digits invite.
   - *Drop `finalScore` outright.* Loses the ratio that tells a reader whether the first row stands alone (AUC 0.80) and the link to `--min-score`, which a reader can no longer check against the rows.
-- **Measured** (the real binary, `just agent-cost --json` for bytes, 222 rows, main at 701adec8 before and this change after; bytes of one `monokl search <words> .`; tokens are `o200k_base` (tiktoken) over the same output):
+- **Measured** (the real binary, `just agent-cost --json` for bytes, 222 rows, main at d4c489c5 before and this change after; bytes of one `monokl search <words> .`; tokens are `o200k_base` (tiktoken) over the same output):
 
   | set | n | median before | median after | p90 before | p90 after | one turn before / after |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
   | identifiers | 59 | 463 | 432 | 1,518 | 1,440 | 59 / 59 |
-  | questions | 18 | 1,717 | 1,640 | 3,089 | 2,918 | 14 / 14 |
+  | questions | 18 | 1,717 | 1,640 | 3,148 | 2,977 | 14 / 14 |
   | members | 16 | 1,510 | 1,444 | 4,126 | 3,940 | 14 / 14 |
   | rust (fd) | 24 | 1,322 | 1,255 | 2,696 | 2,567 | 20 / 20 |
   | held-out questions | 33 | 1,581 | 1,509 | 3,703 | 3,525 | 32 / 32 |
-  | held-out members | 22 | 1,471 | 1,402 | 2,366 | 2,295 | 22 / 22 |
+  | held-out members | 22 | 1,471 | 1,402 | 2,451 | 2,380 | 22 / 22 |
   | held-out rust | 36 | 2,792 | 2,648 | 4,058 | 3,869 | 32 / 32 |
-  | report-only | 14 | 2,108 | 2,022 | 3,690 | 3,516 | 13 / 13 |
-  | all | 222 | 1,456 | 1,387 | 3,623 | 3,434 | 206 / 206 |
+  | report-only | 14 | 2,217 | 2,118 | 3,825 | 3,651 | 13 / 13 |
+  | all | 222 | 1,460 | 1,392 | 3,623 | 3,434 | 206 / 206 |
 
-  Over the 222 queries, tokens fall from 117,884 to 107,201 in total (9.1%), the median from 447.5 to 405 (9.5%) and the p90 from 1,112 to 1,010 (9.2%). Bytes fall less: 383,506 to 365,518 in total (4.7%), the median 1,456 to 1,387, the p90 3,623 to 3,434. The digits of a 6-decimal float tokenize badly, so bytes understate the saving, as the study found.
+  Over the 222 queries, tokens fall from 118,601 to 107,918 in total (9.0%), the median from 448.5 to 405.5 (9.6%) and the p90 from 1,120 to 1,033 (7.8%). Bytes fall less: 385,471 to 367,483 in total (4.7%), the median 1,460.5 to 1,392, the p90 3,623 to 3,434. The digits of a 6-decimal float tokenize badly, so bytes understate the saving, as the study found.
 - **Harness** (`just rg-compare`): every set equals main's (identifiers 59/59, questions 17/18, members 15/16, Rust fd 22/24, held-out 32/33 and 22/22, held-out Rust 35/36, react-hook-form 14/14), and `scripts/agent-cost.py` answerable in one turn is 206 of 222, as before.
 - **Left open.** A reader that wants the raw score has no way to get it. Whether a model uses `relevance` is not measured; the study counted tokens, not behavior.

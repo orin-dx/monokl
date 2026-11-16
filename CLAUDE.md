@@ -6,9 +6,9 @@ This file adds only what's specific to Claude Code.
 
 ## Skills
 
-- **`/guide:fix`** before proposing a fix for a test failure or unexpected behavior. It starts from a test that fails on the original bug.
-- **`/guide:build`** before writing implementation code for a command or module. The spec's fixtures (`tests/fixtures/small-ts/`) drive its tests.
-- **`/guide:explore`** before any design change not already covered by `docs/adr/` or `docs/spec/05-research-and-decisions.md`.
+- **`/wisp:fix`** before proposing a fix for a test failure or unexpected behavior. It starts from a test that fails on the original bug.
+- **`/wisp:build`** before writing implementation code for a command or module. The spec's fixtures (`tests/fixtures/small-ts/`) drive its tests.
+- **`/wisp:explore`** before any design change not already covered by `docs/adr/` or `docs/spec/05-research-and-decisions.md`.
 
 ## Verification
 
