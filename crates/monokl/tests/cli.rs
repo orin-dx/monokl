@@ -331,28 +331,26 @@ fn with_whole_rows<'a>(args: &[&'a str]) -> Vec<&'a str> {
 }
 
 /// The expected output for the first `rows` of the `price` query, cut from 8, whose help line names `flag`.
-fn price_cut(rows: &[&str], flag: &str) -> String {
+fn price_cut(rows: &[&str], guidance: &str) -> String {
     let n = rows.len();
     let header = PRICE_HEADER.replace('N', &n.to_string());
     let body: String = rows.iter().flat_map(|row| [*row, "\n"]).collect();
-    format!(
-        "{header}\n{body}totalCount: 8\nhelp[1]: \"showing {n} of 8; {flag} for more, or refine with +term/-term\"\n"
-    )
+    format!("{header}\n{body}totalCount: 8\nhelp[1]: \"showing {n} of 8; {guidance}\"\n")
 }
 
 #[test]
 fn a_cut_by_rows_keeps_the_first_rows_and_says_so() {
     let output = monokl(&with_whole_rows(&["search", "price", ".", "--max-results", "2"]));
-    assert_eq!(stdout(&output), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "--max-results N"));
+    assert_eq!(stdout(&output), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "next: --offset 2, or refine with +term/-term"));
 }
 
 #[test]
 fn a_cut_by_tokens_counts_the_printed_rows_and_not_the_blocks() {
     let printed = monokl::budget::count_tokens(PRICE_ROW_1) + monokl::budget::count_tokens(PRICE_ROW_2);
     let at = monokl(&with_whole_rows(&["search", "price", ".", "--max-tokens", &printed.to_string()]));
-    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "--max-tokens N"));
+    assert_eq!(stdout(&at), price_cut(&[PRICE_ROW_1, PRICE_ROW_2], "next: --offset 2, or refine with +term/-term"));
     let under = monokl(&with_whole_rows(&["search", "price", ".", "--max-tokens", &(printed - 1).to_string()]));
-    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1], "--max-tokens N"));
+    assert_eq!(stdout(&under), price_cut(&[PRICE_ROW_1], "next: --offset 1, or refine with +term/-term"));
 }
 
 #[test]
@@ -473,7 +471,7 @@ fn by_default_a_typescript_search_keeps_the_rows_above_the_cut_and_up_to_the_flo
          \x20 src/pricing.ts,25,27,function,null,\"function listD(items: Item[]): number\",\"26: return items.map(price).length;\",7,0.054906\n\
          \x20 src/pricing.ts,29,31,function,null,\"function listE(items: Item[]): number\",\"30: return items.map(price).length;\",8,0.054906\n\
          totalCount: 13\n\
-         help[1]: \"showing 8 of 13; --min-score 0 for more, or refine with +term/-term\"\n"
+         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below the cut, or refine with +term/-term\"\n"
     );
 }
 
@@ -496,7 +494,7 @@ fn by_default_a_rust_search_keeps_the_rows_above_the_cut_and_up_to_the_floor_the
          \x20 src/pricing.rs,25,27,function,null,\"pub fn list_d(items: &[Item]) -> usize\",\"26: items.iter().map(price).count()\",7,0.054839\n\
          \x20 src/pricing.rs,29,31,function,null,\"pub fn list_e(items: &[Item]) -> usize\",\"30: items.iter().map(price).count()\",8,0.054839\n\
          totalCount: 13\n\
-         help[1]: \"showing 8 of 13; --min-score 0 for more, or refine with +term/-term\"\n"
+         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below the cut, or refine with +term/-term\"\n"
     );
 }
 
@@ -521,22 +519,24 @@ fn a_min_score_of_one_keeps_the_floor_and_the_rows_that_tie_with_the_top() {
 }
 
 #[test]
-fn the_row_cap_wins_over_the_floor_and_the_help_line_names_both_flags_when_both_cut() {
+fn the_row_cap_wins_over_the_floor_and_the_help_line_names_the_offset_and_the_min_score_flag_when_both_cut() {
     let dir = pricing_project("pricing.ts", &pricing_ts());
     let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--max-results", "5"]));
     assert_eq!(printed_ranks(&text), ["1", "2", "3", "4", "5"], "got: {text}");
     assert_eq!(
         text.lines().last(),
-        Some("help[1]: \"showing 5 of 13; --min-score 0 or --max-results N for more, or refine with +term/-term\"")
+        Some(
+            "help[1]: \"showing 5 of 13; next: --offset 5, --min-score 0 for the 5 rows below the cut, or refine with +term/-term\""
+        )
     );
 }
 
 #[test]
-fn the_help_line_names_only_the_row_cap_when_the_relevance_cut_dropped_nothing() {
+fn the_help_line_names_only_the_offset_when_the_relevance_cut_dropped_nothing() {
     let output = monokl(&["search", "price", ".", "--max-results", "2"]);
     assert_eq!(
         stdout(&output).lines().last(),
-        Some("help[1]: \"showing 2 of 8; --max-results N for more, or refine with +term/-term\"")
+        Some("help[1]: \"showing 2 of 8; next: --offset 2, or refine with +term/-term\"")
     );
 }
 
@@ -815,4 +815,178 @@ fn files_over_the_size_limit_are_skipped_and_reported_in_one_line() {
     assert!(text.contains("2 files skipped: over 4 MiB: big_a.ts, big_b.ts"), "got: {text}");
     assert!(text.contains("small.ts,1,1,"), "got: {text}");
     assert!(!text.contains("big_a.ts,1"), "got: {text}");
+}
+
+/// A project of `files` source files with the extension `ext`, each declaring `per_file` functions whose names hold the
+/// word `item`, so one query matches every block.
+fn project_of_items(ext: &str, files: usize, per_file: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for file in 0..files {
+        let body: String = (0..per_file)
+            .map(|n| match ext {
+                "rs" => format!("pub fn item_{file}_{n}() -> u32 {{\n    {n}\n}}\n\n"),
+                _ => format!("export function item_{file}_{n}(): number {{\n  return {n};\n}}\n\n"),
+            })
+            .collect();
+        std::fs::write(dir.path().join(format!("m{file:02}.{ext}")), body).unwrap();
+    }
+    dir
+}
+
+/// The rows of a printed result, without the header, the count and the hints.
+fn rows(text: &str) -> Vec<String> {
+    text.lines().skip(1).take_while(|line| line.starts_with("  ")).map(str::to_owned).collect()
+}
+
+/// The `help[1]` line of a printed result, without its quotes.
+fn first_help(text: &str) -> Option<String> {
+    text.lines().find_map(|line| line.strip_prefix("help[1]: ").map(|h| h.trim_matches('"').to_owned()))
+}
+
+#[test]
+fn pages_laid_end_to_end_are_the_one_large_run_in_typescript_and_rust() {
+    for ext in ["ts", "rs"] {
+        let dir = project_of_items(ext, 6, 6);
+        let big = stdout(&monokl_in(dir.path(), &["search", "item", ".", "--min-score", "0", "--max-results", "100"]));
+        let whole = rows(&big);
+        assert_eq!(whole.len(), 36, "{ext}");
+        let mut paged = Vec::new();
+        for offset in ["0", "10", "20", "30"] {
+            let args = ["search", "item", ".", "--min-score", "0", "--max-results", "10", "--offset", offset];
+            let page = monokl_in(dir.path(), &args);
+            assert!(page.status.success(), "{ext} {offset}: {}", stderr(&page));
+            paged.extend(rows(&stdout(&page)));
+        }
+        assert_eq!(paged, whole, "{ext}");
+    }
+}
+
+#[test]
+fn the_help_line_names_the_exact_next_offset_and_the_last_page_names_none() {
+    for ext in ["ts", "rs"] {
+        let dir = project_of_items(ext, 6, 6);
+        let first = stdout(&monokl_in(dir.path(), &["search", "item", ".", "--min-score", "0", "--max-results", "8"]));
+        assert_eq!(rows(&first).len(), 8, "{ext}");
+        assert_eq!(
+            first_help(&first).as_deref(),
+            Some("showing 8 of 36; next: --offset 8, or refine with +term/-term"),
+            "{ext}"
+        );
+        let args = ["search", "item", ".", "--min-score", "0", "--max-results", "8", "--offset", "32"];
+        let last = stdout(&monokl_in(dir.path(), &args));
+        assert_eq!(rows(&last).len(), 4, "{ext}");
+        assert_eq!(first_help(&last).as_deref(), Some("showing 4 of 36; refine with +term/-term"), "{ext}");
+    }
+}
+
+#[test]
+fn an_offset_past_the_end_prints_no_rows_and_the_count_and_exits_zero() {
+    for ext in ["ts", "rs"] {
+        let dir = project_of_items(ext, 2, 5);
+        let output = monokl_in(dir.path(), &["search", "item", ".", "--min-score", "0", "--offset", "10"]);
+        assert!(output.status.success(), "{ext}: {}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            "search: []\ntotalCount: 10\nhelp[1]: showing 0 of 10; offset 10 is past the last of 10 rows\n",
+            "{ext}"
+        );
+        assert_eq!(stderr(&output), "");
+    }
+}
+
+#[test]
+fn the_default_relevance_cut_gives_the_same_rows_whatever_the_offset() {
+    let dir = project_of_items("rs", 3, 4);
+    let default = stdout(&monokl_in(dir.path(), &["search", "item", ".", "--max-results", "100"]));
+    let second = stdout(&monokl_in(dir.path(), &["search", "item", ".", "--max-results", "100", "--offset", "5"]));
+    assert_eq!(rows(&second), rows(&default)[5..], "the same rows follow the same cut");
+}
+
+#[test]
+fn the_token_budget_bounds_the_page_and_not_the_rows_before_it() {
+    let dir = project_of_items("ts", 6, 6);
+    let all = ["search", "item", ".", "--min-score", "0", "--max-results", "100"];
+    let whole = rows(&stdout(&monokl_in(dir.path(), &all)));
+    let tight = [all.as_slice(), &["--max-tokens", "60", "--offset", "30"]].concat();
+    let page = rows(&stdout(&monokl_in(dir.path(), &tight)));
+    assert!(!page.is_empty() && page.len() < 6, "the budget cuts the last page too: {}", page.len());
+    assert_eq!(page, whole[30..30 + page.len()]);
+}
+
+#[test]
+fn a_non_numeric_offset_is_a_usage_error() {
+    let output = monokl(&["search", "format", ".", "--offset", "next"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).contains("invalid value 'next' for '--offset <N>'"), "got: {}", stderr(&output));
+}
+
+/// Twelve files whose function matches both query words and twenty whose function matches one, so the default relevance
+/// cut keeps the first and hides the second.
+fn project_with_strong_and_weak_matches() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for n in 0..12 {
+        std::fs::write(dir.path().join(format!("s{n:02}.rs")), format!("pub fn alpha_beta_{n}() -> u32 {{ {n} }}\n"))
+            .unwrap();
+    }
+    for n in 0..20 {
+        std::fs::write(dir.path().join(format!("w{n:02}.rs")), format!("pub fn alpha_{n}() -> u32 {{ {n} }}\n"))
+            .unwrap();
+    }
+    dir
+}
+
+#[test]
+fn following_the_hint_walks_the_rows_that_pass_the_cut_and_never_reaches_an_empty_page() {
+    let dir = project_with_strong_and_weak_matches();
+    let walk = |extra: &[&str], first_hint: &str, last_hint: &str| {
+        let mut seen = Vec::new();
+        let mut offset = 0;
+        let mut hints = Vec::new();
+        loop {
+            let off = offset.to_string();
+            let args = [&["search", "alpha beta", ".", "--max-results", "5", "--offset", off.as_str()], extra].concat();
+            let text = stdout(&monokl_in(dir.path(), &args));
+            let page = rows(&text);
+            assert!(!page.is_empty(), "the hint led to an empty page at offset {offset}: {text}");
+            offset += page.len();
+            seen.extend(page);
+            let help = first_help(&text).unwrap();
+            let next =
+                help.split("next: --offset ").nth(1).map(|rest| rest.split([',', ';']).next().unwrap().to_owned());
+            hints.push(help);
+            match next {
+                Some(n) => assert_eq!(n, offset.to_string()),
+                None => break,
+            }
+        }
+        assert!(hints[0].starts_with(first_hint), "{}", hints[0]);
+        assert!(hints.last().unwrap().starts_with(last_hint), "{}", hints.last().unwrap());
+        (seen, hints.len())
+    };
+    let big = |extra: &[&str]| {
+        let args = [&["search", "alpha beta", ".", "--max-results", "100"], extra].concat();
+        let text = stdout(&monokl_in(dir.path(), &args));
+        (rows(&text), first_help(&text))
+    };
+
+    let (kept, help) = big(&[]);
+    assert_eq!(kept.len(), 12);
+    assert_eq!(
+        help.as_deref(),
+        Some("showing 12 of 32; --min-score 0 for the 20 rows below the cut, or refine with +term/-term")
+    );
+    let (seen, pages) = walk(
+        &[],
+        "showing 5 of 32; next: --offset 5, --min-score 0 for the 20 rows below the cut",
+        "showing 2 of 32; --min-score 0 for the 20 rows below the cut, or refine",
+    );
+    assert_eq!((seen, pages), (kept.clone(), 3));
+
+    let (all, help) = big(&["--min-score", "0"]);
+    assert_eq!((all.len(), help), (32, None));
+    assert_eq!(all[..12], kept[..]);
+    let (seen, pages) =
+        walk(&["--min-score", "0"], "showing 5 of 32; next: --offset 5, or refine", "showing 2 of 32; refine");
+    assert_eq!((seen, pages), (all, 7));
 }
