@@ -23,7 +23,7 @@ use crate::file_io::FileIoError;
 use crate::query::{Modifier, ParsedTerm, QueryPlan, parse};
 use crate::rank::{rank_blocks, tokenize_block};
 use crate::text_search::{
-    BATCH_FILES_PER_THREAD, DEFAULT_MAX_FILES, FileAccess, Incomplete, MAX_FILE_BYTES, MAX_LINE_BYTES,
+    BATCH_FILES_PER_THREAD, DEFAULT_MAX_FILES, FileAccess, Incomplete, KeptText, MAX_FILE_BYTES, MAX_LINE_BYTES,
     RETAINED_SOURCE_BYTES, Retention, TextSearchOptions, TextSearchResult, open_file, search_files_where,
     search_in_batches_with,
 };
@@ -280,7 +280,7 @@ fn search_reading(
         .iter()
         .filter(|(path, _)| !excluded_files.contains(*path))
         .filter(|(_, hits)| plan.required.iter().all(|&i| hits.iter().any(|hit| matches_text(&matchers[i], &hit.text))))
-        .map(|(path, hits)| Survivor { path, hits, text: retained.remove(path) })
+        .map(|(path, hits)| Survivor { path, hits, text: retained.remove(path).map(KeptText::into_bytes) })
         .collect();
     // What the survivors did not take is dropped now, not held through analysis.
     drop(retained);

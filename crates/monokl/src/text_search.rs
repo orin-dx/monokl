@@ -215,7 +215,7 @@ pub fn search_files_where(
 }
 
 /// The text of matching files, by path, kept while they were searched.
-pub(crate) type Retained = FxHashMap<Utf8PathBuf, Vec<u8>>;
+pub(crate) type Retained = FxHashMap<Utf8PathBuf, KeptText>;
 
 /// A budget of bytes of source text that a search may keep.
 pub(crate) struct Retention {
@@ -232,17 +232,38 @@ impl Retention {
         usize::try_from(len).is_ok_and(|len| len <= RETAINED_FILE_BYTES && len <= self.remaining())
     }
 
-    /// Takes `len` bytes of the budget, or nothing when less is left.
-    fn reserve(&self, len: usize) -> bool {
-        self.remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(len)).is_ok()
+    /// Keeps `bytes`, charging the budget for the memory the buffer holds, its capacity and not its length, or drops
+    /// them when less is left. A [`KeptText`] is the only way to hold text against the budget, so a buffer is never
+    /// kept for less than it occupies.
+    fn keep(&self, bytes: Vec<u8>) -> Option<KeptText> {
+        let charged = bytes.capacity();
+        self.remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(charged)).ok()?;
+        Some(KeptText { bytes, charged })
     }
 
-    fn release(&self, len: usize) {
-        self.remaining.fetch_add(len, Ordering::Relaxed);
+    /// Gives back what `text` was charged, for text that is dropped instead of used.
+    fn release(&self, text: KeptText) {
+        let KeptText { bytes, charged } = text;
+        drop(bytes);
+        self.remaining.fetch_add(charged, Ordering::Relaxed);
     }
 
     pub(crate) fn remaining(&self) -> usize {
         self.remaining.load(Ordering::Relaxed)
+    }
+}
+
+/// A file's bytes held against a [`Retention`] budget. Its fields are private and [`Retention::keep`] is the only way to
+/// build one, so the budget is charged for the capacity of every buffer that is kept.
+pub(crate) struct KeptText {
+    bytes: Vec<u8>,
+    /// What the budget was charged, which is the buffer's capacity.
+    charged: usize,
+}
+
+impl KeptText {
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
@@ -407,7 +428,7 @@ pub(crate) fn search_in_batches_with(
                             } else {
                                 result.ceiling_hit = true;
                                 if let (Some(text), Some(retention)) = (text, access.retention) {
-                                    retention.release(text.len());
+                                    retention.release(text);
                                 }
                             }
                         }
@@ -604,7 +625,7 @@ enum FileOutcome {
     NotReached,
     /// The file's matching lines, possibly none, how many of them were cut to the line limit, and the file's text when
     /// it was kept.
-    Lines(Vec<LineHit>, u64, Option<Vec<u8>>),
+    Lines(Vec<LineHit>, u64, Option<KeptText>),
 }
 
 /// What bounds the search of one file.
@@ -663,20 +684,21 @@ fn search_in_memory(
         Err(_) => FileOutcome::Unreadable,
         Ok(()) if sink.binary => FileOutcome::Binary,
         Ok(()) => {
-            let keep = !sink.hits.is_empty() && retention.reserve(text.len());
-            FileOutcome::Lines(sink.hits, sink.truncated, keep.then_some(text))
+            let kept = if sink.hits.is_empty() { None } else { retention.keep(text) };
+            FileOutcome::Lines(sink.hits, sink.truncated, kept)
         }
     }
 }
 
-/// Reads up to `len` bytes of `file` in as few reads as the file allows, and none past `len`, so a file that has the
-/// size it was found to have costs one read and no read that finds the end.
-fn read_up_to(mut file: &File, len: u64) -> io::Result<Vec<u8>> {
+/// Reads up to `len` bytes of `reader` in as few reads as the file allows, and none past `len`, so a file that has the
+/// size it was found to have costs one read and no read that finds the end, and one that grew since is read as it was.
+/// A file that shrank gives a buffer cut to what was read, so it does not hold the memory of the size it had.
+fn read_up_to(mut reader: impl Read, len: u64) -> io::Result<Vec<u8>> {
     let len = usize::try_from(len).map_err(io::Error::other)?;
     let mut text = vec![0; len];
     let mut filled = 0;
     while filled < len {
-        match file.read(&mut text[filled..]) {
+        match reader.read(&mut text[filled..]) {
             Ok(0) => break,
             Ok(read) => filled += read,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
@@ -684,6 +706,7 @@ fn read_up_to(mut file: &File, len: u64) -> io::Result<Vec<u8>> {
         }
     }
     text.truncate(filled);
+    text.shrink_to_fit();
     Ok(text)
 }
 
@@ -1594,8 +1617,10 @@ mod tests {
         let retention = Retention::new(budget);
         let access = FileAccess { open: &open, retention: Some(&retention) };
         let (result, retained) = search_in_batches_with(root, &["alpha"], opts, &|_| true, || 4, &access).unwrap();
-        let retained =
-            retained.into_iter().map(|(path, bytes)| (path.strip_prefix(root).unwrap().to_string(), bytes)).collect();
+        let retained = retained
+            .into_iter()
+            .map(|(path, bytes)| (path.strip_prefix(root).unwrap().to_string(), bytes.into_bytes()))
+            .collect();
         (result, retained, opens.load(Ordering::Relaxed))
     }
 
@@ -1684,6 +1709,58 @@ mod tests {
         let kept: Vec<_> = retained.keys().map(|path| path.file_name().unwrap()).collect();
         assert_eq!(kept, ["a.ts"]);
         assert_eq!(retention.remaining(), 1000 - "alpha\n".len());
+    }
+
+    #[test]
+    fn a_file_that_shrank_is_read_to_what_it_has_and_its_buffer_is_cut_to_match() {
+        let bytes = read_up_to(&b"alpha"[..], 100_000).unwrap();
+        assert_eq!(bytes, b"alpha");
+        assert!(bytes.capacity() < 100_000, "capacity {} still holds the size the file had", bytes.capacity());
+    }
+
+    #[test]
+    fn a_file_that_grew_is_read_no_further_than_the_size_it_was_found_to_have() {
+        let data = [b'x'; 2000];
+        let mut source: &[u8] = &data;
+        let bytes = read_up_to(&mut source, 1000).unwrap();
+        assert_eq!(bytes.len(), 1000);
+        assert_eq!(source.len(), 1000);
+    }
+
+    #[test]
+    fn a_buffer_is_charged_for_its_capacity_and_a_full_budget_refuses_it() {
+        let retention = Retention::new(1000);
+        let mut bytes = Vec::with_capacity(400);
+        bytes.extend_from_slice(b"alpha");
+        let capacity = bytes.capacity();
+        let kept = retention.keep(bytes).unwrap();
+        assert_eq!(kept.charged, capacity);
+        assert_eq!(retention.remaining(), 1000 - capacity);
+
+        let refused = retention.keep(Vec::with_capacity(700));
+        assert!(refused.is_none());
+        assert_eq!(retention.remaining(), 1000 - capacity);
+
+        retention.release(kept);
+        assert_eq!(retention.remaining(), 1000);
+    }
+
+    /// Buffers that were allocated for a larger file than they ended up holding cost their capacity, so however many
+    /// there are, what is kept never passes the budget.
+    #[test]
+    fn many_buffers_with_spare_capacity_never_keep_more_than_the_budget() {
+        let retention = Retention::new(RETAINED_SOURCE_BYTES);
+        let buffers = (0..300).map(|_| {
+            let mut bytes = Vec::with_capacity(100_000);
+            bytes.push(b'a');
+            bytes
+        });
+        let kept: Vec<KeptText> = buffers.filter_map(|bytes| retention.keep(bytes)).collect();
+        let held: usize = kept.iter().map(|text| text.bytes.capacity()).sum();
+        assert!(kept.iter().all(|text| text.charged == text.bytes.capacity()));
+        assert_eq!(held, RETAINED_SOURCE_BYTES - retention.remaining());
+        assert_eq!(kept.len(), RETAINED_SOURCE_BYTES / kept[0].bytes.capacity());
+        assert!(held <= RETAINED_SOURCE_BYTES);
     }
 
     #[test]
