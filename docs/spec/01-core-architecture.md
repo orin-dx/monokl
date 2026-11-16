@@ -1234,15 +1234,15 @@ pub fn node_type_boost(kind: SymbolKind) -> f64 {
         SymbolKind::Class | SymbolKind::Method | SymbolKind::Constructor => 1.4,
         SymbolKind::Interface | SymbolKind::Struct => 1.3,
         SymbolKind::TypeAlias | SymbolKind::Enum => 1.2,
-        SymbolKind::Variable | SymbolKind::Impl => 1.1,
+        SymbolKind::Variable => 1.1,
         SymbolKind::Property | SymbolKind::Field | SymbolKind::Macro => 1.0,
-        SymbolKind::Module => 0.9,
+        SymbolKind::Module | SymbolKind::Impl => 0.9,
         SymbolKind::Other => 0.7,
     }
 }
 ```
 
-Exact node_type_boost values: Function=1.5; Class/Method/Constructor=1.4; Interface/Struct=1.3; TypeAlias/Enum=1.2; Variable/Impl=1.1; Property/Field/Macro=1.0; Module=0.9; Other=0.7. Coverage boost is `matched_in_block / len(matched_lines)` rounded to 6dp; 0 if matched_lines empty.
+Exact node_type_boost values: Function=1.5; Class/Method/Constructor=1.4; Interface/Struct=1.3; TypeAlias/Enum=1.2; Variable=1.1; Property/Field/Macro=1.0; Module/Impl=0.9 (05 §50); Other=0.7. Coverage boost is `matched_in_block / len(matched_lines)` rounded to 6dp; 0 if matched_lines empty.
 
 ## rank/tokenize_doc.rs
 
