@@ -71,14 +71,14 @@ full weight in `R`, in `P` and in `exact`.
 `name = round6(1 + 2 * (R + P / 2) / 1.5 + 4 * exact)`, where `exact` is 1 when `R == 1` and `P == 1`. So a name that
 holds none of the terms gets 1.0, a name that holds all of them and nothing else gets 7.0, and the name that says more than
 the query (`validatePrice` for `price`) or less (`parse` for `parse other`) lands between. 1.0 for an empty query and for a
-block with no name or a name of only stop words. 05 §42 records why this shape and the variants it beat, and §47 the
+block with no name or a name of only stop words. 05 §42 records why this shape and the variants it beat, and §50 the
 prefix rule and the variants it beat.
 
 BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` to 6dp for
 cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
 
 `node_type_boost` (`rank/boost.rs`): Function 1.5; Class/Method/Constructor 1.4; Interface/Struct
-1.3; TypeAlias/Enum 1.2; Variable 1.1; Property/Field/Macro 1.0; Module/Impl 0.9; Other 0.7 (§47 moved Impl from 1.1).
+1.3; TypeAlias/Enum 1.2; Variable/Impl 1.1; Property/Field/Macro 1.0; Module 0.9; Other 0.7.
 
 ## Dedup and snippets
 
