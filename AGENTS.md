@@ -56,11 +56,9 @@ Skills in [`.agents/skills/`](.agents/skills/) hold the detail: `rust-style` (co
 
 ## Plugins
 
-Start work through these commands so their checks run:
+Start work with `/wisp:work`, or a mode directly: `/wisp:explore`, `/wisp:spike`, `/wisp:fix`, `/wisp:build`, `/wisp:check`, `/wisp:ship`. State the tier, the brief and the evidence bar first; end with the evidence and a `Not verified:` list.
 
-- Options before deciding: `/guide:explore`. Does it work: `/guide:spike`.
-- Bug or review findings: `/guide:fix`. Real feature or shared change: `/guide:build`.
-- Verify or find bugs: `/guide:check`. Commit: `/guide:ship`.
+Packs: rust-house
 
 Changesets follow the convention in `CONTRIBUTING.md` ("Writing a changeset").
 
