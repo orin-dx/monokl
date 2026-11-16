@@ -109,6 +109,7 @@ pub fn apply_budget(
     let mut kept = Vec::new();
     let mut total_tokens = 0usize;
     debug_assert_eq!(ranked.len(), row_texts.len(), "each block needs its printed row");
+    let top_score = ranked.first().map_or(0.0, |top| top.final_score);
     let relevant = relevant_rows(&ranked, budget.min_score);
     let blocks_cut_by_relevance = ranked.len() - relevant;
     for (block, text) in ranked.into_iter().zip(row_texts).take(relevant).skip(budget.offset) {
@@ -129,6 +130,7 @@ pub fn apply_budget(
         offset: budget.offset,
         truncated: outcome.truncated(),
         results: outcome.kept,
+        top_score,
         diagnostics,
     }
 }

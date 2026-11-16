@@ -155,6 +155,9 @@ pub struct LineHit {
 #[derive(Debug, Clone)]
 pub struct SearchResponse {
     pub results: Vec<RankedBlock>,
+    /// The score of the best row of the whole ranking, before any cut or offset, so the first row of a later page can
+    /// still be shown as a share of it; 0 when nothing ranked.
+    pub top_score: f64,
     pub total_blocks_before_truncation: usize,
     /// How many of the blocks left out of `results` the relevance cut dropped; the row and token caps dropped the rest.
     pub blocks_cut_by_relevance: usize,

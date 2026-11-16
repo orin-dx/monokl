@@ -47,22 +47,22 @@ Search a directory (the default is the current one):
 
 ```
 $ monokl search "format price" src/
-search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,5.901294
-  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n+1 more",2,4.151139
-  src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,1.345138
-  src/utils/validation.ts,14,14,typeAlias,null,null,"14: export type PriceValidator = (price: number) => ValidationResult;",4,1.038379
-  src/components/Button.tsx,11,18,function,null,"function Button({ label, price, onClick, disabled }: ButtonProps)","12: const priceValid = price === undefined || validatePrice(price).valid;\n+1 more",5,0.738398
-  src/hooks/useCart.ts,11,25,function,null,function useCart(),"15: const result = validatePrice(item.price);",6,0.42159
-  src/hooks/useCart.ts,5,9,interface,null,null,"8: price: number;",7,0.407536
-  src/components/Button.tsx,4,9,interface,null,null,"6: price?: number;",8,0.385986
+search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:
+  src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",100
+  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n+1 more",70
+  src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",23
+  src/utils/validation.ts,14,14,typeAlias,null,null,"14: export type PriceValidator = (price: number) => ValidationResult;",18
+  src/components/Button.tsx,11,18,function,null,"function Button({ label, price, onClick, disabled }: ButtonProps)","12: const priceValid = price === undefined || validatePrice(price).valid;\n+1 more",13
+  src/hooks/useCart.ts,11,25,function,null,function useCart(),"15: const result = validatePrice(item.price);",7
+  src/hooks/useCart.ts,5,9,interface,null,null,"8: price: number;",7
+  src/components/Button.tsx,4,9,interface,null,null,"6: price?: number;",7
 totalCount: 10
-help[1]: "showing 8 of 10; --min-score 0 for more, or refine with +term/-term"
+help[1]: "showing 8 of 10; --min-score 0 for the 2 rows below relevance 30, or refine with +term/-term"
 ```
 
-Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, method, interface, type alias and so on), what holds it (`parent`), its signature, the lines in it that matched (`snippet`), and its `rank` and `finalScore`. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
+Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is (`nodeKind`: function, class, method, interface, type alias and so on), what holds it (`parent`), its signature, the lines in it that matched (`snippet`), and its `relevance`: the row's score as a whole percent of the top row's score, so the top row is 100 and a row at 50 scores half as well. Rows are in rank order, best first. `relevance` compares the rows of one query; it is not a number to compare across queries. Output uses [TOON](https://github.com/toon-format/spec), a table format that costs fewer tokens than JSON.
 
-**How many rows.** The default output is lean. A row is kept when its `finalScore` is at least 0.3 times the top row's (`--min-score`), the first eight rows are always kept, and at most 20 are printed (`--max-results`), so the cap wins when it is lower than eight. When rows were cut, `totalCount` holds how many matched and the `help` line names the flag that brings them back: `showing 8 of 10; --min-score 0 for more, or refine with +term/-term`. To page through rows the cap or the budget left out, add `--offset N`: it skips the first N rows of the same ranking and prints the next page under the same cut and caps, and a help line such as `showing 8 of 31; next: --offset 8, or refine with +term/-term` names the next value. To get the output of earlier versions, which printed up to 50 rows with up to three snippet lines each, run `--min-score 0 --max-results 50 --snippet-lines 3`.
+**How many rows.** The default output is lean. A row is kept when it scores at least 0.3 times the top row (`--min-score`), which is a `relevance` of 30, the first eight rows are always kept, and at most 20 are printed (`--max-results`), so the cap wins when it is lower than eight. When rows were cut, `totalCount` holds how many matched and the `help` line names the flag that brings them back: `showing 8 of 10; --min-score 0 for the 2 rows below relevance 30, or refine with +term/-term`. To page through rows the cap or the budget left out, add `--offset N`: it skips the first N rows of the same ranking and prints the next page under the same cut and caps, and a help line such as `showing 8 of 31; next: --offset 8, or refine with +term/-term` names the next value. To get the output of earlier versions, which printed up to 50 rows with up to three snippet lines each, run `--min-score 0 --max-results 50 --snippet-lines 3`.
 
 A method, a constructor, or a class property holding an arrow function or a function expression gets a row of its own when it spans three lines or more and its class is declared at the top level of the file or exported. So does a method, getter, setter, or a property holding an arrow function or a function expression, of an object literal that is assigned to a top-level `const`, `let` or `var`, or is the `export default` value, also through `as`, `satisfies` or parentheses. Its `parent` is `class Foo` for a class member and `variable api` for the members of `const api = { ... }` (`other default` for `export default { ... }`), and `nodeKind` is `method`, `constructor` or `property`; `parent` is `null` on every other row. A line that matched inside a member is shown on the member's row only, and the class's or object's row appears when it has a match outside its members, such as its name. Shorter members, members of an anonymous class, of an interface, of an object literal anywhere else (inside a function, a call or `module.exports = { ... }`) and functions nested inside a member are still reached through the row that holds them.
 
@@ -84,16 +84,16 @@ Matching ignores case. A `-term` removes whole files, not single results. If one
 
 ```
 $ monokl search "+cart -Button" .
-search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n+1 more",1,3.171746
-  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,0.804426
+search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:
+  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n+1 more",100
+  src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",25
 ```
 
 ## Options
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--min-score FRACTION` | 0.3 | Drop the rows scoring below this fraction of the top row's `finalScore`, but never one of the first eight. `0` turns the cut off; `1` keeps only the rows that tie with the top. Outside 0 to 1 is a usage error (exit 2) |
+| `--min-score FRACTION` | 0.3 | Drop the rows scoring below this fraction of the top row's score, which are the rows whose `relevance` is below 100 times it (a row within half a point of the line rounds up onto it), but never one of the first eight. `0` turns the cut off; `1` keeps only the rows that tie with the top. Outside 0 to 1 is a usage error (exit 2) |
 | `--max-results N` | 20 | Most results to print. It applies after `--min-score` and wins over its floor of eight rows |
 | `--offset N` | 0 | Skip the first N rows that pass the cut and print the next page, still bounded by `--max-results` and `--max-tokens`. The cut is measured against the top row of the whole result, so pages of one query do not overlap or skip rows. An offset past the last row prints no rows and a `totalCount`, and exits 0; a non-number is a usage error (exit 2) |
 | `--max-tokens N` | 20,000 | Most estimated tokens (one per three bytes) across the printed rows. The cut is a prefix in rank order and the output says how many rows were cut |
