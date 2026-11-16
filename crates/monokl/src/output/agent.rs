@@ -172,20 +172,26 @@ const SEARCH_FIELDS: [&str; 9] =
 /// michi's cell quoting and truncation as the only definition of a row.
 pub fn search_row_texts(blocks: &[RankedBlock], snippet_lines: usize) -> Vec<String> {
     let rows: Vec<Vec<Value>> = blocks.iter().map(|block| search_row(block, snippet_lines).to_vec()).collect();
-    let rendered = michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).render_toon();
-    rendered.lines().skip(1).map(str::to_owned).collect()
+    let rendered =
+        michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).render(michi::OutputFormat::Text);
+    // Rows are the indented lines under the header. michi prints blocks that are not rows (`truncated[N]{..}:` for a
+    // cut cell, `totalCount`) at column 0 after them, and those must not count as rows.
+    rendered.lines().skip(1).take_while(|line| line.starts_with(' ')).map(str::to_owned).collect()
 }
 
 /// Renders a search response as a TOON table of its rows, followed by the truncation count and hints.
 pub fn render_search(response: &SearchResponse, view: &SearchView) -> String {
     let rows: Vec<Vec<Value>> =
         response.results.iter().map(|block| search_row(block, view.snippet_lines).to_vec()).collect();
-    let mut rendered =
-        michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).hints(search_hints(response, view));
+    let fields = SEARCH_FIELDS.iter().map(|field| (*field).to_owned()).collect();
+    let mut section = michi::Section::toon("search", fields, rows);
     if response.truncated {
-        rendered = rendered.total_count(response.total_blocks_before_truncation);
+        section = section.total_count(Some(response.total_blocks_before_truncation));
     }
-    rendered.render_toon()
+    michi::AgentResponse::new("search")
+        .section(section)
+        .hints(search_hints(response, view))
+        .render(michi::OutputFormat::Text)
 }
 
 /// What the truncation hint tells a reader to do to see more.
@@ -813,6 +819,55 @@ mod projection_tests {
             .collect()
     }
 
+    /// `scores.len()` blocks as `scored_blocks` builds them, with the signature of each block in `long` replaced by one
+    /// of `len` characters, which michi cuts at its 200-character cell cap.
+    fn blocks_with_long_signatures(scores: &[f64], long: &[usize], len: usize) -> Vec<crate::types::RankedBlock> {
+        let mut ranked = scored_blocks(scores);
+        for &index in long {
+            ranked[index].block.symbol_signature = Some("x".repeat(len));
+        }
+        ranked
+    }
+
+    #[test]
+    fn row_texts_hold_one_line_per_block_when_a_cell_is_cut() {
+        let ranked = blocks_with_long_signatures(&[1.0, 0.9, 0.8], &[1], 250);
+        let texts = search_row_texts(&ranked, DEFAULT_SNIPPET_LINES);
+        assert_eq!(
+            texts,
+            [
+                "  src/f1.rs,1,2,function,null,null,null,1,1".to_owned(),
+                format!("  src/f2.rs,2,3,function,null,{}…,null,2,0.9", "x".repeat(199)),
+                "  src/f3.rs,3,4,function,null,null,null,3,0.8".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_texts_hold_one_line_per_block_when_several_cells_are_cut() {
+        let ranked = blocks_with_long_signatures(&[1.0, 0.9, 0.8], &[0, 2], 300);
+        let texts = search_row_texts(&ranked, DEFAULT_SNIPPET_LINES);
+        assert_eq!(texts.len(), ranked.len());
+        assert!(texts.iter().all(|text| text.starts_with("  src/f")), "{texts:?}");
+    }
+
+    #[test]
+    fn the_truncated_block_is_listed_after_the_rows_and_is_not_a_row() {
+        let ranked = blocks_with_long_signatures(&[1.0, 0.9], &[1], 250);
+        let total = ranked.len();
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        assert_eq!(texts.len(), total);
+        let response =
+            crate::budget::apply_budget(ranked, total, &crate::budget::Budget::default(), &texts, Vec::new());
+        assert_eq!((response.results.len(), response.truncated), (2, false));
+        let rendered = render_search(&response, &view);
+        let tail: Vec<&str> = rendered.lines().skip(1 + total).collect();
+        assert_eq!(tail[0], "truncated[1]{row,field,removed}:");
+        assert_eq!(tail[1], "  1,symbolSignature,51");
+        assert!(texts.iter().all(|text| !tail.contains(&text.as_str())));
+    }
+
     /// The help line `scores` produce under `budget`, or `None` when the whole result is shown.
     fn help_line(scores: &[f64], budget: &crate::budget::Budget) -> Option<String> {
         let ranked = scored_blocks(scores);
@@ -1134,8 +1189,8 @@ impl ToDomainError for MonoklError {
             MonoklError::Walk { source, .. } => walk_error_code(source),
         };
 
-        let mut domain_err = michi::DomainError::from_error(code, self).retryable(false);
-        // Prefixed after from_error, which compares each cause against the unprefixed message to skip repeats.
+        let mut domain_err = michi::DomainError::from_error_with_causes(code, self).retryable(false);
+        // Prefixed after from_error_with_causes, which compares each cause against the unprefixed message to skip repeats.
         domain_err.message = format!("{}: {}", self.monokl_code(), domain_err.message);
 
         domain_err = match self {
