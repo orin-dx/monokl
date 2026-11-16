@@ -4,6 +4,7 @@
 //! describe what was left out, and apply their own budget.
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::io;
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -22,8 +23,9 @@ use crate::file_io::FileIoError;
 use crate::query::{Modifier, ParsedTerm, QueryPlan, parse};
 use crate::rank::{rank_blocks, tokenize_block};
 use crate::text_search::{
-    DEFAULT_MAX_FILES, Incomplete, MAX_FILE_BYTES, MAX_LINE_BYTES, TextSearchOptions, TextSearchResult,
-    search_files_where,
+    BATCH_FILES_PER_THREAD, DEFAULT_MAX_FILES, FileAccess, Incomplete, KeptText, MAX_FILE_BYTES, MAX_LINE_BYTES,
+    RETAINED_SOURCE_BYTES, Retention, TextSearchOptions, TextSearchResult, open_file, search_files_where,
+    search_in_batches_with,
 };
 use crate::tokens::tokenize;
 use crate::types::{CodeBlock, Diagnostic, DiagnosticKind, LineHit, RankedBlock};
@@ -127,8 +129,10 @@ pub fn search(registry: &AnalyzerRegistry, request: &SearchRequest<'_>) -> Resul
 /// exclusion applies only to files text search reached.
 ///
 /// Bounds: text search reads at most [`MAX_FILE_BYTES`] per file, and analysis reads no file larger than that either;
-/// an oversize file is not read and is reported as one grouped `Skipped` diagnostic. The walk that lists the files is
-/// not interrupted, and a batch in progress finishes.
+/// an oversize file is not read and is reported as one grouped `Skipped` diagnostic. A matching file of at most
+/// 256 KiB is read whole once, and analysis uses those bytes instead of opening it again; the kept bytes total at most
+/// 16 MiB over all files, and a matching file past that is opened again, so the budget changes cost and never output.
+/// The walk that lists the files is not interrupted, and a batch in progress finishes.
 ///
 /// # Errors
 ///
@@ -139,6 +143,13 @@ pub fn search_with_timeout(
     timeout: Option<Duration>,
 ) -> Result<SearchResult> {
     search_with_ceiling(registry, request, DEFAULT_MAX_FILES, timeout)
+}
+
+/// A file that survived text search: its matching lines, and its text when text search kept it.
+struct Survivor<'a> {
+    path: &'a Utf8Path,
+    hits: &'a [LineHit],
+    text: Option<Vec<u8>>,
 }
 
 /// A block annotated with its matches, and its tokens.
@@ -155,17 +166,32 @@ fn search_with_ceiling(
     max_files: usize,
     timeout: Option<Duration>,
 ) -> Result<SearchResult> {
-    search_reading(registry, request, max_files, timeout, &read_source)
+    search_reading(registry, request, max_files, timeout, &FileSeams::default())
 }
 
-/// [`search_with_ceiling`] with the function that reads a surviving file's source as a parameter, so tests can count
-/// the reads.
+/// How a search gets at files, as parameters so tests can count the opens and reads and shrink the budget.
+struct FileSeams<'a> {
+    /// Opens a file for text search.
+    open: &'a (dyn Fn(&Utf8Path) -> io::Result<File> + Sync),
+    /// Reads a surviving file's source that text search did not keep.
+    read: &'a (dyn Fn(&Utf8Path) -> io::Result<Source> + Sync),
+    /// How many bytes of source text text search may keep for analysis.
+    retain_bytes: usize,
+}
+
+impl Default for FileSeams<'_> {
+    fn default() -> Self {
+        Self { open: &open_file, read: &read_source, retain_bytes: RETAINED_SOURCE_BYTES }
+    }
+}
+
+/// [`search_with_ceiling`] with the ways files are opened and read as parameters.
 fn search_reading(
     registry: &AnalyzerRegistry,
     request: &SearchRequest<'_>,
     max_files: usize,
     timeout: Option<Duration>,
-    read: &(dyn Fn(&Utf8Path) -> io::Result<Source> + Sync),
+    seams: &FileSeams<'_>,
 ) -> Result<SearchResult> {
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let SearchRequest { root, query, exact, allow_tests, respect_ignore_files, language } = *request;
@@ -197,11 +223,16 @@ fn search_reading(
     // A file no analyzer would read, or that `language` excludes, is never opened: it could not yield a block, and
     // counting it would let it use up the file ceiling.
     let wanted = |path: &Utf8Path| searchable(registry, language, path);
-    let found = search_files_where(
+    // The text of matching files is kept, up to the budget, so a file is opened once for search and analysis.
+    let retention = Retention::new(seams.retain_bytes);
+    let access = FileAccess { open: seams.open, retention: Some(&retention) };
+    let (found, mut retained) = search_in_batches_with(
         &root,
         &patterns,
         &TextSearchOptions { allow_tests, respect_ignore_files, max_files, deadline, ..TextSearchOptions::default() },
         &wanted,
+        || rayon::current_num_threads() * BATCH_FILES_PER_THREAD,
+        &access,
     )?;
     let mut diagnostics = text_search_diagnostics(&found);
     let mut partial = found.incomplete.map(|reached| incomplete_diagnostic(timeout, "searching", reached, ""));
@@ -242,12 +273,17 @@ fn search_reading(
         excluded.hits.into_keys().collect()
     };
 
-    let survivors: Vec<(&Utf8PathBuf, &Vec<LineHit>)> = found
+    // A survivor carries the text its file had when text search read it, when the budget had room for it, so the file is
+    // not opened again.
+    let mut survivors: Vec<Survivor<'_>> = found
         .hits
         .iter()
         .filter(|(path, _)| !excluded_files.contains(*path))
         .filter(|(_, hits)| plan.required.iter().all(|&i| hits.iter().any(|hit| matches_text(&matchers[i], &hit.text))))
+        .map(|(path, hits)| Survivor { path, hits, text: retained.remove(path).map(KeptText::into_bytes) })
         .collect();
+    // What the survivors did not take is dropped now, not held through analysis.
+    drop(retained);
     // Files are analyzed on separate threads a batch at a time, but each result is kept in path order, so the output
     // never depends on which thread finished first. The deadline is checked between batches, never before the first.
     let ctx = FileContext { registry, language, allow_tests, max_file_bytes: MAX_FILE_BYTES };
@@ -258,17 +294,18 @@ fn search_reading(
     // only as many as there are files to give them.
     with_parse_threads(survivors.len(), || {
         let mut analyzed = 0_usize;
-        for batch in survivors.chunks(batch_size) {
+        for batch in survivors.chunks_mut(batch_size) {
             if analyzed > 0 && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let reached = Incomplete { reached: analyzed as u64, total: survivors.len() as u64 };
                 partial = partial.take().or_else(|| Some(incomplete_diagnostic(timeout, "analyzing", reached, "")));
                 break;
             }
             let per_file: Vec<(Vec<Candidate>, Vec<Diagnostic>)> = batch
-                .par_iter()
-                .map(|&(path, hits)| {
+                .par_iter_mut()
+                .map(|survivor| {
                     let (mut blocks, mut file_diagnostics) = (Vec::new(), Vec::new());
-                    retrieve_blocks(&ctx, path, hits, read, &mut blocks, &mut file_diagnostics);
+                    let file = Survivor { text: survivor.text.take(), ..*survivor };
+                    retrieve_blocks(&ctx, file, seams.read, &mut blocks, &mut file_diagnostics);
                     (blocks, file_diagnostics)
                 })
                 .collect();
@@ -307,11 +344,15 @@ struct Source {
 
 /// Reads `path`, replacing each invalid UTF-8 sequence with U+FFFD so the file is still searched and extracted.
 fn read_source(path: &Utf8Path) -> io::Result<Source> {
-    let bytes = std::fs::read(path)?;
-    Ok(match String::from_utf8(bytes) {
+    Ok(source_from_bytes(std::fs::read(path)?))
+}
+
+/// `bytes` as text, replacing each invalid UTF-8 sequence with U+FFFD. Valid text is not copied.
+fn source_from_bytes(bytes: Vec<u8>) -> Source {
+    match String::from_utf8(bytes) {
         Ok(text) => Source { text, lossy: false },
         Err(err) => Source { text: String::from_utf8_lossy(err.as_bytes()).into_owned(), lossy: true },
-    })
+    }
 }
 
 /// Whether `matcher` matches `text`. Matching in memory cannot fail, so an error counts as no match.
@@ -394,11 +435,11 @@ fn searchable(registry: &AnalyzerRegistry, language: Option<Language>, path: &Ut
     registry.analyzer_for(path).is_some() && language.is_none_or(|language| Language::of(path) == Some(language))
 }
 
-/// Analyzes one surviving file and pushes the annotated blocks that contain a matching line onto `out`.
+/// Analyzes one surviving file and pushes the annotated blocks that contain a matching line onto `out`. The file's text
+/// is what text search read when it kept it; otherwise the file is checked for size and read here.
 fn retrieve_blocks(
     ctx: &FileContext<'_>,
-    path: &Utf8Path,
-    hits: &[LineHit],
+    Survivor { path, hits, text }: Survivor<'_>,
     read: &dyn Fn(&Utf8Path) -> io::Result<Source>,
     out: &mut Vec<(CodeBlock, Vec<String>)>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -407,16 +448,21 @@ fn retrieve_blocks(
     if ctx.language.is_some_and(|language| Language::of(path) != Some(language)) {
         return;
     }
-    // Text search checked the size too, but the file can have grown since, and a caller can hand this any path.
-    if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > ctx.max_file_bytes) {
-        diagnostics.push(oversize_diagnostic(path, ctx.max_file_bytes));
-        return;
-    }
-    let Source { text, lossy } = match read(path) {
-        Ok(source) => source,
-        Err(err) => {
-            diagnostics.push(skipped(Some(path), format!("could not read source: {err}")));
+    let Source { text, lossy } = if let Some(bytes) = text {
+        // Text search read this file under its size limit, and these are the bytes it matched.
+        source_from_bytes(bytes)
+    } else {
+        // Text search checked the size too, but the file can have grown since, and a caller can hand this any path.
+        if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > ctx.max_file_bytes) {
+            diagnostics.push(oversize_diagnostic(path, ctx.max_file_bytes));
             return;
+        }
+        match read(path) {
+            Ok(source) => source,
+            Err(err) => {
+                diagnostics.push(skipped(Some(path), format!("could not read source: {err}")));
+                return;
+            }
         }
     };
     if lossy {
@@ -1650,7 +1696,8 @@ class Foo {
             [LineHit { line_number: 1, text: "alpha".to_owned(), match_starts: std::iter::once(0..1).collect() }];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
         let failing = |_: &Utf8Path| -> io::Result<Source> { Err(io::Error::from(io::ErrorKind::PermissionDenied)) };
-        retrieve_blocks(&ctx, Utf8Path::new("/r/a.ts"), &hits, &failing, &mut out, &mut diagnostics);
+        let file = Survivor { path: Utf8Path::new("/r/a.ts"), hits: &hits, text: None };
+        retrieve_blocks(&ctx, file, &failing, &mut out, &mut diagnostics);
         assert!(out.is_empty());
         assert_eq!(
             summary(&diagnostics),
@@ -1671,7 +1718,8 @@ class Foo {
         let hits = [hit(1), hit(7), hit(9)];
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
         let shrunk = |_: &Utf8Path| -> io::Result<Source> { Ok(Source { text: "alpha\n".to_owned(), lossy: false }) };
-        retrieve_blocks(&ctx, Utf8Path::new("/r/a.ts"), &hits, &shrunk, &mut out, &mut diagnostics);
+        let file = Survivor { path: Utf8Path::new("/r/a.ts"), hits: &hits, text: None };
+        retrieve_blocks(&ctx, file, &shrunk, &mut out, &mut diagnostics);
         assert_eq!(out.iter().map(|(block, _)| block.matched_lines.clone()).collect::<Vec<_>>(), [vec![1]]);
         assert_eq!(
             summary(&diagnostics),
@@ -1878,25 +1926,85 @@ class Foo {
         tree(&borrowed)
     }
 
-    /// A search reads each surviving file once, whatever the number of files, so reading, parsing and extraction grow
-    /// linearly with them. Counting the reads gives the same answer on every machine and load.
+    /// Counts how many times a search opens a file for text search and reads one for analysis.
+    struct Opens {
+        opened: std::sync::atomic::AtomicU64,
+        read: std::sync::atomic::AtomicU64,
+    }
+
+    impl Opens {
+        fn new() -> Self {
+            Self { opened: 0.into(), read: 0.into() }
+        }
+
+        /// Runs a search whose text search may keep `retain_bytes` of source text, and returns the result with how many
+        /// files were opened by text search and how many were opened again by analysis.
+        fn search(&self, root: &Utf8Path, retain_bytes: usize) -> (SearchResult, u64, u64) {
+            use std::sync::atomic::Ordering::Relaxed;
+
+            let open = |path: &Utf8Path| {
+                self.opened.fetch_add(1, Relaxed);
+                File::open(path)
+            };
+            let read = |path: &Utf8Path| {
+                self.read.fetch_add(1, Relaxed);
+                read_source(path)
+            };
+            let seams = FileSeams { open: &open, read: &read, retain_bytes };
+            let result =
+                search_reading(&whole_file_registry(), &request(root, "alpha"), DEFAULT_MAX_FILES, None, &seams)
+                    .unwrap();
+            (result, self.opened.load(Relaxed), self.read.load(Relaxed))
+        }
+    }
+
+    /// A search opens each matching file once, for search and analysis together, whatever the number of files, so the
+    /// opens and reads grow linearly with them. Counting them gives the same answer on every machine and load.
     #[rstest]
     #[case::few(250)]
     #[case::four_times_as_many(1000)]
-    fn a_search_reads_each_matching_file_exactly_once(#[case] count: usize) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
+    fn a_search_opens_each_matching_file_exactly_once(#[case] count: usize) {
         let (_dir, root) = tree_of(&numbered_files(count));
-        let reads = AtomicU64::new(0);
-        let read = |path: &Utf8Path| {
-            reads.fetch_add(1, Ordering::Relaxed);
-            read_source(path)
-        };
-        let result =
-            search_reading(&whole_file_registry(), &request(&root, "alpha"), DEFAULT_MAX_FILES, None, &read).unwrap();
+        let (result, opened, read_again) = Opens::new().search(&root, RETAINED_SOURCE_BYTES);
         assert_eq!(result.files_total, count as u64);
         assert_eq!(result.ranked.len(), count);
-        assert_eq!(reads.load(Ordering::Relaxed), count as u64);
+        assert_eq!((opened, read_again), (count as u64, 0));
+    }
+
+    /// With no room to keep text, analysis opens the file again, and the output is the same.
+    #[test]
+    fn a_file_whose_text_was_not_kept_is_opened_again_and_the_output_is_the_same() {
+        let (_dir, root) = tree_of(&numbered_files(40));
+        let (kept, ..) = Opens::new().search(&root, RETAINED_SOURCE_BYTES);
+        let (dropped, opened, read_again) = Opens::new().search(&root, 0);
+        assert_eq!((opened, read_again), (40, 40));
+        assert_eq!(files(&dropped, &root), files(&kept, &root));
+        assert_eq!(dropped.files_total, kept.files_total);
+        assert_eq!(summary(&dropped.diagnostics), summary(&kept.diagnostics));
+    }
+
+    /// Room for some files: exactly those that fit are not opened again.
+    #[test]
+    fn only_the_files_that_fit_the_budget_are_opened_again() {
+        let (_dir, root) = tree_of(&numbered_files(40));
+        // Each file is six bytes, so 100 bytes hold sixteen of them.
+        let (result, opened, read_again) = Opens::new().search(&root, 100);
+        assert_eq!(result.ranked.len(), 40);
+        assert_eq!((opened, read_again), (40, 40 - 16));
+    }
+
+    #[test]
+    fn a_kept_file_that_is_not_utf8_is_reported_as_lossy_like_a_read_one() {
+        let (_dir, root) = tree(&[]);
+        std::fs::write(root.join("a.ts"), b"alpha \xFF\n").unwrap();
+        let (kept, ..) = Opens::new().search(&root, RETAINED_SOURCE_BYTES);
+        let (read, ..) = Opens::new().search(&root, 0);
+        assert_eq!(
+            summary(&kept.diagnostics),
+            [(DiagnosticKind::LossyRead, Some(root.join("a.ts").as_str()), "invalid UTF-8 replaced with U+FFFD")]
+        );
+        assert_eq!(summary(&kept.diagnostics), summary(&read.diagnostics));
+        assert_eq!(files(&kept, &root), files(&read, &root));
     }
 
     #[test]
@@ -1926,12 +2034,24 @@ class Foo {
         let never_read = |_: &Utf8Path| -> io::Result<Source> { panic!("an oversize file must not be read") };
 
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
-        retrieve_blocks(&ctx(5), &path, &hits, &never_read, &mut out, &mut diagnostics);
+        retrieve_blocks(
+            &ctx(5),
+            Survivor { path: &path, hits: &hits, text: None },
+            &never_read,
+            &mut out,
+            &mut diagnostics,
+        );
         assert!(out.is_empty());
         assert_eq!(summary(&diagnostics), [(DiagnosticKind::Skipped, Some(path.as_str()), "over 5 bytes")]);
 
         let (mut out, mut diagnostics) = (Vec::new(), Vec::new());
-        retrieve_blocks(&ctx(6), &path, &hits, &read_source, &mut out, &mut diagnostics);
+        retrieve_blocks(
+            &ctx(6),
+            Survivor { path: &path, hits: &hits, text: None },
+            &read_source,
+            &mut out,
+            &mut diagnostics,
+        );
         assert_eq!(out.len(), 1);
         assert!(diagnostics.is_empty());
     }
