@@ -595,7 +595,7 @@ Step 3 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-an
 - **Rejected.** `--snippet-lines 0` as the default: a variable or type row has no signature, so it would show nothing about what it declares and the answer would need a read. Relaxing `--min-member-recall` and `--min-rust-recall` to fit the first rule: a lowered gate hides the regression it was meant to catch.
 - **Left open.** No `--offset`. The fraction, the floor and the cap are not tuned per language or per query shape. Two `FAIL` lines of `scripts/agent-cost.py` remain, down from nine (§45, whose rg-policy reads were corrected after this was written): `questions` is answerable in one turn on 78% (unchanged), and monokl's median bytes still exceed the rg policy's on Rust (1,442 against 731).
 
-## 47. A matching file is opened once, and a parallel walk is not worth it yet (2026-11-15)
+## 49. A matching file is opened once, and a parallel walk is not worth it yet (2026-11-15)
 
 Trail 362, after the search sink work. The profile came first, on a machine at load 30 to 40 on 18 cores, so every number is a minimum over alternating runs of the old and new binaries, not a quiet-machine figure.
 
