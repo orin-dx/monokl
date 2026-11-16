@@ -107,26 +107,94 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
 }
 
 /// The byte offset in `text` of the `where` keyword that starts a Rust where clause: the first `where` standing alone
-/// outside any parentheses, brackets and braces. `where` is a reserved word, so nothing else at that depth spells it.
+/// outside any parentheses, brackets and braces, and outside comments, strings and character literals. `where` is a
+/// reserved word, so nothing else at that depth spells it.
 fn where_keyword(text: &str) -> Option<usize> {
     let mut depth = 0usize;
     let mut previous = None;
-    for (at, c) in text.char_indices() {
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let rest = &text[at..];
+        // The end of whatever is skipped, as an offset in `text`.
+        let skip_to = if rest.starts_with("/*") {
+            Some(block_comment_end(rest).map_or(text.len(), |end| at + end))
+        } else if rest.starts_with("//") {
+            Some(rest.find('\n').map_or(text.len(), |end| at + end))
+        } else if c == '"' {
+            Some(string_end(rest).map_or(text.len(), |end| at + end))
+        } else if c == '\'' {
+            char_literal_end(rest).map(|end| at + end)
+        } else {
+            None
+        };
+        if let Some(end) = skip_to {
+            while chars.peek().is_some_and(|&(next, _)| next < end) {
+                chars.next();
+            }
+            previous = Some(' ');
+            continue;
+        }
         match c {
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             _ => {}
         }
         if depth == 0
-            && text[at..].starts_with("where")
+            && rest.starts_with("where")
             && previous.is_some_and(char::is_whitespace)
-            && text[at + "where".len()..].chars().next().is_none_or(char::is_whitespace)
+            && rest["where".len()..].chars().next().is_none_or(char::is_whitespace)
         {
             return Some(at);
         }
         previous = Some(c);
     }
     None
+}
+
+/// The length of the block comment `text` starts with, which nests, or `None` when it is not closed.
+fn block_comment_end(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        if rest.starts_with("/*") {
+            depth += 1;
+            at += 2;
+        } else if rest.starts_with("*/") {
+            depth -= 1;
+            at += 2;
+            if depth == 0 {
+                return Some(at);
+            }
+        } else {
+            at += rest.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    None
+}
+
+/// The length of the string literal `text` starts with, or `None` when it is not closed.
+fn string_end(text: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (at, c) in text.char_indices().skip(1) {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(at + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The length of the character literal `text` starts with (`'a'`, `'\n'`), or `None` for a lifetime such as `'a`.
+fn char_literal_end(text: &str) -> Option<usize> {
+    let mut chars = text.char_indices().skip(1);
+    let (_, first) = chars.next()?;
+    if first == '\\' {
+        return chars.find(|&(_, c)| c == '\'').map(|(at, _)| at + 1);
+    }
+    chars.next().filter(|&(_, c)| c == '\'').map(|(at, _)| at + 1)
 }
 
 /// Whether `block` is Rust code, the only language whose signatures have a where clause.
@@ -515,6 +583,36 @@ mod snippet_tests {
         assert_eq!(sig("fn nowhere(somewhere: u8)"), Some("fn nowhere(somewhere: u8)".to_owned()));
         assert_eq!(sig("fn f(a: [u8; where_n()]) where T: A"), Some("fn f(a: [u8; where_n()]) where …".to_owned()));
         assert_eq!(sig("fn f(x: Fn(where ) )"), Some("fn f(x: Fn(where ) )".to_owned()));
+    }
+
+    #[test]
+    fn a_where_inside_a_comment_or_a_literal_is_not_a_where_clause() {
+        let sig = |signature: &str| {
+            let b = CodeBlock { symbol_signature: Some(signature.to_owned()), ..rust_headed(1, "x", "x", &[]) };
+            signature_cell(&b)
+        };
+        for kept in [
+            "pub fn value() /* where values originate */ -> u64",
+            "pub fn value() /* a /* where */ b */ -> u64",
+            "pub fn value<const S: &'static str = \"a where b\">() -> u64",
+            "pub fn value<const C: char = ' '>(x: u8) -> u64",
+            "pub fn value(s: &str) -> &'a str",
+        ] {
+            assert_eq!(sig(kept), Some(kept.to_owned()), "{kept}");
+        }
+        assert_eq!(
+            sig("pub fn value() /* where */ -> u64 where T: A"),
+            Some("pub fn value() /* where */ -> u64 where …".to_owned())
+        );
+        assert_eq!(sig("pub fn f() // where x"), Some("pub fn f() // where x".to_owned()));
+    }
+
+    #[test]
+    fn a_where_inside_a_comment_does_not_hide_a_head_line_from_the_snippet() {
+        let code = "pub fn value() /* where\nvalues */ -> u64 {\n    needle()\n}";
+        let head = "pub fn value() /* where\nvalues */ -> u64 {";
+        let b = rust_headed(1, code, head, &[2, 3]);
+        assert_eq!(snippet(&b), Some("3: needle()".to_owned()));
     }
 
     #[test]
