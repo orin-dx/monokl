@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01R7ovZWsEXU5Mmqcak1Y9s3",
+  "agent_id": "ab3d7d44ffb179bd1",
+  "subagent_type": "general-purpose",
+  "task_description": "Rust rows: cut doc/attr bytes",
+  "token_usage": {
+    "input_tokens": 180,
+    "cache_creation_tokens": 192978,
+    "cache_read_tokens": 12694090,
+    "output_tokens": 67095,
+    "api_call_count": 90
+  },
+  "started_at": "2026-11-15T17:18:52.748019-08:00",
+  "completed_at": "2026-11-15T17:40:50.443039-08:00"
+}
