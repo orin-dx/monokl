@@ -594,3 +594,32 @@ Step 3 of [ADR 0005](../adr/0005-hits-and-blocks-are-identified-by-byte-spans-an
 - **What it does not prove.** Not a model evaluation: it counts bytes and whether the expected declaration is in the rows, not whether a model finds the answer. The value of snippet lines 2 and 3 to an agent that is not trying to answer in one turn (reading context, deciding between candidates) was not measured; `--snippet-lines 3` is there for that. The parameters come from a grid of 18 settings over rows written with `rg` in hand; a different distribution of queries may want other values, and the grid cannot tell a setting that is right from one that happens to keep these 222 rows. A query whose answer is past the floor and the cap needs a second call; the help line names the flag to use.
 - **Rejected.** `--snippet-lines 0` as the default: a variable or type row has no signature, so it would show nothing about what it declares and the answer would need a read. Relaxing `--min-member-recall` and `--min-rust-recall` to fit the first rule: a lowered gate hides the regression it was meant to catch.
 - **Left open.** No `--offset`. The fraction, the floor and the cap are not tuned per language or per query shape. Two `FAIL` lines of `scripts/agent-cost.py` remain, down from nine (§45, whose rg-policy reads were corrected after this was written): `questions` is answerable in one turn on 78% (unchanged), and monokl's median bytes still exceed the rg policy's on Rust (1,442 against 731).
+
+## 47. A Rust row shows a code line and no where clause (2026-11-15)
+
+- **Decision.** Three output-layer changes, no change to what is searched, ranked or counted. (1) The snippet picks code lines before comment and attribute lines: a matched line starting with `//`, `/*`, `*/`, `* `, `#[` or `#![`, and a line inside a Rust where clause, is shown only when fewer than `--snippet-lines` code lines matched or it is the only match; the chosen lines keep block order. TypeScript and Rust share the rule (a JSDoc line or a `// ...` in a body is demoted the same way). (2) A Rust row's `symbolSignature` ends before its `where` clause and says `where …`; the lines of the clause after the declaration line become snippet candidates, because the column no longer shows them. The analyzer's `symbol_signature` and `signature_span` are unchanged, so ranking (which tokenizes the signature) and the span invariants are unchanged. (3) The count of lines past the snippet reads `+N more` (was `...and N more matching lines`, `...and 1 more matching line`).
+- **Why.** The lean default of §46 left the fd Rust median at 1,442 bytes against 731 for the rg policy. The 60 Rust queries of fd, tokio and axum (the sampled identifiers, questions and members; 724 rows, 150,137 bytes) put the bytes here: path 14%, signature 32%, snippet 35%, parent 5%, finalScore 5%, the other columns 9%. 554 rows had a snippet; the first line of 329 of them (59%) was a doc comment (296) or an attribute (33), and 446 rows ended with the `...and N more matching lines` marker, 13,417 bytes (9% of the output). 109 signatures carried a where clause, 5,751 bytes; an `impl` row's clause is often longer than the rest of its signature.
+- **Evaluated, not changed.**
+  - *Signature starting with attributes or doc comments.* None does: the Rust analyzer starts the signature at the visibility or first keyword (`signature_span` already excludes attributes and doc comments), so 0 of 724 rows. The 50 of 222 rows noted earlier are the block extent (`lineStart` is the first doc line), which sizes the rg policy's final read in `scripts/agent-cost.py`, not a row's bytes.
+  - *Snippet line that repeats the signature.* None can: a line whose text lies inside `signature_span` is already left out.
+  - *`parent` as a name only.* The cell is `kind name` (`impl CommandTemplate`, `impl clap::FromArgMatches for Exec`), 7,533 bytes (5%), 19.8 bytes on a method row and `null` on the rest. Dropping the kind saves 5 bytes on 242 rows (1,210 bytes, 0.8%) and loses whether the holder is an impl, a trait or a module. Not taken.
+  - *Test-path rows.* 10 of 724 rows (1.4%) have a test or bench directory in the path. Too few to matter.
+  - *Cap the signature at 100 characters.* Saves 3,944 bytes (2.6%) but cuts return types off long signatures, which the answer needs more than a bound list. The where cut takes the part of a long signature that carries least.
+  - *Round `finalScore` to 3 places.* About 2,900 bytes (2%), but the relevance cut is 0.3 times the top score and a reader checks it against the printed values, and it changes the TypeScript output too. Not taken; left open.
+- **Measured** (the real binary, `just agent-cost`, 222 rows, before and after; the rows are bytes of one `monokl search <words> .`):
+
+  | set | n | median before | median after | p90 before | p90 after | one turn before / after |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | identifiers | 59 | 463 | 463 | 1,643 | 1,497 | 59 / 59 |
+  | questions | 18 | 1,853 | 1,696 | 3,357 | 3,068 | 14 / 14 |
+  | members | 16 | 1,529 | 1,487 | 4,289 | 4,103 | 14 / 14 |
+  | rust (fd) | 24 | 1,442 | 1,300 | 2,957 | 2,565 | 20 / 20 |
+  | held-out questions | 33 | 1,684 | 1,565 | 3,962 | 3,680 | 32 / 32 |
+  | held-out members | 22 | 1,587 | 1,450 | 2,447 | 2,344 | 22 / 22 |
+  | held-out rust | 36 | 3,560 | 3,156 | 4,692 | 3,903 | 30 / 30 |
+  | report-only | 14 | 2,241 | 2,086 | 3,983 | 3,668 | 13 / 13 |
+  | all | 222 | 1,567 | 1,442 | 3,997 | 3,609 | 204 / 204 |
+
+  The total falls from 420,946 to 383,903 bytes (8.8%). On the 60 Rust queries above the total falls from 150,137 to 131,230 bytes (12.6%) and the signature column from 44,086 to 39,395.
+- **Harness** (`just rg-compare`): every set equals its baseline (Rust 22/24, held-out Rust 34/36, every TypeScript set unchanged), gates at 0.9. `scripts/agent-cost.py` answerable in one turn is unchanged in every set (204 of 222 overall).
+- **Still open.** The fd Rust median (1,300) is above the rg policy's (731), and the `rust` FAIL line stays. What remains is the floor of 8 rows: an fd question prints 8 rows of about 175 bytes, and in `absolute path form` rows 4 to 8 score 3% to 9% of the top. Lowering the floor for Rust was not tried: §46 chose it from a grid with no per-language setting. Not a model evaluation: it does not show a model finds the answer in the new snippet line.
