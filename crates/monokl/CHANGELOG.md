@@ -1,5 +1,48 @@
 # monokl
 
+## 0.7.0
+
+_2026-11-16 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.6.0...monokl@0.7.0)_
+
+### Minor Changes
+
+- **`monokl search` prints less by default.** The default output is the rows that matter, with one snippet line each, so an answer costs about a fifth of the bytes. On the 222 rows of the harness the median output falls from 10,012 to 1,567 bytes, the 90th percentile from 13,351 to 3,997 and the total from 1,714,350 to 420,946, and every harness score stays at its baseline.
+
+  - **Relevance cut.** A row is kept when its `finalScore` is at least 0.3 times the top row's (`--min-score FRACTION`, `0` turns the cut off). The first 8 rows are always kept when that many exist. `--max-results` caps the result on top of that, now 20 by default (was 50), and it wins over the floor of 8. `--min-score` takes 0 to 1; anything else is a usage error (exit 2).
+  - **Snippet.** Each row shows its first matching line and counts the rest (`...and 2 more matching lines`). `--snippet-lines N` shows 0 to 3 lines (3 is the old snippet). `0` prints no snippet, so a variable or type row, which has no signature, shows no declaration text.
+  - **Help line.** When rows were cut the help names the flag that brings them back: `showing 9 of 37; --min-score 0 or --max-results N for more, or refine with +term/-term`. It names `--max-tokens N` when the tokens ran out first. There is no `--offset` yet.
+  - **Parameters.** Chosen from a grid of 18 settings (floor 3, 5 or 8; fraction 0.15, 0.2 or 0.3; cap 15 or 20) as the smallest total output that loses no harness question against the baseline. The first choice, floor 3 and cap 15, lost a member and a Rust question.
+  - **Not measured.** Whether a model finds the answer in the leaner rows, and what snippet lines 2 and 3 are worth when an agent reads for context instead of answering in one turn.
+
+  **Breaking:** The default output changed: at most 20 rows (was 50), none below 0.3 times the top score except the first 8, and one snippet line per row (was up to 3). `SearchResponse` has a new public field, `blocks_cut_by_relevance`, `Budget` has a new public field, `min_score` (and no longer implements `Eq`), `render_search` takes a `&SearchView` and `search_row_texts` a snippet length. The truncation help line is reworded.
+
+  **Action:** To get the earlier output, run `monokl search <query> --min-score 0 --max-results 50 --snippet-lines 3`. Code that builds a `SearchResponse` or a `Budget`, or calls `render_search` or `search_row_texts`, must pass the new values: `Budget::default()` carries the new defaults, and `SearchView::default()` the new snippet length.
+- **A Rust row costs fewer bytes.** On the 222 rows of the harness the total output falls from 420,764 to 383,506 bytes (8.9%). The fd Rust median falls from 1,463 to 1,322 bytes (p90 3,140 to 2,696) and the held-out Rust median from 3,258 to 2,792 (p90 4,709 to 4,058). Every harness score and every one-turn answer count stays at its baseline.
+
+  - **Snippet.** A matched code line is shown before a comment or attribute line: a line starting with `//`, `/*`, `*/`, `* `, `#[` or `#![` (a Rust doc comment, an attribute, a JSDoc line, a comment in a body) is shown only when too few code lines matched or it is the only match. 59% of the Rust rows with a snippet showed a doc comment or an attribute. The shown lines keep their order in the block. TypeScript follows the same rule.
+  - **Rust signature.** `symbolSignature` ends before the `where` clause and says `where …` in its place, so `impl<L, M, S, F> Debug for WithGracefulShutdown<L, M, S, F> where L: Debug + 'static, M: Debug, ...` becomes `impl<L, M, S, F> Debug for WithGracefulShutdown<L, M, S, F> where …`. A line of the clause that matched is a snippet line, after the code lines. The cut is where the analyzer's syntax tree puts the clause, so a `where` in a comment or a string is not one. Ranking still reads the whole signature.
+  - **More lines marker.** The count of snippet lines past the shown ones reads `+3 more` (was `...and 3 more matching lines`).
+  - **Not changed, with the numbers.** No signature starts with an attribute or a doc comment already. The `parent` column is `kind name` and costs 5% of the bytes. Test-path rows are 1.4% of the rows. Capping the signature length and rounding `finalScore` were measured and not taken (docs/spec/05-research-and-decisions.md, section 48).
+  - **Still above the rg policy.** The fd Rust median is 1,322 bytes against 731. What remains is the floor of 8 rows.
+
+  **Breaking:** `CodeBlock` has a new public field, `where_start`, the offset of the `where` keyword of a Rust declaration's where clause (`None` when there is none, and for TypeScript and JavaScript); code that builds a `CodeBlock` must set it. The text of a row changed. A Rust row's `symbolSignature` drops the where clause and ends in ` where …`; the snippet line is a code line where one matched, and for a Rust item a where-clause line can now be a snippet line; the marker is `+N more` instead of `...and N more matching line(s)`.
+
+  **Action:** Set `where_start: None` where you build a `CodeBlock`. Code that parses the marker, or reads a bound out of a Rust `symbolSignature`, must change: the marker is `+N more`, and a where clause is in the file at `lineStart`–`lineEnd`. `search_row_texts` and `render_search` keep their signatures. There is no flag for the old rows.
+- **Search ranks a declaration by its abbreviated name, and ranks `impl` blocks lower.** Scores and row order change; no API or wire shape changes.
+
+  - **Abbreviated names.** A name token of at least 3 characters now matches a query term that starts with it, so `ListenerExt` holds `listener` and `extension`, and `reqIdGenFactory` holds `request`, `id`, `generator` and `factory`. A token never matches a term it is longer than (`parser` is not `parse`), and a token of 1 or 2 characters has to equal the term. A prefix match counts as much as an equal one in the name boost, including the bonus for a name that is exactly the query. Measured alone: answerable in the first three rows 204 of 222 to 206, held-out Rust 34 of 36 to 35 (axum `listener extension` from absent to rank 2), no harness set loses a hit.
+  - **Impl prior.** The multiplier for a Rust `impl` block falls from 1.1 to 0.9, so the struct or method an `impl` wraps outranks the block around it. Measured alone it changes no harness count; it puts `OwnerFilter` and `is_within` ahead of their `impl` blocks and, with the prefix rule, removes a regression the prefix rule causes on fd `directory entry stripped path`. Dropping it was tried and measured worse: the prefix rule alone changes 6 first rows (3 better, 3 worse), both together change 8 (5 better, 1 equal, 2 worse).
+  - **Tradeoff.** The prefix rule that fixes `ListenerExt` also matches where it should not. `RequestPartsExt` now matches `extractor` through `ext` and scores as exactly the query, so axum `extractor from request parts` no longer has `FromRequestParts` in the first five rows, and zod `global registry metadata` is worse (`meta` starts `metadata`). 47 of the 48 queries of the earlier blind review keep their first row.
+- **`monokl search --offset N` prints the next page of rows.** It skips the first N ranked rows and prints the next page under the same cut and caps, so the rows the lean default hides are reachable without paying for the first ones again. The relevance cut stays relative to the top row of the whole result, so page 1 plus page 2 equals one run with a larger `--max-results`. `--max-tokens` bounds the page that is returned, not the rows skipped. An offset past the last row prints no rows and the `totalCount`, and exits 0; a non-number is a usage error (exit 2).
+
+  - **Help line.** When rows remain it names the next value: `showing 8 of 31; next: --offset 8, or refine with +term/-term`. It replaces the `--max-results N` and `--max-tokens N` advice, which re-paid for the rows already seen; `--min-score 0 for the 20 rows below the cut` is named when the relevance cut dropped rows (the `of 31` counts those rows too), and offsets keep counting the same ranking with it. An empty page the caps caused (a row larger than the token cap) still names the cap.
+  - **Library.** `Budget` and `SearchResponse` each have a new public field, `offset`, so code that builds them must set it (`Budget::default()` has 0).
+  - **Stateless.** Every call re-runs the search. Pages are exact for an unchanged tree.
+
+### Patch Changes
+
+- **`monokl search` opens each matching source file once.** Text search keeps the text of a matching file of at most 256 KiB, up to 16 MiB over all files, and analysis uses it instead of opening the file again. On a tree of 20,000 small matching files the search takes about a quarter less time, and peak memory rises by at most that 16 MiB. The output is byte-identical. A file over 256 KiB, or past the 16 MiB, is opened again as before.
+
 ## 0.6.0
 
 _2026-11-15 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.5.0...monokl@0.6.0)_
