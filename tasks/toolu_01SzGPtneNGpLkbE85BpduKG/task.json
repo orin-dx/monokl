@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SzGPtneNGpLkbE85BpduKG",
+  "agent_id": "a1d809c4742f04ff0",
+  "subagent_type": "general-purpose",
+  "task_description": "Clean up merged branches and worktrees",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 48665,
+    "cache_read_tokens": 439981,
+    "output_tokens": 3956,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-15T17:19:44.903577-08:00",
+  "completed_at": "2026-11-15T17:21:48.510093-08:00"
+}

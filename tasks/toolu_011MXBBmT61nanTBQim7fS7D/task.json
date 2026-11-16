@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_011MXBBmT61nanTBQim7fS7D",
+  "agent_id": "a815b7110b4747fb8",
+  "subagent_type": "general-purpose",
+  "task_description": "Make the lean cut recoverable: --offset",
+  "started_at": "2026-11-15T17:18:52.364659-08:00"
+}

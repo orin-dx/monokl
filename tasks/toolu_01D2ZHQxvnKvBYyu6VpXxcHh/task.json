@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01D2ZHQxvnKvBYyu6VpXxcHh",
+  "agent_id": "a79e7c78957547fee",
+  "subagent_type": "general-purpose",
+  "task_description": "Default output: relevance cut, 1 snippet line",
+  "token_usage": {
+    "input_tokens": 354,
+    "cache_creation_tokens": 346729,
+    "cache_read_tokens": 41949542,
+    "output_tokens": 141467,
+    "api_call_count": 177
+  },
+  "started_at": "2026-11-15T10:45:29.229008-08:00",
+  "completed_at": "2026-11-15T11:06:32.665451-08:00"
+}
