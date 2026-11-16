@@ -2,6 +2,9 @@ use super::bm25::{as_f64, round6};
 use crate::tokens::tokenize_source;
 use crate::types::{CodeBlock, SymbolKind};
 
+/// The shortest name token that can stand for a longer query term. Tokens are ASCII, so bytes are characters.
+const MIN_PREFIX_LEN: usize = 3;
+
 /// Returns the multiplier for how well the block's declared name matches the query, from 1.0 to 7.0.
 ///
 /// The name is [`CodeBlock::name`], the identifier the analyzer read from the syntax tree, so parameters, return types
@@ -10,7 +13,11 @@ use crate::types::{CodeBlock, SymbolKind};
 /// overlap:
 ///
 /// - `R`: query terms, repeats counted, that the name holds, over all query terms.
-/// - `P`: name tokens that are query terms, over all name tokens.
+/// - `P`: name tokens that match a query term, over all name tokens.
+///
+/// A name token matches a query term when they are equal or when the token has at least 3 characters and the term starts
+/// with it, so `ListenerExt` holds the terms `listener` and `extension`. The prefix goes one way only: `parser` does not
+/// match the term `parse`, and `ex` does not match `extension`. A match by prefix counts as much as an equal one.
 ///
 /// The multiplier is `round6(1 + 2 * (R + P / 2) / 1.5 + 4 * exact)`, where `exact` is 1 when `R` and `P` are both 1
 /// and 0 otherwise: the name is made of the query's words, and the query is made of the name's. Returns 1.0 when
@@ -50,17 +57,25 @@ pub fn name_match_boost(block: &CodeBlock, query_terms: &[&str]) -> f64 {
     if query_terms.is_empty() || name_tokens.is_empty() {
         return 1.0;
     }
-    let matched = query_terms.iter().filter(|term| name_tokens.iter().any(|token| token == *term)).count();
-    let named = name_tokens.iter().filter(|token| query_terms.contains(&token.as_str())).count();
+    let matched = query_terms.iter().filter(|term| name_tokens.iter().any(|token| token_matches(token, term))).count();
+    let named = name_tokens.iter().filter(|token| query_terms.iter().any(|term| token_matches(token, term))).count();
     let recall = as_f64(matched) / as_f64(query_terms.len());
     let precision = as_f64(named) / as_f64(name_tokens.len());
     let exact = matched == query_terms.len() && named == name_tokens.len();
     round6(1.0 + 2.0 * (recall + 0.5 * precision) / 1.5 + if exact { 4.0 } else { 0.0 })
 }
 
+/// Returns whether a name token stands for a query term: it equals the term, or it has at least [`MIN_PREFIX_LEN`]
+/// characters and the term starts with it, so `ext` stands for `extension` and `req` for `request`. A token never
+/// matches a term it is longer than (`parser` is not `parse`), and a shorter token has to equal the term.
+fn token_matches(token: &str, term: &str) -> bool {
+    token == term || (token.len() >= MIN_PREFIX_LEN && term.starts_with(token))
+}
+
 /// Returns the score multiplier for a block's symbol kind.
 ///
-/// Callable units rank highest, then type definitions, then bindings; `Other` ranks lowest.
+/// Callable units rank highest, then type definitions, then bindings; `Impl` and `Module` rank below fields and
+/// properties, and `Other` ranks lowest.
 ///
 /// # Examples
 ///
@@ -77,9 +92,9 @@ pub fn node_type_boost(kind: SymbolKind) -> f64 {
         SymbolKind::Class | SymbolKind::Method | SymbolKind::Constructor => 1.4,
         SymbolKind::Interface | SymbolKind::Struct => 1.3,
         SymbolKind::TypeAlias | SymbolKind::Enum => 1.2,
-        SymbolKind::Variable | SymbolKind::Impl => 1.1,
+        SymbolKind::Variable => 1.1,
         SymbolKind::Property | SymbolKind::Field | SymbolKind::Macro => 1.0,
-        SymbolKind::Module => 0.9,
+        SymbolKind::Module | SymbolKind::Impl => 0.9,
         SymbolKind::Other => 0.7,
     }
 }
@@ -151,6 +166,42 @@ mod tests {
     #[case::a_block_without_a_name_gets_no_boost(None, &["parse", "other"], 1.0)]
     #[case::a_name_of_only_stop_words_gets_no_boost(Some("use"), &["use", "parse"], 1.0)]
     #[case::an_empty_name_gets_no_boost(Some(""), &["parse"], 1.0)]
+    // A name token of at least 3 characters matches a term that starts with it: "ext" is the start of "extension".
+    #[case::an_abbreviated_name_token_matches_the_longer_term(Some("ext"), &["extension"], 7.0)]
+    // R = 1/2, P = 1.
+    #[case::an_abbreviated_name_token_among_more_terms(Some("ext"), &["extension", "other"], 2.333_333)]
+    // "ListenerExt" is listener, ext: both are query words, one by prefix.
+    #[case::an_abbreviated_token_beside_a_whole_one(Some("ListenerExt"), &["listener", "extension"], 7.0)]
+    // R = 2/3, P = 1.
+    #[case::an_abbreviated_token_beside_a_whole_one_among_more_terms(Some("ListenerExt"), &["listener", "extension", "trait"], 2.555_556)]
+    // "reqIdGen" is req, id, gen: `id` is equal, `req` and `gen` are prefixes of the terms.
+    #[case::several_abbreviated_tokens(Some("reqIdGen"), &["request", "id", "generator"], 7.0)]
+    #[case::several_abbreviated_tokens_and_a_whole_one(Some("reqIdGenFactory"), &["request", "id", "generator", "factory"], 7.0)]
+    // R = 1/4, P = 1/4: only `id` matches.
+    #[case::only_the_equal_token_matches(Some("reqIdGenFactory"), &["id", "other", "more", "words"], 1.5)]
+    // The prefix goes one way: a name token longer than the term is not a match.
+    #[case::a_name_token_longer_than_the_term_does_not_match(Some("request"), &["req"], 1.0)]
+    #[case::parser_does_not_match_parse(Some("parser"), &["parse"], 1.0)]
+    #[case::a_term_longer_than_the_name_token_matches(Some("parse"), &["parser"], 7.0)]
+    #[case::parse_config_is_unchanged_for_parse(Some("parseConfig"), &["parse"], 2.666_667)]
+    // A token of 2 characters matches only a term that equals it: `to` is not the start of "tomorrow". R = 1/2, P = 1/2.
+    #[case::a_two_character_token_matches_only_an_equal_term(Some("toDate"), &["tomorrow", "date"], 2.0)]
+    #[case::a_two_character_token_is_not_a_prefix(Some("ex"), &["extension"], 1.0)]
+    #[case::a_two_character_token_matches_an_equal_term(Some("ex"), &["ex"], 7.0)]
+    // A 3-character token is the shortest that matches a prefix, and the term must start with all of it.
+    #[case::a_three_character_token_that_does_not_start_the_term(Some("ext"), &["exit"], 1.0)]
+    #[case::a_three_character_token_matches_a_longer_term(Some("req"), &["request"], 7.0)]
+    // `use` and `from` are stop words, so the name is the single token `ext` or `req`.
+    #[case::a_stop_word_before_an_abbreviated_token(Some("useExt"), &["extension"], 7.0)]
+    #[case::a_stop_word_before_an_abbreviated_token_in_snake_case(Some("from_req"), &["request"], 7.0)]
+    // Repeated terms count per occurrence: R = 2/2, then R = 2/4.
+    #[case::repeated_terms_matched_by_one_prefix(Some("ext"), &["extension", "extension"], 7.0)]
+    #[case::repeated_terms_matched_by_one_prefix_among_others(Some("ext"), &["extension", "extension", "other", "other"], 2.333_333)]
+    // One token can match two terms: both count for R, and the token counts once for P.
+    #[case::one_token_matches_a_whole_and_a_longer_term(Some("ext"), &["ext", "extension"], 7.0)]
+    #[case::one_token_matches_two_longer_terms(Some("ext"), &["extension", "extent"], 7.0)]
+    // R = 2/3, P = 1.
+    #[case::one_token_matches_two_terms_among_more(Some("ext"), &["extension", "extent", "other"], 2.555_556)]
     fn name_match_boost_rewards_query_terms_in_the_declared_name(
         #[case] name: Option<&str>,
         #[case] terms: &[&str],
@@ -177,6 +228,11 @@ mod tests {
     #[case::function_among_more_terms("export function useWatch() {}", "useWatch", &["watch", "form", "values", "subscribe"], 2.0)]
     #[case::interface("export interface FromRequestParts<S> { run(): void }", "FromRequestParts", &["extractor", "request", "parts"], 2.555_556)]
     #[case::class("export class FromRequestParts {}", "FromRequestParts", &["request", "parts"], 7.0)]
+    #[case::abbreviated_token("export class ListenerExt {}", "ListenerExt", &["listener", "extension"], 7.0)]
+    #[case::abbreviated_tokens("export function reqIdGen() {}", "reqIdGen", &["request", "id", "generator"], 7.0)]
+    #[case::abbreviated_tokens_among_more_terms("export function ext() {}", "ext", &["extension", "other"], 2.333_333)]
+    #[case::name_token_longer_than_the_term("export function parser() {}", "parser", &["parse"], 1.0)]
+    #[case::term_longer_than_the_name_token("export function parse() {}", "parse", &["parser"], 7.0)]
     fn name_match_boost_reads_the_name_the_ts_analyzer_extracts(
         #[case] source: &str,
         #[case] name: &str,
@@ -193,6 +249,11 @@ mod tests {
     #[case::function_among_more_terms("pub fn use_watch() {}", "use_watch", &["watch", "form", "values", "subscribe"], 2.0)]
     #[case::trait_("pub trait FromRequestParts<S> { fn run(); }", "FromRequestParts", &["extractor", "request", "parts"], 2.555_556)]
     #[case::struct_("pub struct FromRequestParts;", "FromRequestParts", &["request", "parts"], 7.0)]
+    #[case::abbreviated_token("pub trait ListenerExt {}", "ListenerExt", &["listener", "extension"], 7.0)]
+    #[case::abbreviated_tokens("pub fn req_id_gen() {}", "req_id_gen", &["request", "id", "generator"], 7.0)]
+    #[case::abbreviated_tokens_among_more_terms("pub fn ext() {}", "ext", &["extension", "other"], 2.333_333)]
+    #[case::name_token_longer_than_the_term("pub fn parser() {}", "parser", &["parse"], 1.0)]
+    #[case::term_longer_than_the_name_token("pub fn parse() {}", "parse", &["parser"], 7.0)]
     fn name_match_boost_reads_the_name_the_rust_analyzer_extracts(
         #[case] source: &str,
         #[case] name: &str,
@@ -218,7 +279,7 @@ mod tests {
     #[case(SymbolKind::TypeAlias, 1.2)]
     #[case(SymbolKind::Enum, 1.2)]
     #[case(SymbolKind::Variable, 1.1)]
-    #[case(SymbolKind::Impl, 1.1)]
+    #[case(SymbolKind::Impl, 0.9)]
     #[case(SymbolKind::Property, 1.0)]
     #[case(SymbolKind::Field, 1.0)]
     #[case(SymbolKind::Macro, 1.0)]
