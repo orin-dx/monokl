@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.5-nightly.202611131617.95eabf579",
+  "checkpoint_id": "01M7H0RRN08PHSFTDQ4X0MAC7Y",
+  "strategy": "manual-commit",
+  "branch": "perf/single-read-parallel-walk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/spec/05-research-and-decisions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 7755,
+    "cache_read_tokens": 922031,
+    "output_tokens": 2213,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 60,
+      "cache_creation_tokens": 224846,
+      "cache_read_tokens": 5559257,
+      "output_tokens": 9188,
+      "api_call_count": 30
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
