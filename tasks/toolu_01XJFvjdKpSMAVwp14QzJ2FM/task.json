@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XJFvjdKpSMAVwp14QzJ2FM",
+  "agent_id": "ad312dbabe5aee90d",
+  "subagent_type": "general-purpose",
+  "task_description": "PR A: michi 0.10.0 migration",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 122184,
+    "cache_read_tokens": 5684487,
+    "output_tokens": 25020,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-15T22:35:23.868221-08:00",
+  "completed_at": "2026-11-15T22:47:11.260723-08:00"
+}
