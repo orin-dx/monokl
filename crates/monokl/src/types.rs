@@ -81,6 +81,11 @@ pub struct CodeBlock {
     /// within `span`. The snippet leaves out a matched line whose text lies inside it, because the signature already
     /// shows that line.
     pub signature_span: Option<Range<usize>>,
+    /// The offset of the `where` keyword of the declaration's where clause, as the Rust analyzer read it from the syntax
+    /// tree; `None` when there is no where clause, and always for TypeScript and JavaScript. When `Some`, it lies inside
+    /// `signature_span`, and the clause runs to the end of the head. The signature column shows the signature up to this
+    /// offset, so the snippet may show a matched line of the clause.
+    pub where_start: Option<usize>,
     pub matched_lines: Vec<usize>,
     /// The block this one is a member of, such as the class of a method; `None` for a top-level block.
     pub parent: Option<ParentContext>,

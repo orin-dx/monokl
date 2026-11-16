@@ -215,7 +215,7 @@ impl Walker<'_> {
         holder: Option<&Holder>,
         in_test: bool,
     ) -> usize {
-        let (signature, head) = self.signature(node);
+        let (signature, head, where_start) = self.signature(node);
         let range = node.text_range();
         let block = CodeBlock {
             file: self.path.to_owned(),
@@ -228,6 +228,7 @@ impl Walker<'_> {
             code: self.text(range).to_owned(),
             symbol_signature: Some(signature),
             signature_span: Some(head),
+            where_start,
             matched_lines: Vec::new(),
             parent: holder.map(|holder| holder.context.clone()),
         };
@@ -261,11 +262,13 @@ impl Walker<'_> {
         out
     }
 
-    /// The item's header on one line, and the bytes of its head. The header is everything from its visibility or first
+    /// The item's header on one line, the bytes of its head and where its where clause starts. The header is everything from its visibility or first
     /// keyword up to its body or initializer, without attributes and doc comments: `pub fn f<T>(a: &str) -> T where T:
-    /// Clone`. The head's bytes run on through the `{` that opens a block body, or to the end of an item with no body.
-    fn signature(&self, node: &SyntaxNode) -> (String, Range<usize>) {
+    /// Clone`. The head's bytes run on through the `{` that opens a block body, or to the end of an item with no body. The
+    /// where clause is the tree's own `WHERE_CLAUSE` node, so a `where` in a comment or a literal is not one.
+    fn signature(&self, node: &SyntaxNode) -> (String, Range<usize>, Option<usize>) {
         let mut start = None;
+        let mut where_start = None;
         let mut end = node.text_range().end();
         let mut head_end = end;
         for element in node.children_with_tokens() {
@@ -275,6 +278,9 @@ impl Walker<'_> {
                     continue;
                 }
                 start = Some(element.text_range().start());
+            }
+            if kind == SyntaxKind::WHERE_CLAUSE {
+                where_start = Some(usize::from(element.text_range().start()));
             }
             let is_body = match &element {
                 NodeOrToken::Node(_) => matches!(
@@ -297,12 +303,12 @@ impl Walker<'_> {
                 break;
             }
         }
-        let Some(start) = start else { return (String::new(), usize::from(end)..usize::from(end)) };
+        let Some(start) = start else { return (String::new(), usize::from(end)..usize::from(end), None) };
         let text = collapse(self.text(TextRange::new(start, end.max(start))))
             .trim_end_matches([';', ','])
             .trim_end()
             .to_owned();
-        (text, usize::from(start)..usize::from(head_end.max(start)))
+        (text, usize::from(start)..usize::from(head_end.max(start)), where_start)
     }
 }
 

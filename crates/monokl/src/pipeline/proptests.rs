@@ -59,6 +59,7 @@ fn empty_block() -> CodeBlock {
         code: String::new(),
         symbol_signature: None,
         signature_span: None,
+        where_start: None,
         name: None,
         matched_lines: Vec::new(),
         parent: None,

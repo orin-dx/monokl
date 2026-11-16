@@ -1217,3 +1217,104 @@ fn a_signature_span_lies_within_its_block_and_collapses_to_the_signature() {
         }
     }
 }
+
+/// What each block's `where_start` points at in `source`: the text from it to the end of the head, or `None`.
+fn where_clauses(source: &str) -> Vec<(String, Option<String>)> {
+    let analysis = analyze_source(source);
+    listed(&analysis)
+        .iter()
+        .map(|b| {
+            let head = b.signature_span.clone().unwrap();
+            (b.name.clone().unwrap(), b.where_start.map(|at| source[at..head.end].to_owned()))
+        })
+        .collect()
+}
+
+fn clause(name: &str, text: Option<&str>) -> (String, Option<String>) {
+    (name.to_owned(), text.map(str::to_owned))
+}
+
+#[test]
+fn where_start_is_the_where_keyword_of_a_function_a_struct_an_impl_and_a_trait_method() {
+    let source = "\
+pub fn add<T: Add>(a: T, b: T) -> T
+where
+    T: Copy,
+    T::Item: Debug,
+{
+    a
+}
+
+pub struct Wrapper<T>
+where
+    T: Clone,
+{
+    value: T,
+}
+
+pub struct Pair<T>(T, T) where T: Clone;
+
+impl<T> Wrapper<T> where T: Clone {
+    fn get(&self) -> u8 {
+        let a = 1;
+        a
+    }
+}
+
+pub trait Shape {
+    fn area(&self) -> f64
+    where
+        Self: Sized,
+    {
+        let a = 0.0;
+        a
+    }
+}
+";
+    assert_eq!(
+        where_clauses(source),
+        [
+            clause("add", Some("where\n    T: Copy,\n    T::Item: Debug,\n{")),
+            clause("Wrapper", Some("where\n    T: Clone,\n{")),
+            clause("Pair", Some("where T: Clone;")),
+            clause("Wrapper<T>", Some("where T: Clone {")),
+            clause("get", None),
+            clause("Shape", None),
+            clause("area", Some("where\n        Self: Sized,\n    {")),
+        ]
+    );
+}
+
+#[test]
+fn where_start_is_none_without_a_where_clause_whatever_the_word_appears_in() {
+    let source = "\
+pub fn value() /* where values originate */ -> u64 {
+    1
+}
+
+pub fn text() -> &'static str {
+    \"a where b\"
+}
+
+pub fn raw() -> &'static str {
+    r##\"\"# where \"##
+}
+
+// where
+pub struct Foo<const N: usize = { r#\"\" } where \"#.len() }>;
+
+pub fn plain(x: u8) -> u8 {
+    x
+}
+";
+    assert_eq!(
+        where_clauses(source),
+        [clause("value", None), clause("text", None), clause("raw", None), clause("Foo", None), clause("plain", None),]
+    );
+}
+
+#[test]
+fn a_where_clause_after_a_comment_in_the_head_is_still_found() {
+    let source = "pub fn f<T>(x: T) /* where */ -> T where T: Copy {\n    x\n}\n";
+    assert_eq!(where_clauses(source), [clause("f", Some("where T: Copy {"))]);
+}

@@ -62,7 +62,7 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
         lines.push((start, text));
         start += text.len() + 1;
     }
-    let where_at = block.signature_span.as_ref().and_then(|head| where_start(block, head));
+    let where_at = block.where_start;
     let mut shown: Vec<usize> = block
         .matched_lines
         .iter()
@@ -106,124 +106,29 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
     Some(out.join("\n"))
 }
 
-/// The byte offset in `text` of the `where` keyword that starts a Rust where clause: the first `where` standing alone
-/// outside any parentheses, brackets and braces, and outside comments, strings and character literals. `where` is a
-/// reserved word, so nothing else at that depth spells it.
-fn where_keyword(text: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut previous = None;
-    let mut chars = text.char_indices().peekable();
-    while let Some((at, c)) = chars.next() {
-        let rest = &text[at..];
-        // The end of whatever is skipped, as an offset in `text`.
-        let skip_to = if rest.starts_with("/*") {
-            Some(block_comment_end(rest).map_or(text.len(), |end| at + end))
-        } else if rest.starts_with("//") {
-            Some(rest.find('\n').map_or(text.len(), |end| at + end))
-        } else if c == '"' {
-            Some(string_end(rest).map_or(text.len(), |end| at + end))
-        } else if c == '\'' {
-            char_literal_end(rest).map(|end| at + end)
-        } else {
-            None
-        };
-        if let Some(end) = skip_to {
-            while chars.peek().is_some_and(|&(next, _)| next < end) {
-                chars.next();
-            }
-            previous = Some(' ');
-            continue;
-        }
-        match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if depth == 0
-            && rest.starts_with("where")
-            && previous.is_some_and(char::is_whitespace)
-            && rest["where".len()..].chars().next().is_none_or(char::is_whitespace)
-        {
-            return Some(at);
-        }
-        previous = Some(c);
-    }
-    None
-}
-
-/// The length of the block comment `text` starts with, which nests, or `None` when it is not closed.
-fn block_comment_end(text: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut at = 0;
-    while at < text.len() {
-        let rest = &text[at..];
-        if rest.starts_with("/*") {
-            depth += 1;
-            at += 2;
-        } else if rest.starts_with("*/") {
-            depth -= 1;
-            at += 2;
-            if depth == 0 {
-                return Some(at);
-            }
-        } else {
-            at += rest.chars().next().map_or(1, char::len_utf8);
-        }
-    }
-    None
-}
-
-/// The length of the string literal `text` starts with, or `None` when it is not closed.
-fn string_end(text: &str) -> Option<usize> {
-    let mut escaped = false;
-    for (at, c) in text.char_indices().skip(1) {
-        match c {
-            _ if escaped => escaped = false,
-            '\\' => escaped = true,
-            '"' => return Some(at + 1),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The length of the character literal `text` starts with (`'a'`, `'\n'`), or `None` for a lifetime such as `'a`.
-fn char_literal_end(text: &str) -> Option<usize> {
-    let mut chars = text.char_indices().skip(1);
-    let (_, first) = chars.next()?;
-    if first == '\\' {
-        return chars.find(|&(_, c)| c == '\'').map(|(at, _)| at + 1);
-    }
-    chars.next().filter(|&(_, c)| c == '\'').map(|(at, _)| at + 1)
-}
-
-/// Whether `block` is Rust code, the only language whose signatures have a where clause.
-fn is_rust(block: &crate::types::CodeBlock) -> bool {
-    block.file.extension() == Some("rs")
-}
-
-/// The file offset of the `where` keyword in the head of a Rust `block`, if it has a where clause.
-fn where_start(block: &crate::types::CodeBlock, head: &std::ops::Range<usize>) -> Option<usize> {
-    if !is_rust(block) {
-        return None;
-    }
-    let text = block.code.get(head.start.checked_sub(block.span.start)?..head.end.checked_sub(block.span.start)?)?;
-    where_keyword(text).map(|at| head.start + at)
-}
-
 /// The `symbolSignature` cell. A Rust signature ends where its where clause starts, with ` where …` to say there is one:
 /// the clause is a list of bounds that is often longer than the rest of the signature, and the row's snippet shows a
-/// line of it when that line matched.
+/// line of it when that line matched. The clause is where the analyzer recorded it in
+/// [`where_start`](crate::types::CodeBlock::where_start), so a `where` inside a comment or a literal is not mistaken for
+/// it; the ranking still reads the whole signature.
 fn signature_cell(block: &crate::types::CodeBlock) -> Option<String> {
     let signature = block.symbol_signature.as_deref()?;
-    match is_rust(block).then(|| where_keyword(signature)).flatten() {
-        Some(at) => Some(format!("{} where …", signature[..at].trim_end())),
-        None => Some(signature.to_owned()),
-    }
+    let before_clause = block.signature_span.as_ref().zip(block.where_start).and_then(|(head, at)| {
+        let offset = |position: usize| position.checked_sub(block.span.start);
+        block.code.get(offset(head.start)?..offset(at)?)
+    });
+    Some(match before_clause {
+        Some(text) => format!("{} where …", text.split_whitespace().collect::<Vec<_>>().join(" ")),
+        None => signature.to_owned(),
+    })
 }
 
-/// Whether a line is only a comment or an attribute: it starts with `//`, `/*`, `*/`, `* ` (the body of a block comment),
-/// `#[` or `#![`. A line that starts with `*` and no space is code (a dereference), as is any other.
+/// Whether a line looks like only a comment or an attribute: it starts with `//`, `/*`, `*/`, `* ` (the body of a block
+/// comment), `#[` or `#![`. A line that starts with `*` and no space is code (a dereference), as is any other.
+///
+/// This reads the line's text, not the syntax tree, because it only orders the lines of a snippet: a line wrongly taken
+/// for a comment (one that begins `//` inside a multi-line string) is shown after the other matched lines instead of
+/// before them, and is never left out, so a wrong answer costs a less useful snippet line and no information.
 fn is_comment_or_attribute(text: &str) -> bool {
     let text = text.trim_start();
     ["//", "/*", "*/", "#[", "#!["].iter().any(|prefix| text.starts_with(prefix))
@@ -377,6 +282,7 @@ mod snippet_tests {
             code: code.to_owned(),
             symbol_signature: Some(first_line.trim_end_matches(['{', ' ']).to_owned()),
             signature_span: Some(START..START + first_line.len()),
+            where_start: None,
             name: None,
             matched_lines: matched_lines.to_vec(),
             parent: None,
@@ -530,9 +436,11 @@ mod snippet_tests {
         assert_eq!(snippet_of(&b, 2), Some("2: // c1\n3: x1\n+1 more".to_owned()));
     }
 
-    /// `block` in the Rust file `src/a.rs`, with the head set to the text `head` of `code`.
+    /// `block` with the head set to the text `head` of `code` and the where clause starting at the last `where` in the
+    /// head, as the Rust analyzer records it.
     fn rust_headed(line_start: usize, code: &str, head: &str, matched_lines: &[usize]) -> CodeBlock {
-        CodeBlock { file: Utf8PathBuf::from("src/a.rs"), ..headed(line_start, code, head, matched_lines) }
+        let at = code.find(head).expect("the code holds the head") + head.rfind("where").expect("the head has a where");
+        CodeBlock { where_start: Some(START + at), ..headed(line_start, code, head, matched_lines) }
     }
 
     const WHERE_FN: &str = "pub fn f<T>(x: T) -> T\nwhere\n    T: needle,\n{\n    x\n}";
@@ -566,59 +474,39 @@ mod snippet_tests {
     }
 
     #[test]
-    fn a_where_clause_outside_a_rust_file_stays_in_the_head() {
+    fn a_head_with_no_recorded_where_clause_stays_whole_in_the_head() {
+        // The same text as a block the analyzer found no where clause in, as for TypeScript.
         let b = headed(1, WHERE_FN, WHERE_HEAD, &[1, 3]);
         assert_eq!(snippet(&b), None);
     }
 
     #[test]
-    fn a_rust_signature_loses_its_where_clause_and_says_so() {
-        let sig = |signature: &str| {
-            let b = CodeBlock { symbol_signature: Some(signature.to_owned()), ..rust_headed(1, "x", "x", &[]) };
+    fn a_rust_signature_ends_before_the_recorded_where_clause_and_says_so() {
+        let cell = |code: &str, head: &str| {
+            let b =
+                CodeBlock { symbol_signature: Some("whole signature".to_owned()), ..rust_headed(1, code, head, &[]) };
             signature_cell(&b)
         };
-        assert_eq!(sig("pub fn f<T>(x: T) -> T where T: Copy"), Some("pub fn f<T>(x: T) -> T where …".to_owned()));
-        assert_eq!(sig("impl<L> X<L> where L: Listener, L::Addr: Debug"), Some("impl<L> X<L> where …".to_owned()));
-        assert_eq!(sig("pub fn f<T>(x: T) -> T"), Some("pub fn f<T>(x: T) -> T".to_owned()));
-        assert_eq!(sig("fn nowhere(somewhere: u8)"), Some("fn nowhere(somewhere: u8)".to_owned()));
-        assert_eq!(sig("fn f(a: [u8; where_n()]) where T: A"), Some("fn f(a: [u8; where_n()]) where …".to_owned()));
-        assert_eq!(sig("fn f(x: Fn(where ) )"), Some("fn f(x: Fn(where ) )".to_owned()));
+        assert_eq!(cell(WHERE_FN, WHERE_HEAD), Some("pub fn f<T>(x: T) -> T where …".to_owned()));
+        let one_line = "pub fn f<T>(x: T) -> T where T: Copy {";
+        assert_eq!(cell(one_line, one_line), Some("pub fn f<T>(x: T) -> T where …".to_owned()));
+        let imp = "impl<L> X<L>\nwhere\n    L: Listener,\n    L::Addr: Debug,\n{";
+        assert_eq!(cell(imp, imp), Some("impl<L> X<L> where …".to_owned()));
+        // A `where` before the clause, in a comment, stays in the signature.
+        let commented = "pub fn f() /* where */ -> T where T: A {";
+        assert_eq!(cell(commented, commented), Some("pub fn f() /* where */ -> T where …".to_owned()));
     }
 
     #[test]
-    fn a_where_inside_a_comment_or_a_literal_is_not_a_where_clause() {
-        let sig = |signature: &str| {
-            let b = CodeBlock { symbol_signature: Some(signature.to_owned()), ..rust_headed(1, "x", "x", &[]) };
-            signature_cell(&b)
-        };
-        for kept in [
+    fn a_signature_with_no_recorded_where_clause_is_shown_whole_whatever_it_spells() {
+        for text in [
             "pub fn value() /* where values originate */ -> u64",
-            "pub fn value() /* a /* where */ b */ -> u64",
             "pub fn value<const S: &'static str = \"a where b\">() -> u64",
-            "pub fn value<const C: char = ' '>(x: u8) -> u64",
-            "pub fn value(s: &str) -> &'a str",
+            "pub struct Foo<const N: usize = { r#\"\" } where \"#.len() }>;",
+            "function f() where T: A",
         ] {
-            assert_eq!(sig(kept), Some(kept.to_owned()), "{kept}");
+            assert_eq!(signature_cell(&block(1, text, &[])), Some(text.to_owned()), "{text}");
         }
-        assert_eq!(
-            sig("pub fn value() /* where */ -> u64 where T: A"),
-            Some("pub fn value() /* where */ -> u64 where …".to_owned())
-        );
-        assert_eq!(sig("pub fn f() // where x"), Some("pub fn f() // where x".to_owned()));
-    }
-
-    #[test]
-    fn a_where_inside_a_comment_does_not_hide_a_head_line_from_the_snippet() {
-        let code = "pub fn value() /* where\nvalues */ -> u64 {\n    needle()\n}";
-        let head = "pub fn value() /* where\nvalues */ -> u64 {";
-        let b = rust_headed(1, code, head, &[2, 3]);
-        assert_eq!(snippet(&b), Some("3: needle()".to_owned()));
-    }
-
-    #[test]
-    fn a_signature_outside_a_rust_file_keeps_the_word_where() {
-        let b = CodeBlock { symbol_signature: Some("function f() where T: A".to_owned()), ..block(1, "x", &[]) };
-        assert_eq!(signature_cell(&b), Some("function f() where T: A".to_owned()));
         assert_eq!(signature_cell(&unsigned(1, "x", &[])), None);
     }
 
@@ -736,6 +624,7 @@ mod projection_tests {
                     code: "fn foo(x) {\n    let y = foo(x);\n    unrelated();\n    y\n}".to_string(),
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
                     signature_span: Some(0..11),
+                    where_start: None,
                     name: None,
                     matched_lines: vec![5, 6],
                     parent: None,
@@ -773,6 +662,7 @@ mod projection_tests {
                 code: String::new(),
                 symbol_signature: None,
                 signature_span: None,
+                where_start: None,
                 name: None,
                 matched_lines: Vec::new(),
                 parent,
@@ -898,6 +788,7 @@ mod projection_tests {
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
@@ -987,6 +878,7 @@ mod projection_tests {
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
@@ -1027,6 +919,7 @@ mod projection_tests {
                     code: String::new(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,

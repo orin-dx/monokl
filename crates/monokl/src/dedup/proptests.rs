@@ -16,6 +16,7 @@ fn ranked(file: &str, span: Range<usize>, parent: Option<ParentContext>) -> Rank
             code: String::new(),
             symbol_signature: None,
             signature_span: None,
+            where_start: None,
             name: None,
             matched_lines: Vec::new(),
             parent,
