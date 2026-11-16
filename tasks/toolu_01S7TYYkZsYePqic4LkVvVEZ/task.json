@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01S7TYYkZsYePqic4LkVvVEZ",
+  "agent_id": "a7e49a515512da966",
+  "subagent_type": "general-purpose",
+  "task_description": "Experiment: container-vs-member ranking",
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 171518,
+    "cache_read_tokens": 7725783,
+    "output_tokens": 46159,
+    "api_call_count": 60
+  },
+  "started_at": "2026-11-15T17:34:46.468802-08:00",
+  "completed_at": "2026-11-15T17:52:45.478667-08:00"
+}

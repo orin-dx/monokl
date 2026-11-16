@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019RNmb4HkdzGDGiFKebopQZ",
+  "agent_id": "aa23b683c47108dc7",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit michi 0.9 vs monokl output layer",
+  "token_usage": {
+    "input_tokens": 158,
+    "cache_creation_tokens": 222221,
+    "cache_read_tokens": 13567609,
+    "output_tokens": 46340,
+    "api_call_count": 79
+  },
+  "started_at": "2026-11-15T22:23:11.70207-08:00",
+  "completed_at": "2026-11-15T22:34:51.455629-08:00"
+}
