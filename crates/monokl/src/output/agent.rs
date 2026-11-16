@@ -188,27 +188,37 @@ pub fn render_search(response: &SearchResponse, view: &SearchView) -> String {
     rendered.render_toon()
 }
 
-/// What the truncation hint tells a reader to do to see more: name the flag that lifts each rule that cut rows, then
-/// point at refining the query.
+/// What the truncation hint tells a reader to do to see more.
 ///
-/// The relevance cut is named only when it dropped rows. The row cap is named when the rows ran out, the token cap when
-/// the tokens did; `view.max_results` tells them apart, because the token cap cuts below the row cap.
+/// Rows the caps left out are reached with `--offset`, which names the exact next value so the reader does not pay for
+/// the rows already seen; rows the relevance cut dropped are reached with `--min-score 0`, which keeps the same order,
+/// so the same offsets still apply. An offset past the last kept row says so and how many rows there are. The caps are
+/// named only when a page came back empty, because an offset would not move past a row that does not fit.
 fn truncation_guidance(response: &SearchResponse, view: &SearchView) -> String {
-    let by_caps = response
-        .total_blocks_before_truncation
-        .saturating_sub(response.results.len())
-        .saturating_sub(response.blocks_cut_by_relevance);
-    let mut flags = Vec::new();
-    if response.blocks_cut_by_relevance > 0 {
-        flags.push("--min-score 0");
+    let returned = response.results.len();
+    let cut = response.blocks_cut_by_relevance;
+    let relevant = response.total_blocks_before_truncation.saturating_sub(cut);
+    let left = relevant.saturating_sub(response.offset + returned);
+    let below_cut = (cut > 0)
+        .then(|| format!("--min-score 0 for the {cut} {} below the cut", if cut == 1 { "row" } else { "rows" }));
+    let mut parts = Vec::new();
+    if returned == 0 && response.offset >= relevant {
+        parts.push(format!("offset {} is past the last of {relevant} rows", response.offset));
+        parts.extend(below_cut);
+        return parts.join("; ");
     }
-    if by_caps > 0 {
-        flags.push(if response.results.len() >= view.max_results { "--max-results N" } else { "--max-tokens N" });
+    if left > 0 && returned > 0 {
+        parts.push(format!("next: --offset {}", response.offset + returned));
+    } else if left > 0 {
+        parts.push(format!(
+            "{} for more",
+            if returned >= view.max_results { "--max-results N" } else { "--max-tokens N" }
+        ));
     }
-    if flags.is_empty() {
-        return "refine with +term/-term".to_owned();
-    }
-    format!("{} for more, or refine with +term/-term", flags.join(" or "))
+    parts.extend(below_cut);
+    parts.push("refine with +term/-term".to_owned());
+    let (last, rest) = parts.split_last().map_or(("", &[][..]), |(last, rest)| (last.as_str(), rest));
+    if rest.is_empty() { last.to_owned() } else { format!("{}, or {last}", rest.join(", ")) }
 }
 
 fn search_hints(response: &SearchResponse, view: &SearchView) -> Vec<michi::Hint> {
@@ -216,7 +226,8 @@ fn search_hints(response: &SearchResponse, view: &SearchView) -> Vec<michi::Hint
         michi::TruncationOutcome::new(response.results.iter().collect(), response.total_blocks_before_truncation);
     let mut hints: Vec<michi::Hint> = shown.hint(truncation_guidance(response, view)).into_iter().collect();
     hints.extend(diagnostic_lines(&response.diagnostics).into_iter().map(michi::Hint::new));
-    if response.results.is_empty() {
+    let past_the_end = response.offset > 0 && response.total_blocks_before_truncation > 0;
+    if response.results.is_empty() && !past_the_end {
         hints.push(michi::Hint::new(
             "only declarations and the members of their classes, objects, impls and traits are searched; for text in tests, calls or config try rg",
         ));
@@ -634,6 +645,7 @@ mod projection_tests {
             }],
             total_blocks_before_truncation: 1,
             blocks_cut_by_relevance: 0,
+            offset: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
@@ -679,6 +691,7 @@ mod projection_tests {
             ],
             total_blocks_before_truncation: 3,
             blocks_cut_by_relevance: 0,
+            offset: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
@@ -705,6 +718,7 @@ mod projection_tests {
             results: Vec::new(),
             total_blocks_before_truncation: 0,
             blocks_cut_by_relevance: 0,
+            offset: 0,
             truncated: false,
             diagnostics: vec![
                 diagnostic(DiagnosticKind::Skipped, Some("a.ts"), "unreadable"),
@@ -806,7 +820,10 @@ mod projection_tests {
         let view = SearchView { max_results: budget.max_results, ..SearchView::default() };
         let texts = search_row_texts(&ranked, view.snippet_lines);
         let rendered = render_search(&crate::budget::apply_budget(ranked, total, budget, &texts, Vec::new()), &view);
-        rendered.lines().find_map(|line| line.strip_prefix("help[1]: \"")?.strip_suffix('"').map(str::to_owned))
+        rendered.lines().find_map(|line| {
+            let text = line.strip_prefix("help[1]: ")?;
+            Some(text.strip_prefix('"').and_then(|quoted| quoted.strip_suffix('"')).unwrap_or(text).to_owned())
+        })
     }
 
     #[test]
@@ -814,35 +831,109 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1, 0.05]].concat();
         assert_eq!(
             help_line(&scores, &crate::budget::Budget::default()).as_deref(),
-            Some("showing 9 of 11; --min-score 0 for more, or refine with +term/-term")
+            Some("showing 9 of 11; --min-score 0 for the 2 rows below the cut, or refine with +term/-term")
         );
     }
 
     #[test]
-    fn the_help_line_names_the_max_results_flag_when_the_row_cap_dropped_rows() {
+    fn the_help_line_names_the_next_offset_when_the_row_cap_dropped_rows() {
         let budget = crate::budget::Budget { max_results: 2, ..crate::budget::Budget::default() };
         assert_eq!(
             help_line(&[1.0, 0.9, 0.8], &budget).as_deref(),
-            Some("showing 2 of 3; --max-results N for more, or refine with +term/-term")
+            Some("showing 2 of 3; next: --offset 2, or refine with +term/-term")
         );
     }
 
     #[test]
-    fn the_help_line_names_both_flags_when_both_rules_dropped_rows() {
+    fn the_help_line_names_the_offset_and_the_min_score_flag_when_both_rules_dropped_rows() {
         let budget = crate::budget::Budget { max_results: 5, ..crate::budget::Budget::default() };
         let scores = [vec![1.0; 9], vec![0.1]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 5 of 10; --min-score 0 or --max-results N for more, or refine with +term/-term")
+            Some(
+                "showing 5 of 10; next: --offset 5, --min-score 0 for the 1 row below the cut, or refine with +term/-term"
+            )
         );
     }
 
     #[test]
-    fn the_help_line_names_the_max_tokens_flag_when_the_tokens_ran_out_before_the_rows() {
+    fn the_help_line_names_the_next_offset_when_the_tokens_ran_out_before_the_rows() {
         let budget = crate::budget::Budget { max_tokens: 20, ..crate::budget::Budget::default() };
         assert_eq!(
             help_line(&[1.0, 0.9, 0.8], &budget).as_deref(),
-            Some("showing 1 of 3; --max-tokens N for more, or refine with +term/-term")
+            Some("showing 1 of 3; next: --offset 1, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_the_max_tokens_flag_when_one_row_is_larger_than_the_whole_budget() {
+        let budget = crate::budget::Budget { max_tokens: 1, ..crate::budget::Budget::default() };
+        let ranked = scored_blocks(&[1.0, 0.9, 0.8]);
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        let rendered = render_search(&crate::budget::apply_budget(ranked, 3, &budget, &texts, Vec::new()), &view);
+        assert!(
+            rendered.contains("\"showing 0 of 3; --max-tokens N for more, or refine with +term/-term\""),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn the_first_page_of_thirty_one_names_offset_eight() {
+        let budget = crate::budget::Budget { max_results: 8, ..crate::budget::Budget::default() };
+        assert_eq!(
+            help_line(&[1.0; 31], &budget).as_deref(),
+            Some("showing 8 of 31; next: --offset 8, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn a_middle_page_names_the_offset_after_its_last_row() {
+        let budget = crate::budget::Budget { max_results: 8, offset: 8, ..crate::budget::Budget::default() };
+        assert_eq!(
+            help_line(&[1.0; 31], &budget).as_deref(),
+            Some("showing 8 of 31; next: --offset 16, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn the_last_page_names_no_next_offset() {
+        let budget = crate::budget::Budget { max_results: 8, offset: 24, ..crate::budget::Budget::default() };
+        assert_eq!(help_line(&[1.0; 31], &budget).as_deref(), Some("showing 7 of 31; refine with +term/-term"));
+    }
+
+    #[test]
+    fn the_last_page_of_the_kept_rows_still_names_the_min_score_flag() {
+        let budget = crate::budget::Budget { max_results: 8, offset: 8, ..crate::budget::Budget::default() };
+        let scores = [vec![1.0; 12], vec![0.1; 3]].concat();
+        assert_eq!(
+            help_line(&scores, &budget).as_deref(),
+            Some("showing 4 of 15; --min-score 0 for the 3 rows below the cut, or refine with +term/-term")
+        );
+    }
+
+    #[test]
+    fn an_offset_past_the_last_row_says_so_with_the_count_and_prints_no_rows() {
+        let budget = crate::budget::Budget { offset: 40, ..crate::budget::Budget::default() };
+        let ranked = scored_blocks(&[1.0; 31]);
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        let rendered = render_search(&crate::budget::apply_budget(ranked, 31, &budget, &texts, Vec::new()), &view);
+        assert_eq!(
+            rendered,
+            "search: []\n\
+             totalCount: 31\n\
+             help[1]: showing 0 of 31; offset 40 is past the last of 31 rows"
+        );
+    }
+
+    #[test]
+    fn an_offset_past_the_kept_rows_names_the_rows_below_the_cut() {
+        let budget = crate::budget::Budget { offset: 9, ..crate::budget::Budget::default() };
+        let scores = [vec![1.0; 9], vec![0.1; 2]].concat();
+        assert_eq!(
+            help_line(&scores, &budget).as_deref(),
+            Some("showing 0 of 11; offset 9 is past the last of 9 rows; --min-score 0 for the 2 rows below the cut")
         );
     }
 
@@ -851,7 +942,7 @@ mod projection_tests {
         let budget = crate::budget::Budget { max_results: 2, min_score: 0.0, ..crate::budget::Budget::default() };
         assert_eq!(
             help_line(&[1.0, 0.9, 0.1], &budget).as_deref(),
-            Some("showing 2 of 3; --max-results N for more, or refine with +term/-term")
+            Some("showing 2 of 3; next: --offset 2, or refine with +term/-term")
         );
     }
 
@@ -898,7 +989,7 @@ mod projection_tests {
              src/f1.rs,1,2,function,null,null,null,1,0.5\n  \
              src/f2.rs,2,3,function,null,null,null,2,0.5\n\
              totalCount: 3\n\
-             help[1]: \"showing 2 of 3; --max-results N for more, or refine with +term/-term\""
+             help[1]: \"showing 2 of 3; next: --offset 2, or refine with +term/-term\""
         );
     }
 
@@ -937,6 +1028,7 @@ mod projection_tests {
             ],
             total_blocks_before_truncation: 3,
             blocks_cut_by_relevance: 0,
+            offset: 0,
             truncated: false,
             diagnostics: Vec::new(),
         };
