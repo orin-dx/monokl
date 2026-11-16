@@ -2,8 +2,10 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -23,6 +25,15 @@ use crate::types::LineHit;
 /// How many files each thread searches per batch. A batch ends in a wait for its slowest file, so a small batch costs
 /// speed; a large one holds more hits at once.
 pub(crate) const BATCH_FILES_PER_THREAD: usize = 64;
+
+/// The largest file whose text a search may keep for analysis: 256 KiB. Source files are far smaller; a larger one is
+/// streamed, not kept, and analysis opens it again.
+pub(crate) const RETAINED_FILE_BYTES: usize = 256 * 1024;
+
+/// The most bytes of source text a search keeps for analysis, over all files: 16 MiB, whatever the number of matching
+/// files. It is the whole extra memory of keeping text. Text beyond it is dropped, not queued, and that file is opened
+/// again by analysis, so the budget changes cost and never output.
+pub(crate) const RETAINED_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// The default for [`TextSearchOptions::max_files`].
 pub const DEFAULT_MAX_FILES: usize = 100_000;
@@ -203,6 +214,48 @@ pub fn search_files_where(
     search_in_batches(root, patterns, opts, wanted, || rayon::current_num_threads() * BATCH_FILES_PER_THREAD)
 }
 
+/// The text of matching files, by path, kept while they were searched.
+pub(crate) type Retained = FxHashMap<Utf8PathBuf, Vec<u8>>;
+
+/// A budget of bytes of source text that a search may keep.
+pub(crate) struct Retention {
+    remaining: AtomicUsize,
+}
+
+impl Retention {
+    pub(crate) fn new(bytes: usize) -> Self {
+        Self { remaining: AtomicUsize::new(bytes) }
+    }
+
+    /// Whether a file of `len` bytes is worth reading whole: it is small enough and the budget could still hold it.
+    fn wants(&self, len: u64) -> bool {
+        usize::try_from(len).is_ok_and(|len| len <= RETAINED_FILE_BYTES && len <= self.remaining())
+    }
+
+    /// Takes `len` bytes of the budget, or nothing when less is left.
+    fn reserve(&self, len: usize) -> bool {
+        self.remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(len)).is_ok()
+    }
+
+    fn release(&self, len: usize) {
+        self.remaining.fetch_add(len, Ordering::Relaxed);
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
+    }
+}
+
+/// How a search gets at its files: how it opens one, and whether it keeps the text of the files that match.
+pub(crate) struct FileAccess<'a> {
+    pub(crate) open: &'a (dyn Fn(&Utf8Path) -> io::Result<File> + Sync),
+    pub(crate) retention: Option<&'a Retention>,
+}
+
+pub(crate) fn open_file(path: &Utf8Path) -> io::Result<File> {
+    File::open(path)
+}
+
 /// [`search_files`] with the number of files searched before their outcomes are folded into the result. The result does
 /// not depend on it; it bounds how many files' hits are held beyond the kept ones. `batch_size` is asked for only when
 /// there is a file to search, because it comes from the thread count and looking that up starts rayon's pool.
@@ -213,6 +266,21 @@ fn search_in_batches(
     wanted: &dyn Fn(&Utf8Path) -> bool,
     batch_size: impl FnOnce() -> usize,
 ) -> Result<TextSearchResult> {
+    let access = FileAccess { open: &open_file, retention: None };
+    search_in_batches_with(root, patterns, opts, wanted, batch_size, &access).map(|(result, _)| result)
+}
+
+/// [`search_in_batches`] with the way files are opened, and the text of the matching files that `access.retention`
+/// had room for. A kept file is read whole and searched in memory, so analysis does not open it again; any other file
+/// is streamed through a fixed buffer. Both give the same hits.
+pub(crate) fn search_in_batches_with(
+    root: &Utf8Path,
+    patterns: &[&str],
+    opts: &TextSearchOptions,
+    wanted: &dyn Fn(&Utf8Path) -> bool,
+    batch_size: impl FnOnce() -> usize,
+    access: &FileAccess<'_>,
+) -> Result<(TextSearchResult, Retained)> {
     let matchers = compile(patterns)?;
     let root_error = |source| MonoklError::Walk { path: root.to_owned(), source };
     let metadata = std::fs::metadata(root).map_err(|e| root_error(ignore::Error::Io(e)))?;
@@ -222,8 +290,9 @@ fn search_in_batches(
     // Listed here as well as by the walk, so a root that cannot be listed fails even when there is nothing to search.
     std::fs::read_dir(root).map_err(|e| root_error(ignore::Error::Io(e)))?;
     let mut result = TextSearchResult::default();
+    let mut retained = Retained::default();
     let Some(matchers) = matchers else {
-        return Ok(result);
+        return Ok((result, retained));
     };
     // Passthru hands every line to the sink, so a CRLF line the matcher rejected because it saw the `\r` can still be
     // checked against its text without the terminator. BOM sniffing is off so a UTF-16 file's NUL bytes mark it binary
@@ -306,7 +375,7 @@ fn search_in_batches(
                 || searcher_builder.build(),
                 |searcher, item| match item {
                     WalkItem::File(path) => {
-                        let outcome = search_file(searcher, &matchers, &path, &limits);
+                        let outcome = search_file(searcher, &matchers, &path, &limits, access);
                         Searched::File(path, outcome)
                     }
                     WalkItem::WalkError(error) => Searched::WalkError(error),
@@ -324,16 +393,22 @@ fn search_in_batches(
                         FileOutcome::Binary | FileOutcome::NotReached => {}
                         FileOutcome::Unreadable => result.unreadable.push(path),
                         FileOutcome::Oversize => result.oversize.push(path),
-                        FileOutcome::Lines(hits, truncated) => {
+                        FileOutcome::Lines(hits, truncated, text) => {
                             result.truncated_lines += truncated;
                             if hits.is_empty() {
                                 continue;
                             }
                             result.files_total += 1;
                             if result.hits.len() < opts.max_files {
+                                if let Some(text) = text {
+                                    retained.insert(path.clone(), text);
+                                }
                                 result.hits.insert(path, hits);
                             } else {
                                 result.ceiling_hit = true;
+                                if let (Some(text), Some(retention)) = (text, access.retention) {
+                                    retention.release(text.len());
+                                }
                             }
                         }
                     }
@@ -345,7 +420,7 @@ fn search_in_batches(
             break;
         }
     }
-    Ok(result)
+    Ok((result, retained))
 }
 
 /// The `.ignore` and `.gitignore` rules of the directories from a git repository's root down to the search root's
@@ -527,8 +602,9 @@ enum FileOutcome {
     Oversize,
     /// The deadline had passed before the file was started.
     NotReached,
-    /// The file's matching lines, possibly none, and how many of them were cut to the line limit.
-    Lines(Vec<LineHit>, u64),
+    /// The file's matching lines, possibly none, how many of them were cut to the line limit, and the file's text when
+    /// it was kept.
+    Lines(Vec<LineHit>, u64, Option<Vec<u8>>),
 }
 
 /// What bounds the search of one file.
@@ -539,23 +615,76 @@ struct FileLimits {
     deadline: Option<Instant>,
 }
 
-fn search_file(searcher: &mut Searcher, matchers: &Matchers, path: &Utf8Path, limits: &FileLimits) -> FileOutcome {
+fn search_file(
+    searcher: &mut Searcher,
+    matchers: &Matchers,
+    path: &Utf8Path,
+    limits: &FileLimits,
+    access: &FileAccess<'_>,
+) -> FileOutcome {
     if limits.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
         return FileOutcome::NotReached;
     }
     // The size comes from the open handle, so it is the size of the file that is then read and costs no second lookup.
-    let Ok(file) = std::fs::File::open(path) else { return FileOutcome::Unreadable };
-    match file.metadata() {
+    let Ok(file) = (access.open)(path) else { return FileOutcome::Unreadable };
+    let len = match file.metadata() {
         Ok(metadata) if metadata.len() > limits.max_file_bytes => return FileOutcome::Oversize,
-        Ok(_) => {}
+        Ok(metadata) => metadata.len(),
         Err(_) => return FileOutcome::Unreadable,
-    }
+    };
     let mut sink = LineCollector::new(matchers, limits.max_line_bytes);
+    if let Some(retention) = access.retention.filter(|retention| retention.wants(len)) {
+        return search_in_memory(searcher, matchers, &file, len, retention, sink);
+    }
     match searcher.search_file(&matchers.all, &file, &mut sink) {
         Err(_) => FileOutcome::Unreadable,
         Ok(()) if sink.binary => FileOutcome::Binary,
-        Ok(()) => FileOutcome::Lines(sink.hits, sink.truncated),
+        Ok(()) => FileOutcome::Lines(sink.hits, sink.truncated, None),
     }
+}
+
+/// [`search_file`] for a file read whole into memory: the same outcome, and the text itself when the file matched and
+/// `retention` has room for it. The `len` bytes the file had when it was opened are read, so a file that grew since is
+/// searched as it was.
+fn search_in_memory(
+    searcher: &mut Searcher,
+    matchers: &Matchers,
+    file: &File,
+    len: u64,
+    retention: &Retention,
+    mut sink: LineCollector<'_>,
+) -> FileOutcome {
+    let Ok(text) = read_up_to(file, len) else { return FileOutcome::Unreadable };
+    // A binary file is dropped whole, so one scan for the NUL byte settles it before any line is matched.
+    if text.contains(&0) {
+        return FileOutcome::Binary;
+    }
+    match searcher.search_slice(&matchers.all, &text, &mut sink) {
+        Err(_) => FileOutcome::Unreadable,
+        Ok(()) if sink.binary => FileOutcome::Binary,
+        Ok(()) => {
+            let keep = !sink.hits.is_empty() && retention.reserve(text.len());
+            FileOutcome::Lines(sink.hits, sink.truncated, keep.then_some(text))
+        }
+    }
+}
+
+/// Reads up to `len` bytes of `file` in as few reads as the file allows, and none past `len`, so a file that has the
+/// size it was found to have costs one read and no read that finds the end.
+fn read_up_to(mut file: &File, len: u64) -> io::Result<Vec<u8>> {
+    let len = usize::try_from(len).map_err(io::Error::other)?;
+    let mut text = vec![0; len];
+    let mut filled = 0;
+    while filled < len {
+        match file.read(&mut text[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+    text.truncate(filled);
+    Ok(text)
 }
 
 /// Collects matching lines with the byte offsets at which their matches start, and stops at the first sign of binary data so the caller
@@ -1446,6 +1575,124 @@ mod tests {
                 ..TextSearchResult::default()
             }
         );
+    }
+
+    /// Searches for `alpha` the way the pipeline does: keeping the matching files' text, up to `budget` bytes. Returns
+    /// the result, the kept text by relative path, and how many files were opened.
+    fn search_retaining(
+        root: &Utf8Path,
+        opts: &TextSearchOptions,
+        budget: usize,
+    ) -> (TextSearchResult, BTreeMap<String, Vec<u8>>, u64) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let opens = AtomicU64::new(0);
+        let open = |path: &Utf8Path| {
+            opens.fetch_add(1, Ordering::Relaxed);
+            fs::File::open(path)
+        };
+        let retention = Retention::new(budget);
+        let access = FileAccess { open: &open, retention: Some(&retention) };
+        let (result, retained) = search_in_batches_with(root, &["alpha"], opts, &|_| true, || 4, &access).unwrap();
+        let retained =
+            retained.into_iter().map(|(path, bytes)| (path.strip_prefix(root).unwrap().to_string(), bytes)).collect();
+        (result, retained, opens.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn a_matching_file_is_opened_once_and_its_text_is_handed_back_whole() {
+        let (_dir, root) = tree(&[
+            ("a.ts", b"alpha\n"),
+            ("b.ts", b"beta\n"),
+            ("c/d.ts", b"x\nALPHA\r\n"),
+            ("e.bin", b"alpha\0"),
+            ("f.ts", b""),
+        ]);
+        let (result, retained, opens) = search_retaining(&root, &TextSearchOptions::default(), 1 << 20);
+        assert_eq!(opens, 5);
+        assert_eq!(hit_files(&root, &result), ["a.ts", "c/d.ts"]);
+        let expected: BTreeMap<String, Vec<u8>> =
+            [("a.ts".to_owned(), b"alpha\n".to_vec()), ("c/d.ts".to_owned(), b"x\nALPHA\r\n".to_vec())].into();
+        assert_eq!(retained, expected);
+    }
+
+    #[rstest]
+    #[case::plain(b"alpha\nbeta\nalpha\n")]
+    #[case::no_final_newline(b"x\nalpha")]
+    #[case::crlf(b"alpha\r\nx\r\nALPHA\r\n")]
+    #[case::bom(b"\xEF\xBB\xBFalpha\n")]
+    #[case::invalid_utf8(b"alpha \xFF\xFE\nalpha\n")]
+    #[case::nul_late(b"alpha\nbeta\nalpha\0\n")]
+    #[case::utf16(b"\xFF\xFEa\0l\0p\0h\0a\0\n\0")]
+    #[case::empty(b"")]
+    #[case::only_newlines(b"\n\n\n")]
+    fn a_file_searched_from_memory_gives_what_a_streamed_search_gives(#[case] contents: &[u8]) {
+        let (_dir, root) = tree(&[("a.ts", contents)]);
+        let opts = TextSearchOptions::default();
+        let (retained_result, _, _) = search_retaining(&root, &opts, 1 << 20);
+        assert_eq!(retained_result, search_files(&root, &["alpha"], &opts).unwrap());
+    }
+
+    #[test]
+    fn a_nul_far_past_the_first_buffer_makes_a_file_binary_in_memory_as_it_does_streamed() {
+        let mut contents = b"alpha\n".to_vec();
+        contents.extend(std::iter::repeat_n(b'x', 200_000));
+        contents.extend_from_slice(b"\n\0\n");
+        let (_dir, root) = tree(&[("a.ts", &contents)]);
+        let opts = TextSearchOptions::default();
+        let (result, retained, _) = search_retaining(&root, &opts, 1 << 20);
+        assert_eq!(result, TextSearchResult::default());
+        assert!(retained.is_empty());
+        assert_eq!(result, search_files(&root, &["alpha"], &opts).unwrap());
+    }
+
+    #[test]
+    fn text_is_kept_only_up_to_the_budget_and_every_file_is_still_found() {
+        let line = format!("alpha {}\n", "x".repeat(93));
+        assert_eq!(line.len(), 100);
+        let files: Vec<(String, Vec<u8>)> = (0..6).map(|i| (format!("f{i}.ts"), line.clone().into_bytes())).collect();
+        let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(name, text)| (name.as_str(), text.as_slice())).collect();
+        let (_dir, root) = tree(&borrowed);
+        let opts = TextSearchOptions::default();
+        let (result, retained, _) = search_retaining(&root, &opts, 250);
+        assert_eq!(retained.len(), 2);
+        assert!(retained.values().all(|bytes| bytes.as_slice() == line.as_bytes()));
+        assert_eq!(result, search_files(&root, &["alpha"], &opts).unwrap());
+        assert_eq!(result.files_total, 6);
+    }
+
+    #[test]
+    fn a_file_over_the_per_file_limit_is_found_but_its_text_is_not_kept() {
+        let mut big = b"alpha\n".to_vec();
+        big.resize(RETAINED_FILE_BYTES + 1, b'x');
+        let (_dir, root) = tree(&[("big.ts", &big), ("small.ts", b"alpha\n")]);
+        let (result, retained, opens) = search_retaining(&root, &TextSearchOptions::default(), usize::MAX / 2);
+        assert_eq!(hit_files(&root, &result), ["big.ts", "small.ts"]);
+        assert_eq!(retained.keys().collect::<Vec<_>>(), ["small.ts"]);
+        assert_eq!(opens, 2);
+    }
+
+    #[test]
+    fn a_file_past_the_ceiling_keeps_no_text_and_gives_its_budget_back() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.ts", b"alpha\n"), ("c.ts", b"alpha\n")]);
+        let retention = Retention::new(1000);
+        let open = |path: &Utf8Path| fs::File::open(path);
+        let access = FileAccess { open: &open, retention: Some(&retention) };
+        let (result, retained) =
+            search_in_batches_with(&root, &["alpha"], &with_max_files(1), &|_| true, || 1, &access).unwrap();
+        assert_eq!((result.files_total, result.ceiling_hit), (3, true));
+        let kept: Vec<_> = retained.keys().map(|path| path.file_name().unwrap()).collect();
+        assert_eq!(kept, ["a.ts"]);
+        assert_eq!(retention.remaining(), 1000 - "alpha\n".len());
+    }
+
+    #[test]
+    fn a_search_that_keeps_nothing_reads_like_the_public_one() {
+        let (_dir, root) = tree(&[("a.ts", b"alpha\n"), ("b.ts", b"beta\n")]);
+        let (result, retained, opens) = search_retaining(&root, &TextSearchOptions::default(), 0);
+        assert!(retained.is_empty());
+        assert_eq!(opens, 2);
+        assert_eq!(result, search_files(&root, &["alpha"], &TextSearchOptions::default()).unwrap());
     }
 
     #[rstest]
