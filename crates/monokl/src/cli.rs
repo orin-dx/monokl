@@ -61,6 +61,10 @@ struct SearchArgs {
     /// The most results to print. It also caps the rows `--min-score` keeps, so it can cut below the first eight.
     #[arg(long, default_value_t = Budget::default().max_results)]
     max_results: usize,
+    /// Skips this many ranked rows and prints the next page under the same cut and caps. The relevance cut still
+    /// measures against the top row of the whole result; an offset past the last row prints no rows and exits 0.
+    #[arg(long, value_name = "N", default_value_t = Budget::default().offset)]
+    offset: usize,
     /// The most estimated tokens (one per three bytes) across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
@@ -206,7 +210,12 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
             ),
         });
     }
-    let budget = Budget { max_results: args.max_results, max_tokens: args.max_tokens, min_score: args.min_score };
+    let budget = Budget {
+        max_results: args.max_results,
+        max_tokens: args.max_tokens,
+        min_score: args.min_score,
+        offset: args.offset,
+    };
     let view = SearchView { snippet_lines: args.snippet_lines, max_results: args.max_results };
     let total_before = ranked.len();
     let row_texts = search_row_texts(&ranked, view.snippet_lines);
@@ -314,6 +323,9 @@ mod tests {
             ("--snippet-lines", "4", "`4` is more than the 3 lines a snippet can show"),
             ("--snippet-lines", "-1", "`-1` is not a number of lines: invalid digit found in string"),
             ("--snippet-lines", "1.5", "`1.5` is not a number of lines: invalid digit found in string"),
+            ("--offset", "many", "invalid digit found in string"),
+            ("--offset", "-1", "invalid digit found in string"),
+            ("--offset", "1.5", "invalid digit found in string"),
         ] {
             let arg = format!("{flag}={value}");
             let (code, out, err) = run_args(&["search", "alpha", &arg]);
@@ -346,6 +358,7 @@ mod tests {
         assert!(out.contains("--snippet-lines <N>"), "got: {out}");
         assert!(out.contains("[default: 1]"), "got: {out}");
         assert!(out.contains("[default: 20]"), "got: {out}");
+        assert!(out.contains("--offset <N>"), "got: {out}");
     }
 
     #[test]
