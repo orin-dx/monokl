@@ -78,7 +78,7 @@ BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` t
 cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
 
 `node_type_boost` (`rank/boost.rs`): Function 1.5; Class/Method/Constructor 1.4; Interface/Struct
-1.3; TypeAlias/Enum 1.2; Variable/Impl 1.1; Property/Field/Macro 1.0; Module 0.9; Other 0.7.
+1.3; TypeAlias/Enum 1.2; Variable 1.1; Property/Field/Macro 1.0; Module/Impl 0.9; Other 0.7 (§50 moved Impl from 1.1).
 
 ## Dedup and snippets
 

@@ -74,7 +74,8 @@ fn token_matches(token: &str, term: &str) -> bool {
 
 /// Returns the score multiplier for a block's symbol kind.
 ///
-/// Callable units rank highest, then type definitions, then bindings; `Other` ranks lowest.
+/// Callable units rank highest, then type definitions, then bindings; `Impl` and `Module` rank below fields and
+/// properties, and `Other` ranks lowest.
 ///
 /// # Examples
 ///
@@ -91,9 +92,9 @@ pub fn node_type_boost(kind: SymbolKind) -> f64 {
         SymbolKind::Class | SymbolKind::Method | SymbolKind::Constructor => 1.4,
         SymbolKind::Interface | SymbolKind::Struct => 1.3,
         SymbolKind::TypeAlias | SymbolKind::Enum => 1.2,
-        SymbolKind::Variable | SymbolKind::Impl => 1.1,
+        SymbolKind::Variable => 1.1,
         SymbolKind::Property | SymbolKind::Field | SymbolKind::Macro => 1.0,
-        SymbolKind::Module => 0.9,
+        SymbolKind::Module | SymbolKind::Impl => 0.9,
         SymbolKind::Other => 0.7,
     }
 }
@@ -278,7 +279,7 @@ mod tests {
     #[case(SymbolKind::TypeAlias, 1.2)]
     #[case(SymbolKind::Enum, 1.2)]
     #[case(SymbolKind::Variable, 1.1)]
-    #[case(SymbolKind::Impl, 1.1)]
+    #[case(SymbolKind::Impl, 0.9)]
     #[case(SymbolKind::Property, 1.0)]
     #[case(SymbolKind::Field, 1.0)]
     #[case(SymbolKind::Macro, 1.0)]

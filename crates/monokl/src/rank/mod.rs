@@ -301,14 +301,15 @@ mod tests {
 
     #[test]
     fn the_node_type_multiplier_applies_over_the_kind_tie_break() {
-        // Module sorts before Impl on a tie, but Impl's multiplier (1.1) beats Module's (0.9), so Impl ranks first.
+        // Enum sorts before Interface on a tie, but Interface's multiplier (1.3) beats Enum's (1.2), so Interface ranks
+        // first.
         let blocks = vec![
-            (block("a.ts", 1, 5, SymbolKind::Module, vec![]), tokens(&["user"])),
-            (block("a.ts", 1, 5, SymbolKind::Impl, vec![]), tokens(&["user"])),
+            (block("a.ts", 1, 5, SymbolKind::Enum, vec![]), tokens(&["user"])),
+            (block("a.ts", 1, 5, SymbolKind::Interface, vec![]), tokens(&["user"])),
         ];
         let ranked = rank_blocks(blocks, &["user"], &scored_df());
         let kinds: Vec<_> = ranked.iter().map(|r| r.block.node_kind).collect();
-        assert_eq!(kinds, [SymbolKind::Impl, SymbolKind::Module]);
+        assert_eq!(kinds, [SymbolKind::Interface, SymbolKind::Enum]);
         assert!(ranked[0].final_score > ranked[1].final_score);
     }
 
