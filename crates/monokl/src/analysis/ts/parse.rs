@@ -224,6 +224,7 @@ impl Extractor<'_> {
             code: code.to_owned(),
             symbol_signature: signature.as_ref().map(|signature| signature.text.clone()),
             signature_span: signature.map(|signature| signature.head),
+            where_start: None,
             matched_lines: Vec::new(),
             parent: parent.map(|holder| holder.context.clone()),
         };

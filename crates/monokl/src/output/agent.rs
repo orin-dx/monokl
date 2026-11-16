@@ -47,10 +47,14 @@ impl Default for SearchView {
 /// The lines of `block` that matched the query, numbered, so a reader often needs no second read of the file.
 ///
 /// A line the signature column already shows is left out: one whose text lies inside the block's
-/// [`signature_span`](crate::types::CodeBlock::signature_span). A variable or type alias has no signature, so its first
-/// line is the best thing to show; so is a first line that says more than the signature, such as a decorator or the
-/// start of an arrow function's body. At most `max_lines` lines appear, each cut to [`SNIPPET_LINE_CHARS`] characters,
-/// and the lines beyond that are counted, not dropped silently. With `max_lines` 0 there is no snippet at all.
+/// [`signature_span`](crate::types::CodeBlock::signature_span), except that a Rust `where` clause is not shown in the
+/// column (see [`signature_cell`]), so the lines of the clause after the declaration line stay. A variable or type
+/// alias has no signature, so its first line is the best thing to show; so is a first line that says more than the
+/// signature, such as a decorator or the start of an arrow function's body. A comment or attribute line (a Rust doc
+/// comment above the declaration, a `#[...]` attribute, a comment in a body) and a where-clause line say less about the
+/// code than a body line does, so a code line that matched is shown first and those fill the snippet only when there
+/// are not enough code lines, or are the only match. At most `max_lines` lines appear, in the order they have in the block, each cut to [`SNIPPET_LINE_CHARS`]
+/// characters, and the lines beyond that are counted, not dropped silently. With `max_lines` 0 there is no snippet.
 fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> {
     let mut lines = Vec::new();
     let mut start = block.span.start;
@@ -58,6 +62,7 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
         lines.push((start, text));
         start += text.len() + 1;
     }
+    let where_at = block.where_start;
     let mut shown: Vec<usize> = block
         .matched_lines
         .iter()
@@ -66,14 +71,24 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
         .filter(|&line| {
             let (start, text) = lines[line - block.line_start];
             !block.signature_span.as_ref().is_some_and(|head| inside(head, start, text))
+                || where_at.is_some_and(|at| start + (text.len() - text.trim_start().len()) >= at)
         })
         .collect();
     shown.sort_unstable();
     shown.dedup();
     let hidden = shown.len().saturating_sub(max_lines);
+    // Stable, so each kind of line stays in block order; the chosen lines are put back in block order.
+    shown.sort_by_key(|&line| {
+        let (start, text) = lines[line - block.line_start];
+        let content_start = start + (text.len() - text.trim_start().len());
+        let in_where_clause = where_at.is_some_and(|at| content_start >= at)
+            && block.signature_span.as_ref().is_some_and(|head| content_start < head.end);
+        is_comment_or_attribute(text) || in_where_clause
+    });
+    shown.truncate(max_lines);
+    shown.sort_unstable();
     let mut out: Vec<String> = shown
         .iter()
-        .take(max_lines)
         .map(|&line| {
             let text = lines[line - block.line_start].1.trim();
             let mut chars = text.chars();
@@ -86,9 +101,39 @@ fn snippet(block: &crate::types::CodeBlock, max_lines: usize) -> Option<String> 
         return None;
     }
     if hidden > 0 {
-        out.push(format!("...and {hidden} more matching {}", if hidden == 1 { "line" } else { "lines" }));
+        out.push(format!("+{hidden} more"));
     }
     Some(out.join("\n"))
+}
+
+/// The `symbolSignature` cell. A Rust signature ends where its where clause starts, with ` where …` to say there is one:
+/// the clause is a list of bounds that is often longer than the rest of the signature, and the row's snippet shows a
+/// line of it when that line matched. The clause is where the analyzer recorded it in
+/// [`where_start`](crate::types::CodeBlock::where_start), so a `where` inside a comment or a literal is not mistaken for
+/// it; the ranking still reads the whole signature.
+fn signature_cell(block: &crate::types::CodeBlock) -> Option<String> {
+    let signature = block.symbol_signature.as_deref()?;
+    let before_clause = block.signature_span.as_ref().zip(block.where_start).and_then(|(head, at)| {
+        let offset = |position: usize| position.checked_sub(block.span.start);
+        block.code.get(offset(head.start)?..offset(at)?)
+    });
+    Some(match before_clause {
+        Some(text) => format!("{} where …", text.split_whitespace().collect::<Vec<_>>().join(" ")),
+        None => signature.to_owned(),
+    })
+}
+
+/// Whether a line looks like only a comment or an attribute: it starts with `//`, `/*`, `*/`, `* ` (the body of a block
+/// comment), `#[` or `#![`. A line that starts with `*` and no space is code (a dereference), as is any other.
+///
+/// This reads the line's text, not the syntax tree, because it only orders the lines of a snippet: a line wrongly taken
+/// for a comment (one that begins `//` inside a multi-line string) is shown after the other matched lines instead of
+/// before them, and is never left out, so a wrong answer costs a less useful snippet line and no information.
+fn is_comment_or_attribute(text: &str) -> bool {
+    let text = text.trim_start();
+    ["//", "/*", "*/", "#[", "#!["].iter().any(|prefix| text.starts_with(prefix))
+        || text == "*"
+        || text.starts_with("* ")
 }
 
 /// Whether the text of a line, which starts at byte `start`, holds something and lies wholly inside `head`.
@@ -111,7 +156,7 @@ fn search_row(block: &crate::types::RankedBlock, snippet_lines: usize) -> [Value
         Value::from(block.block.line_end),
         Value::from(block.block.node_kind.as_str()),
         parent_cell(block.block.parent.as_ref()),
-        opt_cell(block.block.symbol_signature.as_deref()),
+        opt_cell(signature_cell(&block.block).as_deref()),
         opt_cell(snippet(&block.block, snippet_lines).as_deref()),
         Value::from(block.rank),
         Value::from(block.final_score),
@@ -248,6 +293,7 @@ mod snippet_tests {
             code: code.to_owned(),
             symbol_signature: Some(first_line.trim_end_matches(['{', ' ']).to_owned()),
             signature_span: Some(START..START + first_line.len()),
+            where_start: None,
             name: None,
             matched_lines: matched_lines.to_vec(),
             parent: None,
@@ -343,21 +389,154 @@ mod snippet_tests {
     }
 
     #[test]
+    fn a_code_line_is_shown_before_a_doc_comment_that_matched() {
+        let code = "/// needle docs\npub fn f() {\n    needle();\n}";
+        let b = headed(7, code, "pub fn f() {", &[7, 9]);
+        assert_eq!(snippet_of(&b, 1), Some("9: needle();\n+1 more".to_owned()));
+    }
+
+    #[test]
+    fn a_doc_comment_is_shown_when_it_is_the_only_line_that_matched() {
+        let code = "/// needle docs\npub fn f() {\n    other();\n}";
+        let b = headed(7, code, "pub fn f() {", &[7]);
+        assert_eq!(snippet_of(&b, 1), Some("7: /// needle docs".to_owned()));
+    }
+
+    #[test]
+    fn an_attribute_line_is_shown_after_the_code_lines_that_matched() {
+        let code = "#[needle]\npub fn f() {\n    needle();\n}";
+        let b = headed(3, code, "pub fn f() {", &[3, 5]);
+        assert_eq!(snippet_of(&b, 1), Some("5: needle();\n+1 more".to_owned()));
+        let only = headed(3, code, "pub fn f() {", &[3]);
+        assert_eq!(snippet_of(&only, 1), Some("3: #[needle]".to_owned()));
+    }
+
+    #[test]
+    fn every_comment_form_gives_way_to_a_code_line() {
+        for comment in
+            ["// needle", "//! needle", "/// needle", "/* needle */", "/** needle */", "* needle", "*/", "#![needle]"]
+        {
+            let code = format!("function f() {{\n  {comment}\n  needle();\n}}");
+            let b = block(1, &code, &[2, 3]);
+            assert_eq!(snippet_of(&b, 1), Some("3: needle();\n+1 more".to_owned()), "{comment}");
+        }
+    }
+
+    #[test]
+    fn a_dereference_or_a_multiplication_is_code_not_a_comment() {
+        for line in ["*ptr = needle;", "**ptr = needle;", "#needle = 1;", "@Dec(needle)"] {
+            let code = format!("function f() {{\n  {line}\n}}");
+            let b = block(1, &code, &[2]);
+            assert_eq!(snippet_of(&b, 1), Some(format!("2: {line}")), "{line}");
+        }
+        let b = block(1, "function f() {\n  // needle\n  *p = needle;\n}", &[2, 3]);
+        assert_eq!(snippet_of(&b, 1), Some("3: *p = needle;\n+1 more".to_owned()));
+    }
+
+    #[test]
+    fn the_lines_a_snippet_shows_keep_their_order_in_the_block_with_code_lines_chosen_first() {
+        let b = block(1, "head\n// c1\nx1\n// c2\nx2\nx3", &[2, 3, 4, 5, 6]);
+        assert_eq!(snippet_of(&b, 3), Some("3: x1\n5: x2\n6: x3\n+2 more".to_owned()));
+        assert_eq!(snippet_of(&b, 2), Some("3: x1\n5: x2\n+3 more".to_owned()));
+    }
+
+    #[test]
+    fn comment_lines_fill_the_snippet_after_the_code_lines_run_out() {
+        let b = block(1, "head\n// c1\nx1\n// c2", &[2, 3, 4]);
+        assert_eq!(snippet_of(&b, 3), Some("2: // c1\n3: x1\n4: // c2".to_owned()));
+        assert_eq!(snippet_of(&b, 2), Some("2: // c1\n3: x1\n+1 more".to_owned()));
+    }
+
+    /// `block` with the head set to the text `head` of `code` and the where clause starting at the last `where` in the
+    /// head, as the Rust analyzer records it.
+    fn rust_headed(line_start: usize, code: &str, head: &str, matched_lines: &[usize]) -> CodeBlock {
+        let at = code.find(head).expect("the code holds the head") + head.rfind("where").expect("the head has a where");
+        CodeBlock { where_start: Some(START + at), ..headed(line_start, code, head, matched_lines) }
+    }
+
+    const WHERE_FN: &str = "pub fn f<T>(x: T) -> T\nwhere\n    T: needle,\n{\n    x\n}";
+    const WHERE_HEAD: &str = "pub fn f<T>(x: T) -> T\nwhere\n    T: needle,\n{";
+
+    #[test]
+    fn a_matched_bound_in_a_rust_where_clause_is_shown_because_the_signature_column_leaves_the_clause_out() {
+        let b = rust_headed(1, WHERE_FN, WHERE_HEAD, &[1, 3]);
+        assert_eq!(snippet(&b), Some("3: T: needle,".to_owned()));
+    }
+
+    #[test]
+    fn a_where_clause_line_gives_way_to_a_body_line_that_matched() {
+        let code = "pub fn f<T>(x: T) -> T\nwhere\n    T: needle,\n{\n    needle(x)\n}";
+        let b = rust_headed(1, code, WHERE_HEAD, &[3, 5]);
+        assert_eq!(snippet_of(&b, 1), Some("5: needle(x)\n+1 more".to_owned()));
+        assert_eq!(snippet_of(&b, 2), Some("3: T: needle,\n5: needle(x)".to_owned()));
+    }
+
+    #[test]
+    fn the_where_keyword_line_is_shown_when_it_matched_and_the_line_before_it_is_not() {
+        let b = rust_headed(1, WHERE_FN, WHERE_HEAD, &[1, 2]);
+        assert_eq!(snippet(&b), Some("2: where".to_owned()));
+    }
+
+    #[test]
+    fn a_where_clause_on_the_declaration_line_does_not_make_that_line_a_snippet() {
+        let code = "pub fn f<T>(x: T) -> T where T: needle {\n    x\n}";
+        let b = rust_headed(1, code, "pub fn f<T>(x: T) -> T where T: needle {", &[1]);
+        assert_eq!(snippet(&b), None);
+    }
+
+    #[test]
+    fn a_head_with_no_recorded_where_clause_stays_whole_in_the_head() {
+        // The same text as a block the analyzer found no where clause in, as for TypeScript.
+        let b = headed(1, WHERE_FN, WHERE_HEAD, &[1, 3]);
+        assert_eq!(snippet(&b), None);
+    }
+
+    #[test]
+    fn a_rust_signature_ends_before_the_recorded_where_clause_and_says_so() {
+        let cell = |code: &str, head: &str| {
+            let b =
+                CodeBlock { symbol_signature: Some("whole signature".to_owned()), ..rust_headed(1, code, head, &[]) };
+            signature_cell(&b)
+        };
+        assert_eq!(cell(WHERE_FN, WHERE_HEAD), Some("pub fn f<T>(x: T) -> T where …".to_owned()));
+        let one_line = "pub fn f<T>(x: T) -> T where T: Copy {";
+        assert_eq!(cell(one_line, one_line), Some("pub fn f<T>(x: T) -> T where …".to_owned()));
+        let imp = "impl<L> X<L>\nwhere\n    L: Listener,\n    L::Addr: Debug,\n{";
+        assert_eq!(cell(imp, imp), Some("impl<L> X<L> where …".to_owned()));
+        // A `where` before the clause, in a comment, stays in the signature.
+        let commented = "pub fn f() /* where */ -> T where T: A {";
+        assert_eq!(cell(commented, commented), Some("pub fn f() /* where */ -> T where …".to_owned()));
+    }
+
+    #[test]
+    fn a_signature_with_no_recorded_where_clause_is_shown_whole_whatever_it_spells() {
+        for text in [
+            "pub fn value() /* where values originate */ -> u64",
+            "pub fn value<const S: &'static str = \"a where b\">() -> u64",
+            "pub struct Foo<const N: usize = { r#\"\" } where \"#.len() }>;",
+            "function f() where T: A",
+        ] {
+            assert_eq!(signature_cell(&block(1, text, &[])), Some(text.to_owned()), "{text}");
+        }
+        assert_eq!(signature_cell(&unsigned(1, "x", &[])), None);
+    }
+
+    #[test]
     fn a_snippet_shows_three_lines_and_counts_the_rest() {
         let b = block(1, "head\nx1\nx2\nx3\nx4\nx5", &[2, 3, 4, 5, 6]);
-        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n...and 2 more matching lines".to_owned()));
+        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n+2 more".to_owned()));
     }
 
     #[test]
     fn a_snippet_counts_one_more_line_in_the_singular() {
         let b = block(1, "head\nx1\nx2\nx3\nx4", &[2, 3, 4, 5]);
-        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n...and 1 more matching line".to_owned()));
+        assert_eq!(snippet(&b), Some("2: x1\n3: x2\n4: x3\n+1 more".to_owned()));
     }
 
     #[test]
     fn a_snippet_of_one_line_shows_the_first_matching_line_and_counts_the_rest() {
         let b = block(1, "head\nx1\nx2\nx3", &[2, 3, 4]);
-        assert_eq!(snippet_of(&b, 1), Some("2: x1\n...and 2 more matching lines".to_owned()));
+        assert_eq!(snippet_of(&b, 1), Some("2: x1\n+2 more".to_owned()));
     }
 
     #[test]
@@ -370,7 +549,7 @@ mod snippet_tests {
     #[test]
     fn a_snippet_of_one_line_counts_one_more_line_in_the_singular() {
         let b = block(1, "head\nx1\nx2", &[2, 3]);
-        assert_eq!(snippet_of(&b, 1), Some("2: x1\n...and 1 more matching line".to_owned()));
+        assert_eq!(snippet_of(&b, 1), Some("2: x1\n+1 more".to_owned()));
         assert_eq!(snippet_of(&b, 2), Some("2: x1\n3: x2".to_owned()));
     }
 
@@ -456,6 +635,7 @@ mod projection_tests {
                     code: "fn foo(x) {\n    let y = foo(x);\n    unrelated();\n    y\n}".to_string(),
                     symbol_signature: Some("fn foo(x)\nsecond line".to_string()),
                     signature_span: Some(0..11),
+                    where_start: None,
                     name: None,
                     matched_lines: vec![5, 6],
                     parent: None,
@@ -494,6 +674,7 @@ mod projection_tests {
                 code: String::new(),
                 symbol_signature: None,
                 signature_span: None,
+                where_start: None,
                 name: None,
                 matched_lines: Vec::new(),
                 parent,
@@ -621,6 +802,7 @@ mod projection_tests {
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
@@ -787,6 +969,7 @@ mod projection_tests {
                     code: "fn a() {}".to_string(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,
@@ -827,6 +1010,7 @@ mod projection_tests {
                     code: String::new(),
                     symbol_signature: None,
                     signature_span: None,
+                    where_start: None,
                     name: None,
                     matched_lines: Vec::new(),
                     parent: None,

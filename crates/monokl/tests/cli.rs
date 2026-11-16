@@ -391,9 +391,9 @@ fn by_default_a_result_of_up_to_eight_rows_is_printed_whole_with_one_line_snippe
     assert_eq!(
         stdout(&output),
         "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n...and 1 more matching line\",1,0.436924\n\
+         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n+1 more\",1,0.436924\n\
          \x20 src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693\n\
-         \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n...and 1 more matching line\",3,0.164513\n\
+         \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n+1 more\",3,0.164513\n\
          \x20 src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",4,0.09468\n\
          \x20 src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",5,0.090782\n\
          \x20 src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",6,0.086106\n\
@@ -654,7 +654,7 @@ fn a_rust_snippet_is_one_line_by_default_and_the_old_three_lines_on_request() {
         stdout(&output),
         "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
          \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
-         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n...and 1 more matching line\",2,2.939514\n\
+         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n+1 more\",2,2.939514\n\
          \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
          \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
          \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
@@ -669,6 +669,72 @@ fn a_rust_snippet_is_one_line_by_default_and_the_old_three_lines_on_request() {
          \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
          \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
          \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
+    );
+}
+
+const LEDGER_RS: &str = "\
+/// Quotes the ledger for a customer.
+#[inline]
+pub fn quote<T>(ledger: T) -> u64
+where
+    T: Ledger,
+{
+    ledger.total()
+}
+
+/// Totals the ledger.
+pub fn total(ledger: &Ledger) -> u64 {
+    ledger.sum()
+}
+";
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn a_rust_row_shows_a_code_line_not_a_doc_comment_and_leaves_the_where_clause_out_of_the_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/ledger.rs"), LEDGER_RS).unwrap();
+
+    let output = monokl_in(dir.path(), &["search", "quote ledger", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",1,4.621067\n\
+         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",2,0.554892\n"
+    );
+
+    // The doc comment is the only matching line left once the body does not match, so it is shown.
+    let output = monokl_in(dir.path(), &["search", "customer", "."]);
+    assert_eq!(
+        stdout(&output),
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"1: /// Quotes the ledger for a customer.\",1,0.431523\n"
+    );
+}
+
+#[cfg(feature = "lang-rust")]
+#[test]
+fn a_page_of_rust_rows_keeps_the_where_cut_and_the_more_marker_and_names_the_next_offset() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/ledger.rs"), LEDGER_RS).unwrap();
+
+    let output = monokl_in(dir.path(), &["search", "quote ledger", ".", "--max-results", "1"]);
+    assert_eq!(
+        stdout(&output),
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",1,4.621067\n\
+         totalCount: 2\n\
+         help[1]: \"showing 1 of 2; next: --offset 1, or refine with +term/-term\"\n"
+    );
+
+    let output = monokl_in(dir.path(), &["search", "quote ledger", ".", "--max-results", "1", "--offset", "1"]);
+    assert_eq!(
+        stdout(&output),
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
+         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",2,0.554892\n\
+         totalCount: 2\n\
+         help[1]: showing 1 of 2; refine with +term/-term\n"
     );
 }
 

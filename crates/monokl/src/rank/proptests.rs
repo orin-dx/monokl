@@ -29,6 +29,7 @@ fn input_block() -> impl Strategy<Value = (CodeBlock, Vec<String>)> {
                 code: code.to_string(),
                 symbol_signature: None,
                 signature_span: None,
+                where_start: None,
                 name: None,
                 matched_lines,
                 parent: None,

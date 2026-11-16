@@ -49,10 +49,10 @@ Search a directory (the default is the current one):
 $ monokl search "format price" src/
 search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
   src/utils/format.ts,1,3,function,null,"function formatCurrency(amount: number, currency: string = 'USD'): string","2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",1,5.901294
-  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n...and 1 more matching line",2,4.151139
+  src/utils/validation.ts,8,12,function,null,"function validatePrice(price: number): ValidationResult","9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\n+1 more",2,4.151139
   src/index.ts,3,3,other,null,null,"3: export { formatCurrency, truncateString } from './utils/format';",3,1.345138
   src/utils/validation.ts,14,14,typeAlias,null,null,"14: export type PriceValidator = (price: number) => ValidationResult;",4,1.038379
-  src/components/Button.tsx,11,18,function,null,"function Button({ label, price, onClick, disabled }: ButtonProps)","12: const priceValid = price === undefined || validatePrice(price).valid;\n...and 1 more matching line",5,0.738398
+  src/components/Button.tsx,11,18,function,null,"function Button({ label, price, onClick, disabled }: ButtonProps)","12: const priceValid = price === undefined || validatePrice(price).valid;\n+1 more",5,0.738398
   src/hooks/useCart.ts,11,25,function,null,function useCart(),"15: const result = validatePrice(item.price);",6,0.42159
   src/hooks/useCart.ts,5,9,interface,null,null,"8: price: number;",7,0.407536
   src/components/Button.tsx,4,9,interface,null,null,"6: price?: number;",8,0.385986
@@ -66,7 +66,7 @@ Each row is one match: where it is (`file`, `lineStart`, `lineEnd`), what it is 
 
 A method, a constructor, or a class property holding an arrow function or a function expression gets a row of its own when it spans three lines or more and its class is declared at the top level of the file or exported. So does a method, getter, setter, or a property holding an arrow function or a function expression, of an object literal that is assigned to a top-level `const`, `let` or `var`, or is the `export default` value, also through `as`, `satisfies` or parentheses. Its `parent` is `class Foo` for a class member and `variable api` for the members of `const api = { ... }` (`other default` for `export default { ... }`), and `nodeKind` is `method`, `constructor` or `property`; `parent` is `null` on every other row. A line that matched inside a member is shown on the member's row only, and the class's or object's row appears when it has a match outside its members, such as its name. Shorter members, members of an anonymous class, of an interface, of an object literal anywhere else (inside a function, a call or `module.exports = { ... }`) and functions nested inside a member are still reached through the row that holds them.
 
-The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows the first matching line by default, then counts the rest (`...and 1 more matching line`); `--snippet-lines N` shows up to three. A line is left out when the signature column already shows all of it, wherever it is in the block (the lines of a signature that spans several, or the signature line below a Rust item's attributes or doc comments), so the snippet is `null` when the signature is the only match. A line that says more than the signature stays in, such as a decorator, the start of an arrow function's body or a body on the same line. To read the whole block, open the file at `lineStart`–`lineEnd`. Under the table, `help` lines report files that were skipped, degraded (syntax errors, too deep to parse) or read lossily (invalid UTF-8), a partial result, hit lines that were cut, and a query with no positive terms.
+The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows the first matching line by default, then counts the rest (`+1 more`); `--snippet-lines N` shows up to three. A line is left out when the signature column already shows all of it, wherever it is in the block (the lines of a signature that spans several, or the signature line below a Rust item's attributes or doc comments), so the snippet is `null` when the signature is the only match. A line that says more than the signature stays in, such as a decorator, the start of an arrow function's body or a body on the same line. A code line is shown before a comment or attribute line (a Rust doc comment, a `#[...]` attribute), which is shown only when no code line matched or the line limit leaves room. A Rust signature ends before its `where` clause and says `where …` in its place; a line of the clause that matched is a snippet line, after the code lines. To read the whole block, open the file at `lineStart`–`lineEnd`. Under the table, `help` lines report files that were skipped, degraded (syntax errors, too deep to parse) or read lossily (invalid UTF-8), a partial result, hit lines that were cut, and a query with no positive terms.
 
 ## Writing a query
 
@@ -85,7 +85,7 @@ Matching ignores case. A `-term` removes whole files, not single results. If one
 ```
 $ monokl search "+cart -Button" .
 search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:
-  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n...and 1 more matching line",1,3.171746
+  src/hooks/useCart.ts,11,25,function,null,function useCart(),"12: const [items, setItems] = useState<CartItem[]>([]);\n+1 more",1,3.171746
   src/hooks/useCart.ts,5,9,interface,null,null,"5: export interface CartItem {",2,0.804426
 ```
 

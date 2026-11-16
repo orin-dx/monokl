@@ -12,7 +12,8 @@
 //! - no two blocks partially overlap, and a block's parent is the innermost block that encloses it;
 //! - the declared `name` occurs in the span;
 //! - `signature_span` is set exactly when `symbol_signature` is, lies inside the block's span, and its text, on one line,
-//!   holds the signature.
+//!   holds the signature;
+//! - `where_start`, when set, lies inside `signature_span` and is the offset of the word `where`.
 //!
 //! The corpora are the checked-in fixtures and this crate's own source, a test over the pinned harness repositories
 //! when they are on disk, and generated TypeScript and Rust. The checker is itself tested by breaking one invariant at
@@ -50,6 +51,7 @@ enum Invariant {
     SignatureSpanMatchesSignature,
     SignatureSpanInBlock,
     SignatureSpanHoldsSignature,
+    WhereStartAtKeyword,
     ParentIndexMatchesParent,
     ParentIndexInRange,
     ParentPrecedesChild,
@@ -310,6 +312,12 @@ fn violations(path: &Utf8Path, source: &str, analysis: &FileAnalysis) -> Vec<Vio
             && !collapse(&source[head.clone()]).contains(signature.as_str())
         {
             report(Invariant::SignatureSpanHoldsSignature, index, format!("head {head:?} lacks {signature:?}"));
+        }
+        if let Some(at) = block.where_start
+            && (!block.signature_span.as_ref().is_some_and(|head| head.contains(&at))
+                || !source.get(at..).is_some_and(|rest| rest.starts_with("where")))
+        {
+            report(Invariant::WhereStartAtKeyword, index, format!("where_start {at}, head {:?}", block.signature_span));
         }
     }
 
@@ -659,6 +667,18 @@ fn a_signature_span_whose_text_lacks_the_signature_is_reported() {
         blocks[2].signature_span = Some(head.start..head.end - 4);
     });
     assert!(kinds(&found).contains(&Invariant::SignatureSpanHoldsSignature), "{}", render(&found));
+}
+
+#[test]
+fn a_where_start_that_is_not_the_where_keyword_inside_the_head_is_reported() {
+    let found = tampered("a.rs", RUST_SAMPLE, |blocks| {
+        blocks[2].where_start = blocks[2].signature_span.clone().map(|h| h.start);
+    });
+    assert!(kinds(&found).contains(&Invariant::WhereStartAtKeyword), "{}", render(&found));
+    let found = tampered("a.rs", RUST_SAMPLE, |blocks| blocks[2].where_start = Some(0));
+    assert!(kinds(&found).contains(&Invariant::WhereStartAtKeyword), "{}", render(&found));
+    let found = tampered("a.rs", RUST_SAMPLE, |blocks| blocks[2].where_start = None);
+    assert!(!kinds(&found).contains(&Invariant::WhereStartAtKeyword), "{}", render(&found));
 }
 
 #[test]

@@ -44,6 +44,7 @@ const MIN_PREFIX_LEN: usize = 3;
 ///     code: String::new(),
 ///     symbol_signature: Some("function mergeConfig(a: Config, b: Config)".to_string()),
 ///     signature_span: None,
+///     where_start: None,
 ///     matched_lines: Vec::new(),
 ///     parent: None,
 /// };
@@ -127,6 +128,7 @@ mod tests {
             code: "function other(parse: string) { return parse(); }".to_string(),
             symbol_signature: Some("function other(parse: string)".to_string()),
             signature_span: None,
+            where_start: None,
             matched_lines: Vec::new(),
             parent: None,
         }

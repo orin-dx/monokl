@@ -152,6 +152,7 @@ mod tests {
                 code: code.to_owned(),
                 symbol_signature: None,
                 signature_span: None,
+                where_start: None,
                 name: None,
                 matched_lines: Vec::new(),
                 parent: None,
