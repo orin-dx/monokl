@@ -55,6 +55,27 @@ class DeclaredBlock(unittest.TestCase):
         self.assertEqual(AC.span_bytes(["ab", "", "cde", "f"], (2, 3)), 1 + 4)
 
 
+class RowLines(unittest.TestCase):
+    OUT = (
+        "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n"
+        "  src/a.ts,1,2,function,null,null,null,1,1\n"
+        "  src/b.ts,3,4,function,null,xxx…,null,2,0.9\n"
+        "totalCount: 5\n"
+        "truncated[1]{row,field,removed}:\n"
+        "  1,symbolSignature,51\n"
+        "help[1]: showing 2 of 5\n"
+    )
+
+    def test_a_truncated_block_has_no_rows(self):
+        self.assertEqual(list(AC.RC.row_lines(self.OUT)), [
+            "  src/a.ts,1,2,function,null,null,null,1,1",
+            "  src/b.ts,3,4,function,null,xxx…,null,2,0.9",
+        ])
+
+    def test_an_empty_result_has_no_rows(self):
+        self.assertEqual(list(AC.RC.row_lines("search: []\nhelp[1]: query has no positive terms\n")), [])
+
+
 class PinnedFiles(unittest.TestCase):
     def test_add_business_days_with_an_unindented_generic_header(self):
         self.assertEqual(pinned("date-fns", "pkgs/core/src/addBusinessDays/index.ts", "addBusinessDays"),

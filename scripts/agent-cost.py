@@ -136,7 +136,7 @@ def monokl_spans(binary, symbol, path, file):
     out = RC.run([binary, "search", symbol, ".", "--min-score", "0", "--max-results", "1000000", "--max-tokens",
                   "1000000000", "--snippet-lines", "0"], cwd=path, check=False).stdout
     rows = [(m.group(1).removeprefix("./"), int(m.group(2)), int(m.group(3)))
-            for line in out.splitlines() if (m := ROW.match(line))]
+            for line in RC.row_lines(out) if (m := ROW.match(line))]
     return sorted({(start, end) for name, start, end in rows if name == file})
 
 
@@ -183,7 +183,7 @@ def monokl_cost(binary, query, path, expected):
     """Runs monokl once; returns (bytes, answerable in the first rows, how many rows were printed)."""
     out = RC.run([binary, "search", query, "."], cwd=path, check=False).stdout
     rows = [(m.group(1).removeprefix("./"), int(m.group(2)), int(m.group(3)), line)
-            for line in out.splitlines() if (m := ROW.match(line))]
+            for line in RC.row_lines(out) if (m := ROW.match(line))]
     answerable = False
     for file, start, end, text in rows[:TOP_ROWS]:
         shown = text.translate(BARE)
