@@ -63,17 +63,22 @@ assigned after the sort.
 
 `name_match_boost` (`rank/boost.rs`) compares the query terms `Q` (repeats counted) with `N`, the distinct tokens of the
 block's declared name (`CodeBlock.name`, tokenized like a document, so stop words such as the `use` of `useWatch` and the
-`from` of `FromRequestParts` are not tokens): `R` is the share of `Q` found in `N`, `P` the share of `N` found in `Q`.
+`from` of `FromRequestParts` are not tokens): `R` is the share of `Q` matched by a token of `N`, `P` the share of `N`
+that matches a term of `Q`. A token matches a term when they are equal, or when the token has at least 3 characters and
+the term starts with it (`ext` matches `extension`, `req` matches `request`). It never matches by being longer than the
+term (`parser` does not match `parse`), and a token of 1 or 2 characters has to equal the term. A prefix match counts at
+full weight in `R`, in `P` and in `exact`.
 `name = round6(1 + 2 * (R + P / 2) / 1.5 + 4 * exact)`, where `exact` is 1 when `R == 1` and `P == 1`. So a name that
 holds none of the terms gets 1.0, a name that holds all of them and nothing else gets 7.0, and the name that says more than
 the query (`validatePrice` for `price`) or less (`parse` for `parse other`) lands between. 1.0 for an empty query and for a
-block with no name or a name of only stop words. 05 §42 records why this shape and the variants it beat.
+block with no name or a name of only stop words. 05 §42 records why this shape and the variants it beat, and §47 the
+prefix rule and the variants it beat.
 
 BM25 (`rank/bm25.rs`): `K1 = 1.5`, `B = 0.5`, standard Okapi formula, `round6` to 6dp for
 cross-platform f64 stability (`DP = 1_000_000.0`) — keep this rounding.
 
 `node_type_boost` (`rank/boost.rs`): Function 1.5; Class/Method/Constructor 1.4; Interface/Struct
-1.3; TypeAlias/Enum 1.2; Variable/Impl 1.1; Property/Field/Macro 1.0; Module 0.9; Other 0.7.
+1.3; TypeAlias/Enum 1.2; Variable 1.1; Property/Field/Macro 1.0; Module/Impl 0.9; Other 0.7 (§47 moved Impl from 1.1).
 
 ## Dedup and snippets
 
