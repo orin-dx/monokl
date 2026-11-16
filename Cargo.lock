@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "michi-core"
-version = "0.7.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a3fa8ea1269cb71be59ed5e40f9b8aeb28ca85067d3c68923ce38ae30d907ba"
+checksum = "ff40bb293afe26bed55afc308e9fcff3eac358e6c1c3c04be513fd7f5f8b2cfa"
 dependencies = [
  "compact_str",
  "thiserror",
