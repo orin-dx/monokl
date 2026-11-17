@@ -19,7 +19,8 @@ pub const DEFAULT_SNIPPET_LINES: usize = 1;
 /// The most characters of one matching line a snippet shows.
 const SNIPPET_LINE_CHARS: usize = 160;
 
-/// How a search response is shown: how long each row's snippet is, and the row cap the truncation hint names.
+/// How a search response is shown: how long each row's snippet is, and the row cap and relevance cut the truncation
+/// hint names.
 ///
 /// # Examples
 ///
@@ -27,20 +28,24 @@ const SNIPPET_LINE_CHARS: usize = 160;
 /// use monokl::output::agent::SearchView;
 ///
 /// let view = SearchView::default();
-/// assert_eq!((view.snippet_lines, view.max_results), (1, 20));
+/// assert_eq!((view.snippet_lines, view.max_results, view.min_score), (1, 20, 0.3));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchView {
     /// The most matching lines a row's snippet shows, from 0 to [`MAX_SNIPPET_LINES`]. With 0 the column is `null` and a
     /// variable or type alias row, which has no signature, shows no declaration text.
     pub snippet_lines: usize,
     /// The row cap the response was budgeted with, which tells the hint whether the rows or the tokens ran out.
     pub max_results: usize,
+    /// The relevance cut the response was budgeted with, which the hint names as a `relevance` value. The rows it
+    /// dropped are those with a `relevance` below `100 * min_score`.
+    pub min_score: f64,
 }
 
 impl Default for SearchView {
     fn default() -> Self {
-        Self { snippet_lines: DEFAULT_SNIPPET_LINES, max_results: crate::budget::Budget::default().max_results }
+        let budget = crate::budget::Budget::default();
+        Self { snippet_lines: DEFAULT_SNIPPET_LINES, max_results: budget.max_results, min_score: budget.min_score }
     }
 }
 
@@ -149,7 +154,22 @@ fn parent_cell(parent: Option<&crate::types::ParentContext>) -> Value {
     opt_cell(parent.map(|p| format!("{} {}", p.kind.as_str(), p.name)).as_deref())
 }
 
-fn search_row(block: &crate::types::RankedBlock, snippet_lines: usize) -> [Value; 9] {
+/// The `relevance` cell: `score` as a whole percent of `top`, the best score of the whole ranking, so the top row is 100.
+///
+/// It is computed from the same float the ranking sorts by and the relevance cut compares, never from a printed score.
+/// A row the cut keeps scores at least `min_score` times the top, so it shows at least `100 * min_score` (a row within
+/// half a point below that line rounds up onto it). A `top` that is not positive leaves nothing to divide by; every row
+/// then ties with the top under the cut, so each shows 100.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is rounded and clamped to 0..=100"
+)]
+fn relevance_percent(score: f64, top: f64) -> usize {
+    if top > 0.0 { (score / top * 100.0).round().clamp(0.0, 100.0) as usize } else { 100 }
+}
+
+fn search_row(block: &crate::types::RankedBlock, top_score: f64, snippet_lines: usize) -> [Value; 8] {
     [
         Value::from(block.block.file.as_str()),
         Value::from(block.block.line_start),
@@ -158,20 +178,22 @@ fn search_row(block: &crate::types::RankedBlock, snippet_lines: usize) -> [Value
         parent_cell(block.block.parent.as_ref()),
         opt_cell(signature_cell(&block.block).as_deref()),
         opt_cell(snippet(&block.block, snippet_lines).as_deref()),
-        Value::from(block.rank),
-        Value::from(block.final_score),
+        Value::from(relevance_percent(block.final_score, top_score)),
     ]
 }
 
-const SEARCH_FIELDS: [&str; 9] =
-    ["file", "lineStart", "lineEnd", "nodeKind", "parent", "symbolSignature", "snippet", "rank", "finalScore"];
+const SEARCH_FIELDS: [&str; 8] =
+    ["file", "lineStart", "lineEnd", "nodeKind", "parent", "symbolSignature", "snippet", "relevance"];
 
 /// The line `monokl search` prints for each of `blocks`, indentation included and the newline left out.
 ///
-/// The search budget measures these lines, so a cap counts what the reader receives. Rendering them in one table keeps
-/// michi's cell quoting and truncation as the only definition of a row.
+/// `blocks` is the whole ranking, best first, so its first row is the top that each `relevance` cell is measured
+/// against. The search budget measures these lines, so a cap counts what the reader receives. Rendering them in one
+/// table keeps michi's cell quoting and truncation as the only definition of a row.
 pub fn search_row_texts(blocks: &[RankedBlock], snippet_lines: usize) -> Vec<String> {
-    let rows: Vec<Vec<Value>> = blocks.iter().map(|block| search_row(block, snippet_lines).to_vec()).collect();
+    let top_score = blocks.first().map_or(0.0, |top| top.final_score);
+    let rows: Vec<Vec<Value>> =
+        blocks.iter().map(|block| search_row(block, top_score, snippet_lines).to_vec()).collect();
     let rendered =
         michi::AgentResponse::new("search").items(rows, SEARCH_FIELDS.as_slice()).render(michi::OutputFormat::Text);
     // Rows are the indented lines under the header. michi prints blocks that are not rows (`truncated[N]{..}:` for a
@@ -179,10 +201,14 @@ pub fn search_row_texts(blocks: &[RankedBlock], snippet_lines: usize) -> Vec<Str
     rendered.lines().skip(1).take_while(|line| line.starts_with(' ')).map(str::to_owned).collect()
 }
 
-/// Renders a search response as a TOON table of its rows, followed by the truncation count and hints.
+/// Renders a search response as a TOON table of its rows, followed by the truncation count and hints. Each row's
+/// `relevance` is a percent of [`SearchResponse::top_score`], so a later page still measures against the first row.
 pub fn render_search(response: &SearchResponse, view: &SearchView) -> String {
-    let rows: Vec<Vec<Value>> =
-        response.results.iter().map(|block| search_row(block, view.snippet_lines).to_vec()).collect();
+    let rows: Vec<Vec<Value>> = response
+        .results
+        .iter()
+        .map(|block| search_row(block, response.top_score, view.snippet_lines).to_vec())
+        .collect();
     let fields = SEARCH_FIELDS.iter().map(|field| (*field).to_owned()).collect();
     let mut section = michi::Section::toon("search", fields, rows);
     if response.truncated {
@@ -197,16 +223,22 @@ pub fn render_search(response: &SearchResponse, view: &SearchView) -> String {
 /// What the truncation hint tells a reader to do to see more.
 ///
 /// Rows the caps left out are reached with `--offset`, which names the exact next value so the reader does not pay for
-/// the rows already seen; rows the relevance cut dropped are reached with `--min-score 0`, which keeps the same order,
-/// so the same offsets still apply. An offset past the last kept row says so and how many rows there are. The caps are
-/// named only when a page came back empty, because an offset would not move past a row that does not fit.
+/// the rows already seen; rows the relevance cut dropped, those with a `relevance` below `100 * min_score`, are reached
+/// with `--min-score 0`, which keeps the same order, so the same offsets still apply. An offset past the last kept row
+/// says so and how many rows there are. The caps are named only when a page came back empty, because an offset would
+/// not move past a row that does not fit.
 fn truncation_guidance(response: &SearchResponse, view: &SearchView) -> String {
     let returned = response.results.len();
     let cut = response.blocks_cut_by_relevance;
     let relevant = response.total_blocks_before_truncation.saturating_sub(cut);
     let left = relevant.saturating_sub(response.offset + returned);
-    let below_cut = (cut > 0)
-        .then(|| format!("--min-score 0 for the {cut} {} below the cut", if cut == 1 { "row" } else { "rows" }));
+    let below_cut = (cut > 0).then(|| {
+        format!(
+            "--min-score 0 for the {cut} {} below relevance {:.0}",
+            if cut == 1 { "row" } else { "rows" },
+            view.min_score * 100.0
+        )
+    });
     let mut parts = Vec::new();
     if returned == 0 && response.offset >= relevant {
         parts.push(format!("offset {} is past the last of {relevant} rows", response.offset));
@@ -632,7 +664,7 @@ mod projection_tests {
             results: vec![RankedBlock {
                 block: CodeBlock {
                     file: Utf8PathBuf::from("src/lib.rs"),
-                    // Line numbers, rank, and score are all distinct so a swapped column is detectable.
+                    // Line numbers and relevance are all distinct so a swapped column is detectable.
                     line_start: 5,
                     line_end: 9,
                     node_kind: SymbolKind::Function,
@@ -649,6 +681,7 @@ mod projection_tests {
                 final_score: 0.92,
                 rank: 2,
             }],
+            top_score: 1.0,
             total_blocks_before_truncation: 1,
             blocks_cut_by_relevance: 0,
             offset: 0,
@@ -659,8 +692,8 @@ mod projection_tests {
         let rendered = render_search(&response, &SearchView::default());
         assert_eq!(
             rendered,
-            "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
-             src/lib.rs,5,9,function,null,\"fn foo(x)\\nsecond line\",\"6: let y = foo(x);\",2,0.92"
+            "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n  \
+             src/lib.rs,5,9,function,null,\"fn foo(x)\\nsecond line\",\"6: let y = foo(x);\",92"
         );
     }
 
@@ -669,7 +702,7 @@ mod projection_tests {
         use crate::types::{CodeBlock, ParentContext, RankedBlock, SearchResponse, SymbolKind};
         use camino::Utf8PathBuf;
 
-        let ranked = |line_start, node_kind, parent, rank| RankedBlock {
+        let ranked = |line_start, node_kind, parent, final_score, rank| RankedBlock {
             block: CodeBlock {
                 file: Utf8PathBuf::from("src/a.ts"),
                 line_start,
@@ -685,16 +718,17 @@ mod projection_tests {
                 matched_lines: Vec::new(),
                 parent,
             },
-            final_score: 0.5,
+            final_score,
             rank,
         };
         let class = |name: &str| ParentContext { kind: SymbolKind::Class, name: name.to_owned() };
         let response = SearchResponse {
             results: vec![
-                ranked(3, SymbolKind::Method, Some(class("Foo")), 1),
-                ranked(7, SymbolKind::Constructor, Some(class("Bar Baz")), 2),
-                ranked(1, SymbolKind::Class, None, 3),
+                ranked(3, SymbolKind::Method, Some(class("Foo")), 1.0, 1),
+                ranked(7, SymbolKind::Constructor, Some(class("Bar Baz")), 0.5, 2),
+                ranked(1, SymbolKind::Class, None, 0.25, 3),
             ],
+            top_score: 1.0,
             total_blocks_before_truncation: 3,
             blocks_cut_by_relevance: 0,
             offset: 0,
@@ -703,10 +737,10 @@ mod projection_tests {
         };
         assert_eq!(
             render_search(&response, &SearchView::default()),
-            "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
-             src/a.ts,3,5,method,class Foo,null,null,1,0.5\n  \
-             src/a.ts,7,9,constructor,class Bar Baz,null,null,2,0.5\n  \
-             src/a.ts,1,3,class,null,null,null,3,0.5"
+            "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n  \
+             src/a.ts,3,5,method,class Foo,null,null,100\n  \
+             src/a.ts,7,9,constructor,class Bar Baz,null,null,50\n  \
+             src/a.ts,1,3,class,null,null,null,25"
         );
     }
 
@@ -722,6 +756,7 @@ mod projection_tests {
         };
         let response = SearchResponse {
             results: Vec::new(),
+            top_score: 0.0,
             total_blocks_before_truncation: 0,
             blocks_cut_by_relevance: 0,
             offset: 0,
@@ -836,9 +871,9 @@ mod projection_tests {
         assert_eq!(
             texts,
             [
-                "  src/f1.rs,1,2,function,null,null,null,1,1".to_owned(),
-                format!("  src/f2.rs,2,3,function,null,{}…,null,2,0.9", "x".repeat(199)),
-                "  src/f3.rs,3,4,function,null,null,null,3,0.8".to_owned(),
+                "  src/f1.rs,1,2,function,null,null,null,100".to_owned(),
+                format!("  src/f2.rs,2,3,function,null,{}…,null,90", "x".repeat(199)),
+                "  src/f3.rs,3,4,function,null,null,null,80".to_owned(),
             ]
         );
     }
@@ -868,11 +903,29 @@ mod projection_tests {
         assert!(texts.iter().all(|text| !tail.contains(&text.as_str())));
     }
 
+    #[test]
+    fn relevance_counts_the_rows_only_when_a_cell_is_cut_on_an_offset_page() {
+        let ranked = blocks_with_long_signatures(&[1.0, 0.8, 0.6, 0.4], &[2], 250);
+        let view = SearchView { min_score: 0.0, ..SearchView::default() };
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        assert_eq!(texts.len(), 4);
+        let budget = crate::budget::Budget { offset: 2, min_score: 0.0, ..crate::budget::Budget::default() };
+        let response = crate::budget::apply_budget(ranked, 4, &budget, &texts, Vec::new());
+        let rendered = render_search(&response, &view);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:");
+        assert_eq!(lines[1], format!("  src/f3.rs,3,4,function,null,{}…,null,60", "x".repeat(199)));
+        assert_eq!(lines[2], "  src/f4.rs,4,5,function,null,null,null,40");
+        assert_eq!(lines[3], "truncated[1]{row,field,removed}:");
+        assert_eq!(lines[4], "  0,symbolSignature,51");
+        assert_eq!(lines[5..], ["totalCount: 4", "help[1]: showing 2 of 4; refine with +term/-term"]);
+    }
+
     /// The help line `scores` produce under `budget`, or `None` when the whole result is shown.
     fn help_line(scores: &[f64], budget: &crate::budget::Budget) -> Option<String> {
         let ranked = scored_blocks(scores);
         let total = ranked.len();
-        let view = SearchView { max_results: budget.max_results, ..SearchView::default() };
+        let view = SearchView { max_results: budget.max_results, min_score: budget.min_score, ..SearchView::default() };
         let texts = search_row_texts(&ranked, view.snippet_lines);
         let rendered = render_search(&crate::budget::apply_budget(ranked, total, budget, &texts, Vec::new()), &view);
         rendered.lines().find_map(|line| {
@@ -886,7 +939,7 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1, 0.05]].concat();
         assert_eq!(
             help_line(&scores, &crate::budget::Budget::default()).as_deref(),
-            Some("showing 9 of 11; --min-score 0 for the 2 rows below the cut, or refine with +term/-term")
+            Some("showing 9 of 11; --min-score 0 for the 2 rows below relevance 30, or refine with +term/-term")
         );
     }
 
@@ -906,7 +959,7 @@ mod projection_tests {
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
             Some(
-                "showing 5 of 10; next: --offset 5, --min-score 0 for the 1 row below the cut, or refine with +term/-term"
+                "showing 5 of 10; next: --offset 5, --min-score 0 for the 1 row below relevance 30, or refine with +term/-term"
             )
         );
     }
@@ -963,7 +1016,7 @@ mod projection_tests {
         let scores = [vec![1.0; 12], vec![0.1; 3]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 4 of 15; --min-score 0 for the 3 rows below the cut, or refine with +term/-term")
+            Some("showing 4 of 15; --min-score 0 for the 3 rows below relevance 30, or refine with +term/-term")
         );
     }
 
@@ -988,8 +1041,25 @@ mod projection_tests {
         let scores = [vec![1.0; 9], vec![0.1; 2]].concat();
         assert_eq!(
             help_line(&scores, &budget).as_deref(),
-            Some("showing 0 of 11; offset 9 is past the last of 9 rows; --min-score 0 for the 2 rows below the cut")
+            Some(
+                "showing 0 of 11; offset 9 is past the last of 9 rows; --min-score 0 for the 2 rows below relevance 30"
+            )
         );
+    }
+
+    #[test]
+    fn the_hint_names_the_relevance_the_cut_was_set_at() {
+        let scores = [vec![1.0; 9], vec![0.2]].concat();
+        for (min_score, named) in [(0.5, "50"), (0.35, "35"), (1.0, "100")] {
+            let budget = crate::budget::Budget { min_score, ..crate::budget::Budget::default() };
+            assert_eq!(
+                help_line(&scores, &budget),
+                Some(format!(
+                    "showing 9 of 10; --min-score 0 for the 1 row below relevance {named}, or refine with +term/-term"
+                )),
+                "min_score {min_score}"
+            );
+        }
     }
 
     #[test]
@@ -1040,9 +1110,9 @@ mod projection_tests {
         let rendered = render_search(&apply_budget(ranked, 3, &budget, &texts, Vec::new()), &view);
         assert_eq!(
             rendered,
-            "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n  \
-             src/f1.rs,1,2,function,null,null,null,1,0.5\n  \
-             src/f2.rs,2,3,function,null,null,null,2,0.5\n\
+            "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n  \
+             src/f1.rs,1,2,function,null,null,null,100\n  \
+             src/f2.rs,2,3,function,null,null,null,100\n\
              totalCount: 3\n\
              help[1]: \"showing 2 of 3; next: --offset 2, or refine with +term/-term\""
         );
@@ -1081,6 +1151,7 @@ mod projection_tests {
                 block("src/two.rs", 3, 4, 2, 0.20),
                 block("src/three.rs", 5, 6, 3, 0.30),
             ],
+            top_score: 0.30,
             total_blocks_before_truncation: 3,
             blocks_cut_by_relevance: 0,
             offset: 0,
@@ -1088,20 +1159,104 @@ mod projection_tests {
             diagnostics: Vec::new(),
         };
 
-        let rendered = render_search(&search, &SearchView::default());
-        assert!(
-            rendered.starts_with(
-                "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n"
-            ),
-            "got: {rendered}"
+        // The rows keep `results`' own order, though their scores rise.
+        assert_eq!(
+            render_search(&search, &SearchView::default()),
+            "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n  \
+             src/one.rs,1,2,function,null,null,null,33\n  \
+             src/two.rs,3,4,function,null,null,null,67\n  \
+             src/three.rs,5,6,function,null,null,null,100"
         );
-        let one_pos = rendered.find("src/one.rs,1,2,").expect("first result row must be present");
-        let two_pos = rendered.find("src/two.rs,3,4,").expect("second result row must be present");
-        let three_pos = rendered.find("src/three.rs,5,6,").expect("third result row must be present");
-        assert!(
-            one_pos < two_pos && two_pos < three_pos,
-            "rows must render in `results`' own input order: got {rendered}"
+    }
+
+    #[test]
+    fn relevance_is_a_percent_of_the_top_score_rounded_to_the_nearest_whole_number() {
+        for (score, top, percent) in [
+            (4.0, 4.0, 100),
+            (2.0, 4.0, 50),
+            (1.0, 3.0, 33),
+            (2.0, 3.0, 67),
+            (0.125, 1.0, 13),
+            (0.124, 1.0, 12),
+            (0.004, 1.0, 0),
+            (0.3, 1.0, 30),
+        ] {
+            assert_eq!(relevance_percent(score, top), percent, "{score} of {top}");
+        }
+    }
+
+    #[test]
+    fn relevance_stays_within_zero_and_one_hundred() {
+        assert_eq!(relevance_percent(5.0, 4.0), 100);
+        assert_eq!(relevance_percent(-1.0, 4.0), 0);
+    }
+
+    #[test]
+    fn relevance_is_one_hundred_for_every_row_when_the_top_score_is_not_positive() {
+        for top in [0.0, -1.0, f64::NAN] {
+            assert_eq!(relevance_percent(0.0, top), 100, "top {top}");
+        }
+        let response = SearchResponse {
+            results: scored_blocks(&[0.0, 0.0]),
+            top_score: 0.0,
+            total_blocks_before_truncation: 2,
+            blocks_cut_by_relevance: 0,
+            offset: 0,
+            truncated: false,
+            diagnostics: Vec::new(),
+        };
+        assert_eq!(
+            render_search(&response, &SearchView::default()),
+            "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n  \
+             src/f1.rs,1,2,function,null,null,null,100\n  \
+             src/f2.rs,2,3,function,null,null,null,100"
         );
+    }
+
+    #[test]
+    fn a_later_page_measures_relevance_against_the_top_of_the_whole_result() {
+        let ranked = scored_blocks(&[1.0, 0.8, 0.6, 0.4]);
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        let budget = crate::budget::Budget { offset: 2, min_score: 0.0, ..crate::budget::Budget::default() };
+        let page = crate::budget::apply_budget(ranked, 4, &budget, &texts, Vec::new());
+        assert_eq!(
+            render_search(&page, &view).lines().skip(1).take(2).collect::<Vec<_>>(),
+            ["  src/f3.rs,3,4,function,null,null,null,60", "  src/f4.rs,4,5,function,null,null,null,40"]
+        );
+    }
+
+    #[test]
+    fn the_budgeted_row_texts_are_the_rows_that_print() {
+        let ranked = scored_blocks(&[0.9, 0.45, 0.3]);
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        assert_eq!(
+            texts,
+            [
+                "  src/f1.rs,1,2,function,null,null,null,100",
+                "  src/f2.rs,2,3,function,null,null,null,50",
+                "  src/f3.rs,3,4,function,null,null,null,33",
+            ]
+        );
+        let budget = crate::budget::Budget::default();
+        let response = crate::budget::apply_budget(ranked, 3, &budget, &texts, Vec::new());
+        let printed: Vec<String> = render_search(&response, &view).lines().skip(1).map(str::to_owned).collect();
+        assert_eq!(printed, texts);
+    }
+
+    #[test]
+    fn the_rows_the_cut_drops_show_a_relevance_below_the_cut() {
+        let scores = [vec![1.0; 8], vec![0.31, 0.29, 0.1]].concat();
+        let ranked = scored_blocks(&scores);
+        let view = SearchView::default();
+        let texts = search_row_texts(&ranked, view.snippet_lines);
+        let response =
+            crate::budget::apply_budget(ranked, scores.len(), &crate::budget::Budget::default(), &texts, Vec::new());
+        let shown: Vec<&str> = texts.iter().map(|text| text.rsplit(',').next().unwrap_or("")).collect();
+        assert_eq!(shown[8..], ["31", "29", "10"]);
+        assert_eq!(response.results.len(), 9);
+        assert_eq!(response.blocks_cut_by_relevance, 2);
     }
 }
 fn io_error_code(kind: std::io::ErrorKind) -> michi::ErrorCode {

@@ -98,7 +98,25 @@ The snippet (`output/agent.rs`) shows the matched lines of a block, at most `--s
 4. **Row cap** (`--max-results`, default 20). Applies to the page and wins over the floor: `--max-results 1` prints one row.
 5. **Token cap** (`--max-tokens`, default 20,000). The longest prefix of the page whose printed rows fit; a row larger than the whole cap leaves no rows. It counts the printed rows, so it sees the snippet length, and it does not count the skipped rows.
 
-When any rule dropped rows, or the page starts after the first row, the response is truncated: `totalCount` is the number of ranked blocks and the help line is michi's `showing {returned} of {total}; {guidance}`. The guidance names `next: --offset N` while kept rows remain after the page (`N` is the offset plus the rows returned), `--min-score 0 for the N rows below the cut` when the cut dropped rows (the same offsets still apply with the cut off). `totalCount` and the `of T` in the line count every match, including the N rows below the cut, so the rows reachable by `--offset` alone are `T - N`; `next:` appears only while some of them remain, so following it never reaches an empty page, and `refine with +term/-term`. An empty page that the caps caused names `--max-results N` or `--max-tokens N` instead, because an offset cannot move past a row that does not fit. An offset at or past the last kept row prints no rows, keeps `totalCount`, exits 0 and says `offset 40 is past the last of 31 rows`. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation`, `blocks_cut_by_relevance` and `offset` only.
+When any rule dropped rows, or the page starts after the first row, the response is truncated: `totalCount` is the number of ranked blocks and the help line is michi's `showing {returned} of {total}; {guidance}`. The guidance names `next: --offset N` while kept rows remain after the page (`N` is the offset plus the rows returned), `--min-score 0 for the N rows below relevance P` when the cut dropped rows (`P` is 100 times `--min-score`; the same offsets still apply with the cut off). `totalCount` and the `of T` in the line count every match, including the N rows below relevance `P`, so the rows reachable by `--offset` alone are `T - N`; `next:` appears only while some of them remain, so following it never reaches an empty page, and `refine with +term/-term`. An empty page that the caps caused names `--max-results N` or `--max-tokens N` instead, because an offset cannot move past a row that does not fit. An offset at or past the last kept row prints no rows, keeps `totalCount`, exits 0 and says `offset 40 is past the last of 31 rows`. The wording is the output layer's (`truncation_guidance`); core carries `total_blocks_before_truncation`, `blocks_cut_by_relevance`, `offset` and `top_score` only.
+
+## The `relevance` column
+
+A search row ends in `relevance`, an integer from 0 to 100: the row's `final_score` as a percent of `top_score`, the
+score of the best row of the whole ranking (so the top row is 100), rounded to the nearest whole number and clamped
+to 0..=100. Core holds the float and never renders it: `SearchResponse::top_score` carries the top score, and the
+output layer (`output/agent.rs`) computes the percent from that float and the row's own `final_score`, the same
+floats the sort and the relevance cut use, never from printed text. `top_score` is of the whole ranking, so a page
+after `--offset` measures against the first row of the result and its first row is not 100. A top score that is not
+positive has nothing to divide by; every row then ties with the top under the cut, so each shows 100.
+
+It lines up with the cut. A row is kept when `final_score >= min_score * top`, so a kept row shows at least
+`100 * min_score` (one within half a point below the line rounds onto it), and the rows the cut dropped show less,
+which is why the hint says `below relevance P`. The first 8 rows are kept whatever their score, so rows under `P`
+can be printed, and only while fewer than 8 rows reach it. `relevance` compares the rows of one query; the top score
+is not comparable across queries (BM25 depends on the corpus), so it is not printed. The columns are
+`file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`; the old `rank` was the row index and is
+gone. Why: [05 §52](../spec/05-research-and-decisions.md).
 
 Why these defaults: [05 §46](../spec/05-research-and-decisions.md). To get the output of versions before the change, run `--min-score 0 --max-results 50 --snippet-lines 3`.
 

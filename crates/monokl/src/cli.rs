@@ -68,8 +68,9 @@ struct SearchArgs {
     /// The most estimated tokens (one per three bytes) across the printed rows.
     #[arg(long, default_value_t = Budget::default().max_tokens)]
     max_tokens: usize,
-    /// Drops the rows scoring below this fraction of the top row's score, but never one of the first eight. 0 keeps every
-    /// row up to `--max-results`; 1 keeps only the rows that tie with the top.
+    /// Drops the rows scoring below this fraction of the top row's score, but never one of the first eight. A row's
+    /// `relevance` column is its percent of the top row's score, so the rows dropped are those with a `relevance` below
+    /// 100 times this. 0 keeps every row up to `--max-results`; 1 keeps only the rows that tie with the top.
     #[arg(long, value_name = "FRACTION", default_value_t = Budget::default().min_score, value_parser = parse_min_score)]
     min_score: f64,
     /// The most matching lines each row's snippet shows, 0 to 3; the rest are counted. 0 prints no snippet, so a
@@ -216,7 +217,8 @@ fn run_search(args: &SearchArgs) -> Result<String, String> {
         min_score: args.min_score,
         offset: args.offset,
     };
-    let view = SearchView { snippet_lines: args.snippet_lines, max_results: args.max_results };
+    let view =
+        SearchView { snippet_lines: args.snippet_lines, max_results: args.max_results, min_score: args.min_score };
     let total_before = ranked.len();
     let row_texts = search_row_texts(&ranked, view.snippet_lines);
     let response = apply_budget(ranked, total_before, &budget, &row_texts, diagnostics);

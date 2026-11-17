@@ -30,14 +30,13 @@ fn search_prints_ranked_blocks_with_relative_paths() {
     let mut lines = text.lines();
     assert_eq!(
         lines.next(),
-        Some("search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:")
+        Some("search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:")
     );
-    let first = lines.next().unwrap();
-    assert!(
-        first.starts_with(
-            "  src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,"
-        ),
-        "got: {first}"
+    assert_eq!(
+        lines.next(),
+        Some(
+            "  src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",100"
+        )
     );
     assert!(text.lines().skip(1).all(|line| !line.trim_start().starts_with('/')), "paths should be relative: {text}");
 }
@@ -52,11 +51,11 @@ fn a_row_shows_the_matching_lines_inside_its_block_and_nothing_else() {
         rows[1],
         "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\
          \"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n\
-         10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,4.151139"
+         10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",70"
     );
     assert_eq!(
         rows[2],
-        "  src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,1.345138"
+        "  src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",23"
     );
 }
 
@@ -122,12 +121,9 @@ fn a_deeply_nested_file_is_searched_like_any_other() {
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     let lines: Vec<&str> = text.lines().take(3).collect();
-    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:");
-    assert!(lines[1].starts_with("  normal.ts,1,1,function,null,function needle(),null,1,"), "got: {text}");
-    assert!(
-        lines[2].starts_with("  nested.ts,1,1,variable,null,null,\"1: export const needle = /'/;\",2,"),
-        "got: {text}"
-    );
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:");
+    assert_eq!(lines[1], "  normal.ts,1,1,function,null,function needle(),null,100");
+    assert_eq!(lines[2], "  nested.ts,1,1,variable,null,null,\"1: export const needle = /'/;\",71");
 }
 
 #[test]
@@ -142,7 +138,7 @@ fn a_file_nested_past_the_cap_is_skipped_and_reported_while_the_others_are_searc
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let text = stdout(&output);
     assert!(text.starts_with("search[1]{"), "got: {text}");
-    assert!(text.contains("  normal.ts,1,1,function,null,function needle(),null,1,"), "got: {text}");
+    assert!(text.contains("\n  normal.ts,1,1,function,null,function needle(),null,100\n"), "got: {text}");
     assert!(
         text.contains("1 file degraded: file nests too deeply to analyze (depth 16385, over the cap of 16384): "),
         "got: {text}"
@@ -199,9 +195,9 @@ fn files_that_are_not_valid_utf8_are_searched_and_reported_as_read_lossily() {
     let text = stdout(&output);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 4, "got: {text}");
-    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:");
-    assert!(lines[1].starts_with("  legacy.ts,2,2,function,null,function needle(),null,1,"), "got: {text}");
-    assert!(lines[2].starts_with("  modern.ts,1,1,function,null,function needle(),null,2,"), "got: {text}");
+    assert_eq!(lines[0], "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:");
+    assert_eq!(lines[1], "  legacy.ts,2,2,function,null,function needle(),null,100");
+    assert_eq!(lines[2], "  modern.ts,1,1,function,null,function needle(),null,100");
     assert_eq!(lines[3], "help[1]: \"1 file read lossily: invalid UTF-8 replaced with U+FFFD: legacy.ts\"");
 }
 
@@ -244,7 +240,7 @@ fn no_ignore_searches_ignored_directories() {
     let mut lines = text.lines();
     assert_eq!(
         lines.next(),
-        Some("search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:")
+        Some("search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:")
     );
     assert!(lines.next().unwrap().starts_with("  build/out.ts,1,1,function,null,"), "got: {text}");
 }
@@ -275,7 +271,7 @@ fn no_ignore_also_skips_parent_ignore_files() {
     let text = stdout(&output);
     assert_eq!(
         text.lines().next(),
-        Some("search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:")
+        Some("search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:")
     );
     assert!(text.lines().nth(1).unwrap().starts_with("  build/out.ts,1,1,function,null,"), "got: {text}");
 }
@@ -317,9 +313,9 @@ fn a_file_as_the_search_root_is_invalid_input_naming_the_path() {
     assert!(stderr(&output).contains("src/index.ts"), "got: {}", stderr(&output));
 }
 
-const PRICE_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:";
-const PRICE_ROW_1: &str = "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,0.436924";
-const PRICE_ROW_2: &str = "  src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693";
+const PRICE_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:";
+const PRICE_ROW_1: &str = "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",100";
+const PRICE_ROW_2: &str = "  src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",70";
 
 /// The flags that give the output the shape it had before the relevance cut and the one-line snippet: every row up to
 /// the cap, and a snippet of up to three lines. The row and token cap tests below use them so that each tests one cap.
@@ -368,12 +364,12 @@ fn a_first_row_larger_than_the_budget_prints_no_rows_and_says_so() {
 const PRICE_ROWS_WHOLE: [&str; 8] = [
     PRICE_ROW_1,
     PRICE_ROW_2,
-    "  src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n14: <button onClick={onClick} disabled={disabled || !priceValid}>\",3,0.164513",
-    "  src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",4,0.09468",
-    "  src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",5,0.090782",
-    "  src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",6,0.086106",
-    "  src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",7,0.052697",
-    "  src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",8,0.047174",
+    "  src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n14: <button onClick={onClick} disabled={disabled || !priceValid}>\",38",
+    "  src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",22",
+    "  src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",21",
+    "  src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",20",
+    "  src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",12",
+    "  src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",11",
 ];
 
 #[test]
@@ -385,20 +381,20 @@ fn the_flags_that_restore_the_whole_output_print_every_row_with_a_three_line_sni
 
 #[test]
 fn by_default_a_result_of_up_to_eight_rows_is_printed_whole_with_one_line_snippets() {
-    // The top score is 0.436924, so the relevance cut is 0.131077 and rows 4 to 8 lie below it, but the floor keeps
-    // the first eight rows, which are all there are.
+    // The top row is relevance 100, so the relevance cut is 30 and rows 4 to 8 (22 down to 11) lie below it, but the
+    // floor keeps the first eight rows, which are all there are.
     let output = monokl(&["search", "price", "."]);
     assert_eq!(
         stdout(&output),
-        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n+1 more\",1,0.436924\n\
-         \x20 src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",2,0.307693\n\
-         \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n+1 more\",3,0.164513\n\
-         \x20 src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",4,0.09468\n\
-         \x20 src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",5,0.090782\n\
-         \x20 src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",6,0.086106\n\
-         \x20 src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",7,0.052697\n\
-         \x20 src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",8,0.047174\n"
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n+1 more\",100\n\
+         \x20 src/utils/validation.ts,14,14,typeAlias,null,null,\"14: export type PriceValidator = (price: number) => ValidationResult;\",70\n\
+         \x20 src/components/Button.tsx,11,18,function,null,\"function Button({ label, price, onClick, disabled }: ButtonProps)\",\"12: const priceValid = price === undefined || validatePrice(price).valid;\\n+1 more\",38\n\
+         \x20 src/hooks/useCart.ts,11,25,function,null,function useCart(),\"15: const result = validatePrice(item.price);\",22\n\
+         \x20 src/hooks/useCart.ts,5,9,interface,null,null,\"8: price: number;\",21\n\
+         \x20 src/components/Button.tsx,4,9,interface,null,null,\"6: price?: number;\",20\n\
+         \x20 src/index.ts,4,4,other,null,null,\"4: export { validatePrice } from './utils/validation';\",12\n\
+         \x20 src/index.ts,5,5,other,null,null,\"5: export type { ButtonProps, CartItem, ValidationResult, PriceValidator } from './utils/validation';\",11\n"
     );
 }
 
@@ -442,59 +438,64 @@ fn pricing_project(file: &str, text: &str) -> tempfile::TempDir {
     dir
 }
 
-/// The ranks of the rows a search printed, read from the end of each row (the score is the last cell, the rank the one
-/// before).
-fn printed_ranks(text: &str) -> Vec<String> {
+/// The `lineStart` of each row a search printed, in print order: the second cell, after a file name with no comma. The
+/// `price` projects hold one block per line number, so it names the row.
+fn printed_line_starts(text: &str) -> Vec<String> {
     text.lines()
         .skip(1)
         .filter(|row| row.starts_with("  "))
-        .filter_map(|row| row.rsplit(',').nth(1))
+        .filter_map(|row| row.split(',').nth(1))
         .map(str::to_owned)
         .collect()
 }
 
+/// The first lines of the `price` blocks of `pricing_ts`, best first: the three that name `price`, then the ten callers.
+fn priced_line_starts(count: usize) -> Vec<String> {
+    [1, 5, 9].into_iter().chain((13..).step_by(4)).take(count).map(|line| line.to_string()).collect()
+}
+
 #[test]
 fn by_default_a_typescript_search_keeps_the_rows_above_the_cut_and_up_to_the_floor_then_says_how_to_see_more() {
-    // The top score is 0.565047, so the cut is 0.169514: rows 1 to 3 reach it. The floor keeps rows 4 to 8 (0.054906)
-    // and drops rows 9 to 13.
+    // The cut is relevance 30: rows 1 to 3 (100, 48, 43) reach it. The floor keeps rows 4 to 8 (10) and drops rows 9
+    // to 13.
     let dir = pricing_project("pricing.ts", &pricing_ts());
     let output = monokl_in(dir.path(), &["search", "price", "."]);
     assert_eq!(
         stdout(&output),
-        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/pricing.ts,1,3,function,null,\"function price(item: Item): number\",null,1,0.565047\n\
-         \x20 src/pricing.ts,5,7,function,null,\"function applyPrice(item: Item, price: number): Item\",\"6: return { ...item, cents: price };\",2,0.269552\n\
-         \x20 src/pricing.ts,9,11,function,null,\"function priceLabel(item: Item): string\",\"10: return `${price(item)} cents`;\",3,0.240512\n\
-         \x20 src/pricing.ts,13,15,function,null,\"function listA(items: Item[]): number\",\"14: return items.map(price).length;\",4,0.054906\n\
-         \x20 src/pricing.ts,17,19,function,null,\"function listB(items: Item[]): number\",\"18: return items.map(price).length;\",5,0.054906\n\
-         \x20 src/pricing.ts,21,23,function,null,\"function listC(items: Item[]): number\",\"22: return items.map(price).length;\",6,0.054906\n\
-         \x20 src/pricing.ts,25,27,function,null,\"function listD(items: Item[]): number\",\"26: return items.map(price).length;\",7,0.054906\n\
-         \x20 src/pricing.ts,29,31,function,null,\"function listE(items: Item[]): number\",\"30: return items.map(price).length;\",8,0.054906\n\
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/pricing.ts,1,3,function,null,\"function price(item: Item): number\",null,100\n\
+         \x20 src/pricing.ts,5,7,function,null,\"function applyPrice(item: Item, price: number): Item\",\"6: return { ...item, cents: price };\",48\n\
+         \x20 src/pricing.ts,9,11,function,null,\"function priceLabel(item: Item): string\",\"10: return `${price(item)} cents`;\",43\n\
+         \x20 src/pricing.ts,13,15,function,null,\"function listA(items: Item[]): number\",\"14: return items.map(price).length;\",10\n\
+         \x20 src/pricing.ts,17,19,function,null,\"function listB(items: Item[]): number\",\"18: return items.map(price).length;\",10\n\
+         \x20 src/pricing.ts,21,23,function,null,\"function listC(items: Item[]): number\",\"22: return items.map(price).length;\",10\n\
+         \x20 src/pricing.ts,25,27,function,null,\"function listD(items: Item[]): number\",\"26: return items.map(price).length;\",10\n\
+         \x20 src/pricing.ts,29,31,function,null,\"function listE(items: Item[]): number\",\"30: return items.map(price).length;\",10\n\
          totalCount: 13\n\
-         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below the cut, or refine with +term/-term\"\n"
+         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below relevance 30, or refine with +term/-term\"\n"
     );
 }
 
 #[cfg(feature = "lang-rust")]
 #[test]
 fn by_default_a_rust_search_keeps_the_rows_above_the_cut_and_up_to_the_floor_then_says_how_to_see_more() {
-    // The top score is 0.575631, so the cut is 0.172689: rows 1 to 3 reach it. The floor keeps rows 4 to 8 (0.054839)
-    // and drops rows 9 to 13.
+    // The cut is relevance 30: rows 1 to 3 (100, 47, 42) reach it. The floor keeps rows 4 to 8 (10) and drops rows 9
+    // to 13.
     let dir = pricing_project("pricing.rs", &pricing_rs());
     let output = monokl_in(dir.path(), &["search", "price", "."]);
     assert_eq!(
         stdout(&output),
-        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/pricing.rs,1,3,function,null,\"pub fn price(item: &Item) -> u64\",null,1,0.575631\n\
-         \x20 src/pricing.rs,5,7,function,null,\"pub fn apply_price(item: &Item, price: u64) -> Item\",\"6: Item { cents: price, ..*item }\",2,0.26858\n\
-         \x20 src/pricing.rs,9,11,function,null,\"pub fn price_label(item: &Item) -> String\",\"10: format!(\\\"{} cents\\\", price(item))\",3,0.240124\n\
-         \x20 src/pricing.rs,13,15,function,null,\"pub fn list_a(items: &[Item]) -> usize\",\"14: items.iter().map(price).count()\",4,0.054839\n\
-         \x20 src/pricing.rs,17,19,function,null,\"pub fn list_b(items: &[Item]) -> usize\",\"18: items.iter().map(price).count()\",5,0.054839\n\
-         \x20 src/pricing.rs,21,23,function,null,\"pub fn list_c(items: &[Item]) -> usize\",\"22: items.iter().map(price).count()\",6,0.054839\n\
-         \x20 src/pricing.rs,25,27,function,null,\"pub fn list_d(items: &[Item]) -> usize\",\"26: items.iter().map(price).count()\",7,0.054839\n\
-         \x20 src/pricing.rs,29,31,function,null,\"pub fn list_e(items: &[Item]) -> usize\",\"30: items.iter().map(price).count()\",8,0.054839\n\
+        "search[8]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/pricing.rs,1,3,function,null,\"pub fn price(item: &Item) -> u64\",null,100\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn apply_price(item: &Item, price: u64) -> Item\",\"6: Item { cents: price, ..*item }\",47\n\
+         \x20 src/pricing.rs,9,11,function,null,\"pub fn price_label(item: &Item) -> String\",\"10: format!(\\\"{} cents\\\", price(item))\",42\n\
+         \x20 src/pricing.rs,13,15,function,null,\"pub fn list_a(items: &[Item]) -> usize\",\"14: items.iter().map(price).count()\",10\n\
+         \x20 src/pricing.rs,17,19,function,null,\"pub fn list_b(items: &[Item]) -> usize\",\"18: items.iter().map(price).count()\",10\n\
+         \x20 src/pricing.rs,21,23,function,null,\"pub fn list_c(items: &[Item]) -> usize\",\"22: items.iter().map(price).count()\",10\n\
+         \x20 src/pricing.rs,25,27,function,null,\"pub fn list_d(items: &[Item]) -> usize\",\"26: items.iter().map(price).count()\",10\n\
+         \x20 src/pricing.rs,29,31,function,null,\"pub fn list_e(items: &[Item]) -> usize\",\"30: items.iter().map(price).count()\",10\n\
          totalCount: 13\n\
-         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below the cut, or refine with +term/-term\"\n"
+         help[1]: \"showing 8 of 13; --min-score 0 for the 5 rows below relevance 30, or refine with +term/-term\"\n"
     );
 }
 
@@ -504,9 +505,9 @@ fn a_min_score_of_zero_prints_every_row_up_to_the_cap_and_no_help_line() {
     let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--min-score", "0"]));
     assert_eq!(
         text.lines().next(),
-        Some("search[13]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:")
+        Some("search[13]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:")
     );
-    assert_eq!(printed_ranks(&text), (1..=13).map(|rank| rank.to_string()).collect::<Vec<_>>(), "got: {text}");
+    assert_eq!(printed_line_starts(&text), priced_line_starts(13), "got: {text}");
     assert!(!text.contains("help["), "got: {text}");
     assert!(!text.contains("totalCount"), "got: {text}");
 }
@@ -515,18 +516,18 @@ fn a_min_score_of_zero_prints_every_row_up_to_the_cap_and_no_help_line() {
 fn a_min_score_of_one_keeps_the_floor_and_the_rows_that_tie_with_the_top() {
     let dir = pricing_project("pricing.ts", &pricing_ts());
     let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--min-score", "1"]));
-    assert_eq!(printed_ranks(&text), (1..=8).map(|rank| rank.to_string()).collect::<Vec<_>>(), "got: {text}");
+    assert_eq!(printed_line_starts(&text), priced_line_starts(8), "got: {text}");
 }
 
 #[test]
 fn the_row_cap_wins_over_the_floor_and_the_help_line_names_the_offset_and_the_min_score_flag_when_both_cut() {
     let dir = pricing_project("pricing.ts", &pricing_ts());
     let text = stdout(&monokl_in(dir.path(), &["search", "price", ".", "--max-results", "5"]));
-    assert_eq!(printed_ranks(&text), ["1", "2", "3", "4", "5"], "got: {text}");
+    assert_eq!(printed_line_starts(&text), priced_line_starts(5), "got: {text}");
     assert_eq!(
         text.lines().last(),
         Some(
-            "help[1]: \"showing 5 of 13; next: --offset 5, --min-score 0 for the 5 rows below the cut, or refine with +term/-term\""
+            "help[1]: \"showing 5 of 13; next: --offset 5, --min-score 0 for the 5 rows below relevance 30, or refine with +term/-term\""
         )
     );
 }
@@ -543,14 +544,14 @@ fn the_help_line_names_only_the_offset_when_the_relevance_cut_dropped_nothing() 
 #[test]
 fn a_snippet_of_no_lines_prints_null_and_a_snippet_of_two_prints_two() {
     let none = stdout(&monokl(&["search", "price", ".", "--snippet-lines", "0"]));
-    let snippets: Vec<&str> = none.lines().skip(1).take(3).map(|row| row.rsplit(',').nth(2).unwrap_or("")).collect();
+    let snippets: Vec<&str> = none.lines().skip(1).take(3).map(|row| row.rsplit(',').nth(1).unwrap_or("")).collect();
     assert_eq!(snippets, ["null", "null", "null"], "got: {none}");
 
     let two = stdout(&monokl(&["search", "price", ".", "--snippet-lines", "2"]));
     assert_eq!(
         two.lines().nth(1),
         Some(
-            "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",1,0.436924"
+            "  src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"9: if (price < 0) return { valid: false, message: 'Price cannot be negative' };\\n10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",100"
         )
     );
 }
@@ -570,10 +571,10 @@ fn a_result_within_every_cap_is_printed_whole_without_a_cut_marker() {
     let output = monokl(&["search", "format", "."]);
     assert_eq!(
         stdout(&output),
-        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",1,0.949556\n\
-         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",2,0.170466\n\
-         \x20 src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",3,0.159101\n"
+        "search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/utils/format.ts,1,3,function,null,\"function formatCurrency(amount: number, currency: string = 'USD'): string\",\"2: return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);\",100\n\
+         \x20 src/utils/validation.ts,8,12,function,null,\"function validatePrice(price: number): ValidationResult\",\"10: if (price > 1_000_000) return { valid: false, message: formatCurrency(1_000_000) + ' is the maximum' };\",18\n\
+         \x20 src/index.ts,3,3,other,null,null,\"3: export { formatCurrency, truncateString } from './utils/format';\",17\n"
     );
 }
 
@@ -598,8 +599,7 @@ mod tests {
 }
 ";
 
-const SEARCH_HEADER: &str =
-    "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:";
+const SEARCH_HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:";
 
 /// A project with one Rust file and one TypeScript file that both mention `total_price`.
 fn mixed_project() -> tempfile::TempDir {
@@ -652,23 +652,23 @@ fn a_rust_snippet_is_one_line_by_default_and_the_old_three_lines_on_request() {
     let output = monokl_in(dir.path(), &["search", "price money", "."]);
     assert_eq!(
         stdout(&output),
-        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
-         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n+1 more\",2,2.939514\n\
-         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
-         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
-         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
+        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",100\n\
+         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n+1 more\",89\n\
+         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",26\n\
+         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",16\n\
+         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,13\n"
     );
 
     let output = monokl_in(dir.path(), &["search", "price money", ".", "--min-score", "0", "--snippet-lines", "3"]);
     assert_eq!(
         stdout(&output),
-        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",1,3.316866\n\
-         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n11: Money { cents: sum }\",2,2.939514\n\
-         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",3,0.8735\n\
-         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",4,0.538908\n\
-         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,5,0.446085\n"
+        "search[5]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/pricing.rs,5,7,function,null,\"pub fn price(item: &Item) -> Money\",\"6: Money { cents: item.cents }\",100\n\
+         \x20 src/pricing.rs,9,12,function,null,\"pub fn total_price(items: &[Item]) -> Money\",\"10: let sum = items.iter().map(|i| price(i).cents).sum();\\n11: Money { cents: sum }\",89\n\
+         \x20 src/pricing.rs,18,21,function,null,\"pub fn describe(item: &Item) -> String\",\"19: let shown = format_money(&price(item));\",26\n\
+         \x20 src/pricing.rs,14,16,function,null,\"pub fn format_money(money: &Money) -> String\",\"15: format!(\\\"{}.{:02}\\\", money.cents / 100, money.cents % 100)\",16\n\
+         \x20 src/pricing.rs,1,3,struct,null,pub struct Money,null,13\n"
     );
 }
 
@@ -698,17 +698,17 @@ fn a_rust_row_shows_a_code_line_not_a_doc_comment_and_leaves_the_where_clause_ou
     let output = monokl_in(dir.path(), &["search", "quote ledger", "."]);
     assert_eq!(
         stdout(&output),
-        "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",1,4.621067\n\
-         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",2,0.554892\n"
+        "search[2]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",100\n\
+         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",12\n"
     );
 
     // The doc comment is the only matching line left once the body does not match, so it is shown.
     let output = monokl_in(dir.path(), &["search", "customer", "."]);
     assert_eq!(
         stdout(&output),
-        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"1: /// Quotes the ledger for a customer.\",1,0.431523\n"
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"1: /// Quotes the ledger for a customer.\",100\n"
     );
 }
 
@@ -722,8 +722,8 @@ fn a_page_of_rust_rows_keeps_the_where_cut_and_the_more_marker_and_names_the_nex
     let output = monokl_in(dir.path(), &["search", "quote ledger", ".", "--max-results", "1"]);
     assert_eq!(
         stdout(&output),
-        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",1,4.621067\n\
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/ledger.rs,1,8,function,null,\"pub fn quote<T>(ledger: T) -> u64 where …\",\"7: ledger.total()\\n+2 more\",100\n\
          totalCount: 2\n\
          help[1]: \"showing 1 of 2; next: --offset 1, or refine with +term/-term\"\n"
     );
@@ -731,8 +731,8 @@ fn a_page_of_rust_rows_keeps_the_where_cut_and_the_more_marker_and_names_the_nex
     let output = monokl_in(dir.path(), &["search", "quote ledger", ".", "--max-results", "1", "--offset", "1"]);
     assert_eq!(
         stdout(&output),
-        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:\n\
-         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",2,0.554892\n\
+        "search[1]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:\n\
+         \x20 src/ledger.rs,10,13,function,null,\"pub fn total(ledger: &Ledger) -> u64\",\"12: ledger.sum()\\n+1 more\",12\n\
          totalCount: 2\n\
          help[1]: showing 1 of 2; refine with +term/-term\n"
     );
@@ -747,7 +747,7 @@ fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
     assert_eq!(
         stdout(&output),
         format!(
-            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,8.0551\n",
+            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,100\n",
             SEARCH_HEADER.replace("[N]", "[1]")
         )
     );
@@ -757,7 +757,7 @@ fn rust_code_is_searched_as_blocks_and_test_code_only_on_request() {
     assert_eq!(
         stdout(&output),
         format!(
-            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,1,5.105006\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),null,2,2.083676\n",
+            "{}\n  src/cart.rs,6,9,method,impl Cart,pub fn total_price(&self) -> u32,null,100\n  src/cart.rs,14,17,function,module tests,fn total_price_adds_up(),null,41\n",
             SEARCH_HEADER.replace("[N]", "[2]")
         )
     );
@@ -780,8 +780,8 @@ fn two_typescript_declarations_on_one_line_each_get_a_row_when_each_holds_a_matc
     assert_eq!(
         rows,
         [
-            "  a.ts,1,1,variable,null,null,\"1: const first = 1;\",1,1.779077",
-            "  a.ts,1,1,variable,null,null,\"1: const second = 2;\",2,1.779077",
+            "  a.ts,1,1,variable,null,null,\"1: const first = 1;\",100",
+            "  a.ts,1,1,variable,null,null,\"1: const second = 2;\",100",
         ]
     );
 }
@@ -792,7 +792,7 @@ fn two_rust_items_on_one_line_each_get_a_row_when_each_holds_a_match() {
     let rows = rows_for(&[("a.rs", "fn first() {} fn second() {}\n")], "first second");
     assert_eq!(
         rows,
-        ["  a.rs,1,1,function,null,fn first(),null,1,3.465735", "  a.rs,1,1,function,null,fn second(),null,2,3.465735",]
+        ["  a.rs,1,1,function,null,fn first(),null,100", "  a.rs,1,1,function,null,fn second(),null,100",]
     );
 }
 
@@ -856,6 +856,14 @@ fn help_names_the_timeout_its_default_and_how_to_disable_it() {
     assert!(help.contains("--timeout <SECONDS>"), "got: {help}");
     assert!(help.contains("0 means no limit"), "got: {help}");
     assert!(help.contains("[default: 30]"), "got: {help}");
+}
+
+#[test]
+fn help_ties_min_score_to_the_relevance_column() {
+    let help = stdout(&monokl(&["search", "--help"]));
+    let min_score = &help[help.find("--min-score").unwrap()..];
+    let flag = &min_score[..min_score.find("--snippet-lines").unwrap()];
+    assert!(flag.contains("relevance"), "got: {flag}");
 }
 
 #[test]
@@ -1040,12 +1048,12 @@ fn following_the_hint_walks_the_rows_that_pass_the_cut_and_never_reaches_an_empt
     assert_eq!(kept.len(), 12);
     assert_eq!(
         help.as_deref(),
-        Some("showing 12 of 32; --min-score 0 for the 20 rows below the cut, or refine with +term/-term")
+        Some("showing 12 of 32; --min-score 0 for the 20 rows below relevance 30, or refine with +term/-term")
     );
     let (seen, pages) = walk(
         &[],
-        "showing 5 of 32; next: --offset 5, --min-score 0 for the 20 rows below the cut",
-        "showing 2 of 32; --min-score 0 for the 20 rows below the cut, or refine",
+        "showing 5 of 32; next: --offset 5, --min-score 0 for the 20 rows below relevance 30",
+        "showing 2 of 32; --min-score 0 for the 20 rows below relevance 30, or refine",
     );
     assert_eq!((seen, pages), (kept.clone(), 3));
 

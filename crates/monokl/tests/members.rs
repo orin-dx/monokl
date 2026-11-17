@@ -12,7 +12,7 @@ use monokl::analysis::registry::AnalyzerRegistry;
 use monokl::analysis::ts::TsAnalyzer;
 use monokl::pipeline::{SearchRequest, SearchResult, search};
 
-const HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,rank,finalScore}:";
+const HEADER: &str = "search[N]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:";
 
 /// A class with a constructor, two methods, an arrow-function property and two members too short to get a block.
 const FOO: &str = "\
@@ -68,14 +68,14 @@ fn a_query_naming_one_method_returns_that_method_alone_with_its_class() {
     let dir = project(&[("src/foo.ts", FOO)]);
     assert_eq!(
         run(&dir, "loadUser"),
-        table(&["  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",null,1,9.153523"])
+        table(&["  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",null,100"])
     );
 }
 
 #[test]
 fn a_query_naming_the_class_returns_the_class_alone() {
     let dir = project(&[("src/foo.ts", FOO)]);
-    assert_eq!(run(&dir, "Foo"), table(&["  src/foo.ts,1,17,class,null,null,\"1: export class Foo {\",1,2.819284"]));
+    assert_eq!(run(&dir, "Foo"), table(&["  src/foo.ts,1,17,class,null,null,\"1: export class Foo {\",100"]));
 }
 
 #[test]
@@ -83,9 +83,7 @@ fn a_constructor_is_a_row_of_its_own() {
     let dir = project(&[("src/foo.ts", FOO)]);
     assert_eq!(
         run(&dir, "constructor"),
-        table(&[
-            "  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",null,1,4.027545"
-        ])
+        table(&["  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",null,100"])
     );
 }
 
@@ -94,18 +92,15 @@ fn an_arrow_function_property_is_a_row_of_its_own() {
     let dir = project(&[("src/foo.ts", FOO)]);
     assert_eq!(
         run(&dir, "onChange"),
-        table(&["  src/foo.ts,11,13,property,class Foo,\"onChange = (event: Event) =>\",null,1,5.753643"])
+        table(&["  src/foo.ts,11,13,property,class Foo,\"onChange = (event: Event) =>\",null,100"])
     );
 }
 
 #[test]
 fn a_member_shorter_than_three_lines_is_found_through_its_class() {
     let dir = project(&[("src/foo.ts", FOO)]);
-    assert_eq!(
-        run(&dir, "tiny"),
-        table(&["  src/foo.ts,1,17,class,null,null,\"14: tiny() { return 0; }\",1,0.402755"])
-    );
-    assert_eq!(run(&dir, "pair"), table(&["  src/foo.ts,1,17,class,null,null,\"15: pair() {\",1,0.402755"]));
+    assert_eq!(run(&dir, "tiny"), table(&["  src/foo.ts,1,17,class,null,null,\"14: tiny() { return 0; }\",100"]));
+    assert_eq!(run(&dir, "pair"), table(&["  src/foo.ts,1,17,class,null,null,\"15: pair() {\",100"]));
 }
 
 #[test]
@@ -114,9 +109,9 @@ fn every_member_matching_a_query_gets_its_own_row_in_rank_order() {
     assert_eq!(
         run(&dir, "store"),
         table(&[
-            "  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",\"3: this.store = store;\",1,0.375721",
-            "  src/foo.ts,8,10,method,class Foo,\"saveUser(user: User): void\",\"9: this.store.put(user);\",2,0.189721",
-            "  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",\"6: return this.store.get(id);\",3,0.181628",
+            "  src/foo.ts,2,4,constructor,class Foo,\"constructor(private readonly store: Store)\",\"3: this.store = store;\",100",
+            "  src/foo.ts,8,10,method,class Foo,\"saveUser(user: User): void\",\"9: this.store.put(user);\",50",
+            "  src/foo.ts,5,7,method,class Foo,\"async loadUser(id: string): Promise<User>\",\"6: return this.store.get(id);\",48",
         ])
     );
 }
@@ -288,7 +283,7 @@ fn a_query_naming_one_object_method_returns_that_method_alone_with_its_object() 
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "loadUser"),
-        table(&["  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",null,1,9.153523"])
+        table(&["  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",null,100"])
     );
 }
 
@@ -297,35 +292,26 @@ fn an_arrow_function_property_of_an_object_is_a_row_of_its_own() {
     let dir = project(&[("src/api.ts", API)]);
     assert_eq!(
         run(&dir, "saveUser"),
-        table(&["  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",null,1,7.022827"])
+        table(&["  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",null,100"])
     );
 }
 
 #[test]
 fn an_object_getter_is_a_method_row() {
     let dir = project(&[("src/api.ts", API)]);
-    assert_eq!(
-        run(&dir, "label"),
-        table(&["  src/api.ts,9,11,method,variable api,\"get label(): string\",null,1,4.027545"])
-    );
+    assert_eq!(run(&dir, "label"), table(&["  src/api.ts,9,11,method,variable api,\"get label(): string\",null,100"]));
 }
 
 #[test]
 fn a_query_naming_the_object_returns_the_object_alone() {
     let dir = project(&[("src/api.ts", API)]);
-    assert_eq!(
-        run(&dir, "api"),
-        table(&["  src/api.ts,1,13,variable,null,null,\"1: export const api = {\",1,2.215151"])
-    );
+    assert_eq!(run(&dir, "api"), table(&["  src/api.ts,1,13,variable,null,null,\"1: export const api = {\",100"]));
 }
 
 #[test]
 fn an_object_member_shorter_than_three_lines_is_found_through_its_object() {
     let dir = project(&[("src/api.ts", API)]);
-    assert_eq!(
-        run(&dir, "tiny"),
-        table(&["  src/api.ts,1,13,variable,null,null,\"12: tiny() { return 0; },\",1,0.31645"])
-    );
+    assert_eq!(run(&dir, "tiny"), table(&["  src/api.ts,1,13,variable,null,null,\"12: tiny() { return 0; },\",100"]));
 }
 
 #[test]
@@ -334,8 +320,8 @@ fn every_object_member_matching_a_query_gets_its_own_row_in_rank_order() {
     assert_eq!(
         run(&dir, "http"),
         table(&[
-            "  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",\"4: return http.get(id);\",1,0.243096",
-            "  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",\"7: http.put(user);\",2,0.191917",
+            "  src/api.ts,3,5,method,variable api,\"async loadUser(id: string): Promise<User>\",\"4: return http.get(id);\",100",
+            "  src/api.ts,6,8,property,variable api,\"saveUser: (user: User) =>\",\"7: http.put(user);\",79",
         ])
     );
 }
@@ -346,7 +332,7 @@ fn an_exported_default_object_names_its_members_default() {
     let dir = project(&[("src/job.ts", source)]);
     assert_eq!(
         run(&dir, "needle"),
-        table(&["  src/job.ts,2,4,method,other default,run(),\"3: return needle();\",1,0.402755"])
+        table(&["  src/job.ts,2,4,method,other default,run(),\"3: return needle();\",100"])
     );
 }
 
