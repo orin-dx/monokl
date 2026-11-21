@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RNiRmujGKt9HB2aZCgCDvL",
+  "agent_id": "af25a6649ce00aa68",
+  "subagent_type": "general-purpose",
+  "task_description": "Docs refresh: docs match the binary",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 139794,
+    "cache_read_tokens": 4346430,
+    "output_tokens": 17805,
+    "api_call_count": 41
+  },
+  "started_at": "2026-11-20T18:17:46.088625-08:00",
+  "completed_at": "2026-11-20T18:22:28.955575-08:00"
+}
