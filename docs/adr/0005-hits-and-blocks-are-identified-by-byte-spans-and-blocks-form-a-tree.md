@@ -2,6 +2,8 @@
 
 **Status:** Accepted **Date:** 2026-11-11
 
+**Note:** all three steps under "Order of work" are in the code: decision log entries 40 (spans and parent indices), 43 (ownership per match) and 44 (snippets and dedup read spans).
+
 ## Context
 
 A block is a line range plus a copy of its text (`CodeBlock { line_start, line_end, code, .. }`, `types.rs`) and a hit is a whole line (`LineHit { line_number, text }`). Both analyzers hold the exact span when they build a block (`push_block` in `analysis/ts/parse.rs`, `record` in `analysis/rust/parse.rs`) and drop it after cutting lines and `code`. The tree is dropped too: `parent` is a `ParentContext { kind, name }`, not a link to a block.

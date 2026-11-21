@@ -21,12 +21,12 @@ file text → LanguageAnalyzer::analyze() → FileAnalysis (owned: code blocks, 
 flowchart TB
     S1["1 · Parse the query<br/>+required / -excluded / bare-optional / #quot;phrase#quot; / regex:pattern"]
     S2["2 · Canonicalize the search root"]
-    S3["3 · Text search<br/>grep-searcher, the crate ripgrep is built on, over the sorted file walk; stops at the timeout"]
+    S3["3 · Text search<br/>grep-searcher, the crate ripgrep is built on, over the sorted file walk; keeps the text of small matching files, 16 MiB in all, so each file is opened once; stops at the timeout"]
     S4["4 · Boolean evaluation<br/>drop files missing a required term or containing an excluded one"]
     S5["5 · Block retrieval<br/>analyze survivors, keep only blocks overlapping a matched line"]
-    S6["6 · BM25 rank — K1=1.5, B=0.5<br/>x node-type boost (functions over modules)<br/>x name-match boost (query words in the declared name)"]
+    S6["6 · BM25 rank — K1=1.5, B=0.5<br/>x node-type boost (functions over modules, an impl below the type it wraps)<br/>x name-match boost (query words in the declared name; a name token stands for a longer query term it starts with)"]
     S7["7 · Dedup<br/>drop blocks sharing &gt;50% of their bytes with a higher-ranked block in the same file"]
-    S8["8 · Budget<br/>cut by --min-score, --max-results and --max-tokens, with a help line saying how many were cut and which flag brings them back"]
+    S8["8 · Budget<br/>relevance cut with a floor of 8 rows (--min-score), --offset, --max-results and --max-tokens; each row gets a relevance percent of the top row; a help line says how many were cut and which flag brings them back"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
 
