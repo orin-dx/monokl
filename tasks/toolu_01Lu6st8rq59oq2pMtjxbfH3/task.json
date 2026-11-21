@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Lu6st8rq59oq2pMtjxbfH3",
+  "agent_id": "a1925cddc3c25299f",
+  "subagent_type": "general-purpose",
+  "task_description": "Rewrite changesets user-first; tighten convention",
+  "token_usage": {
+    "input_tokens": 68,
+    "cache_creation_tokens": 96754,
+    "cache_read_tokens": 2717043,
+    "output_tokens": 18605,
+    "api_call_count": 34
+  },
+  "started_at": "2026-11-20T18:43:20.09128-08:00",
+  "completed_at": "2026-11-20T18:46:45.908363-08:00"
+}
