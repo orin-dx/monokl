@@ -7,11 +7,16 @@ version="${1:?usage: verify-release.sh <version>}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 config="$root/callisto.toml"
 
-repo="$(sed -n 's/^forge-repository = "\(.*\)"/\1/p' "$config")"
 template="$(sed -n 's/^tag-template = "\(.*\)"/\1/p' "$config")"
-expected_assets="$(grep -c '^\[\[release.artifact\]\]' "$config")"
-for value in "$repo" "$template"; do
-  [[ -n "$value" ]] || { echo "FAIL: could not read forge-repository or tag-template from callisto.toml"; exit 2; }
+# The release repository is the origin GitHub repository, as in Callisto itself.
+repo="$(git -C "$root" remote get-url origin 2> /dev/null | sed -n -e 's|^git@github.com:||p' -e 's|^https://github.com/||p' | sed 's|\.git$||')"
+# One asset per entry of the product's `targets`, named by `asset-name` with {target} filled in.
+asset_template="$(sed -n 's/^asset-name = "\(.*\)"/\1/p' "$config")"
+expected_names="$(sed -n 's/^targets = \[\(.*\)\]/\1/p' "$config" | grep -o '"[^"]*"' | tr -d '"' |
+  while IFS= read -r t; do echo "${asset_template//\{target\}/$t}"; done | sort)"
+expected_assets="$(grep -c . <<< "$expected_names")"
+for value in "$repo" "$template" "$asset_template" "$expected_names"; do
+  [[ -n "$value" ]] || { echo "FAIL: could not read the origin repository, tag-template, asset-name or targets from callisto.toml"; exit 2; }
 done
 tag="${template//\{version\}/$version}"
 crate="${template%%@*}"
@@ -27,8 +32,8 @@ check "tag $tag exists on origin" git -C "$root" ls-remote --exit-code --tags or
 release_json="$(gh release view "$tag" --repo "$repo" --json isDraft,isPrerelease,assets 2> /dev/null || true)"
 check "GitHub release is published, not a draft or prerelease" \
   jq -e '.isDraft == false and .isPrerelease == false' <<< "$release_json"
-check "GitHub release has $expected_assets assets" \
-  jq -e --argjson n "$expected_assets" '(.assets | length) == $n' <<< "$release_json"
+check "GitHub release has exactly the $expected_assets assets named by callisto.toml" \
+  jq -e --arg names "$expected_names" '([.assets[].name] | sort | join("\n")) == $names' <<< "$release_json"
 
 published="$(curl -s -A "verify-release" "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version' 2> /dev/null || true)"
 check "crates.io max version is $version (found: ${published:-none})" test "$published" = "$version"
