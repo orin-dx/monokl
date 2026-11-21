@@ -73,10 +73,12 @@ machete:
 typos:
     typos
 
-# Callisto config, package discovery and pending changesets; the same gate as CI's Changesets job
+# Callisto config, package discovery and pending changesets, plus the wording rules of CONTRIBUTING.md's "Writing a changeset"; the same gate as CI's Changesets job
 changesets:
     callisto status --check --strict
     callisto release --dry-run --format text
+    python3 -I scripts/test_check_changesets.py
+    python3 -I scripts/check-changesets.py
 
 # Record a pending change for the next release, e.g. `just changeset minor "Add the search command"`
 changeset bump summary:

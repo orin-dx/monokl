@@ -61,13 +61,40 @@ Each changeset becomes one bullet in the changelog. Each version lists its bulle
 - **Put identifiers, flags and syntax in backticks.**
 - `just changesets` validates them. The rendered text only shows in the release PR, so read it there before merging.
 
-Changesets become the project's changelog, so write them for the people who use it, not for the implementer.
+Changesets become the project's changelog, so write them for the people who use it, not for the implementer. Write for the user of the CLI first; a Rust library user reads the last sentence.
 
-- Open with a bold lead-in naming the change as the user sees it, then one line on its value: what they can now do or what changed for them.
-- When there is more to say, add short bullets in this order: why it matters, how to adopt it (commands, configuration, migration), and limits they will hit. Use sub-bullets for detail.
-- Group a longer entry under bold labels such as **Upgrading** or **Scripting**. Do not use `#` headings; the changelog supplies those.
-- Put a breaking change in its own paragraph starting `**Breaking:**` (old behavior, new behavior, what to do), and a step users must take in one starting `**Action:**`. Never inside a bullet: the release PR lists them under "Read before merging" only as paragraphs. A removed or renamed flag, a removed or non-public library item, a changed output shape or value and a library signature change are breaking.
-- One idea per bullet. Leave out internals unless the user must know them.
+- Open with a bold lead-in naming the change as the user sees it, then one line of value in plain words: what they can now do or what changed for them.
+- Then at most 4 short bullets, one idea each, in this order: why it matters, how to adopt it (commands, configuration, migration), limits they will hit. No sub-bullets, no `#` headings (the changelog supplies those).
+- Use plain words. No repository-internal terms: the harness, decision-log section numbers, script names, parameter grids, rejected alternatives. Those belong in `docs/spec/05-research-and-decisions.md`.
+- At most one headline number, with how it was measured in half a sentence ("about 9% fewer tokens per search, measured on 222 sample questions"). Other measurements go in the decision log.
+- Put a breaking change in its own paragraph starting `**Breaking:**` (old behavior, then new behavior) and a step users must take in one starting `**Action:**` (the exact command, flag or before/after). Each is at most 3 sentences and never inside a bullet: the release PR lists them under "Read before merging" only as paragraphs. A removed or renamed flag, a removed or non-public library item, a changed output shape or value and a library signature change are breaking.
+- Put library API notes (new public fields, changed signatures) last, in one sentence of `Breaking:` or `Action:` that starts `For library users:`, so a CLI user can stop reading before it.
+- An internal-only change (a refactor, a new library field nobody calls, a decision-log edit) gets `monokl: patch` or no changeset, and never a headline.
+
+`just changesets` rejects repository-internal terms and more than 4 bullets in `.changeset/*.md` (`scripts/check-changesets.py`). It cannot judge wording, so the rest is review.
+
+Before merging a release PR, read the rendered changelog as a whole, as a user upgrading would. Is there a one-line what's-new? Are related entries grouped? Is a measurement repeated? Does any entry need more than 10 seconds to scan? Fix the changesets, not the generated `CHANGELOG.md`.
+
+Before and after, for the `lean-columns` entry:
+
+```markdown
+<!-- before: 5 dense bullets, harness numbers first, library types mixed in -->
+**A search row drops `rank` and shows `relevance` in place of `finalScore`.** The columns are now `file,...,relevance`. On the 222 rows of the harness the total output falls from 118,601 to 107,918 `o200k_base` tokens (9.0%), the median from 448.5 to 405.5 tokens and the p90 from 1,120 to 1,033; in bytes ...
+
+- **Rejected, with the measurements.** Merging `lineStart` and `lineEnd` breaks `scripts/agent-cost.py` (206 to 0 answerable) ...
+
+**Breaking:** ... `SearchResponse` has a new public field, `top_score` ... `SearchView` has a new public field, `min_score`, and is no longer `Eq`. ...
+
+<!-- after: value first, one number, library note last -->
+**A search row drops `rank` and shows `relevance` instead of `finalScore`.** Each `monokl search` answer costs about 9% fewer tokens (measured on 222 sample questions) with the same results.
+
+- `rank` is gone. Rows are in rank order, so a row's position is its rank.
+- `relevance` is the row's score as a whole percent of the top row (top row 100).
+
+**Breaking:** A row had 9 cells and now has 8. `rank` and `finalScore` are gone, and `relevance` is last.
+
+**Action:** Read cells by header name, not by position. For library users: set `top_score` on a `SearchResponse` you build.
+```
 
 ## Filing an issue
 
