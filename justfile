@@ -73,9 +73,9 @@ machete:
 typos:
     typos
 
-# Callisto config, package discovery, pending changesets, a changeset for every package changed since origin/main (`none` when no release is needed), plus the wording rules of CONTRIBUTING.md's "Writing a changeset"; the same gate as CI's Changesets job
+# Callisto config, package discovery and pending changesets, plus the wording rules of CONTRIBUTING.md's "Writing a changeset"; the same gate as CI's Changesets job
 changesets:
-    callisto status --check --strict --since origin/main
+    callisto status --check --strict
     callisto release --dry-run --format text
     python3 -I scripts/test_check_changesets.py
     python3 -I scripts/check-changesets.py

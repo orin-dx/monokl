@@ -28,7 +28,7 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just span-invariants` | Block span and parent invariants over the `rg-compare` repositories or `MONOKL_SPAN_CORPUS`; skips with a message when neither exists (on demand) |
 | `just mutants` | Mutation testing, on demand only |
 | `just changeset <bump> "<summary>"` | Record a pending change for the next release (Callisto) |
-| `just changesets` | Check Callisto config, pending changesets and that every package changed since `origin/main` has one |
+| `just changesets` | Check Callisto config and pending changesets |
 | `just bench [--repo NAME] [--json PATH]` | p50/p95 wall time, peak RSS and output bytes of `monokl search` against `rg` for six query classes on pinned repos (one large) plus a synthetic stress set; warm cache only, no gates (on demand, needs network) |
 | `just rg-compare [--terms N] [--min-recall R]` | Whether `monokl search` puts a symbol's declaration in the top files, and how much output it costs against `rg -n`, on pinned public repos, plus 18 multi-word questions with known answers (`scripts/rg-compare.questions`, gated by `--min-question-recall`), 36 held-out questions on fastify, trpc and date-fns scored apart (`--min-heldout-recall`, `--min-heldout-member-recall`, both 0.9), and Rust rows on pinned `fd` (24 pooled, gated by `--min-rust-recall`, 0.9) (on demand, needs network) |
 | `just agent-cost [--detail] [--json PATH]` | Bytes, estimated tokens and turns of one `monokl search` against a fixed rg-only agent policy on the `rg-compare` rows, and whether the answer is in the first 3 rows; deterministic, report only, no model (on demand, needs network) |
@@ -50,7 +50,7 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 
 - CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, audit and changesets. The same checks run on the merge queue's combined commit and again on every push to main; a red main opens or updates a `ci-red` issue.
 - Keep a PR to one topic.
-- A change users can see needs a changeset. A change to the crate users cannot see (tests, refactors) needs one too, with `just changeset none "<summary>"` (severity `none`: no release); CI and docs changes outside the crate need none. CI fails a PR that changes the crate without one.
+- A change users can see needs a changeset. Internal changes (tests, CI, docs, refactors) do not.
 
 ## Writing a changeset
 

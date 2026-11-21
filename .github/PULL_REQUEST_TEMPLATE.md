@@ -12,7 +12,7 @@
 
 ## Changeset
 
-- [ ] Changes the crate: has a changeset, severity `none` when users see nothing; otherwise no changeset needed
+- [ ] Needs a changeset if it changes what users get; otherwise say why not
 
 ## Completeness
 
