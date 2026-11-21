@@ -1,5 +1,31 @@
 # monokl
 
+## 0.8.0
+
+_2026-11-21 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.7.0...monokl@0.8.0)_
+
+### Minor Changes
+
+- **A search row drops `rank` and shows `relevance` instead of `finalScore`.** Each `monokl search` answer costs about 9% fewer tokens (measured on 222 sample questions) with the same results.
+
+  - The row has 8 columns, ending in `relevance`: `file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance`.
+  - `rank` is gone. Rows are in rank order, so a row's position is its rank.
+  - `relevance` is the row's score as a whole percent of the top row (top row 100). Compare rows within one query, not across queries. With `--offset` it still measures against the top row of the whole result, so the first row of page 2 is not 100.
+  - It lines up with `--min-score`: the paging hint now reads `--min-score 0 for the 2 rows below relevance 30`.
+
+  **Breaking:** A row had 9 cells and now has 8. `rank` and `finalScore` (a float) are gone, and `relevance` (an integer from 0 to 100) is last.
+
+  **Action:** Read cells by header name, not by position, and use row order where you used `rank`. The header changes from `…,snippet,rank,finalScore` to `…,snippet,relevance`, and there is no flag for the old columns. For library users: set `top_score` on a `SearchResponse` you build (`apply_budget` does) and `min_score` on a `SearchView` (`SearchView::default()` has it); `SearchView` is no longer `Eq`.
+- **A cut cell now ends in `…` and is listed in a `truncated` block.** You can tell a cut cell from a whole one and see how much was lost. Only cells over 200 characters are cut, in practice a long `symbolSignature`: about 1 search in 10 on 222 sample questions.
+
+  - The cell keeps 199 characters and ends in `…`. It used to end in `(N more chars)`.
+  - After the rows, `truncated[N]{row,field,removed}:` lists each cut cell: `row` is 0-based, `field` is the column, `removed` is the number of characters cut.
+  - Rows without a cut cell are unchanged.
+
+  **Breaking:** A cut cell ends in `…`, not `(N more chars)`, and a `truncated[N]{row,field,removed}:` block follows the rows when a cell was cut.
+
+  **Action:** Read the `truncated` block instead of parsing `(N more chars)`. If you take every indented line of the output as a row, read only the indented lines directly under the `search[N]{...}:` header, because the `truncated` block's lines are indented too. For library users: `ToDomainError::to_domain_error` returns the `DomainError` of `michi-core` 0.10.0, so code that names michi types needs that version.
+
 ## 0.7.0
 
 _2026-11-16 · [compare](https://github.com/orin-dx/monokl/compare/monokl@0.6.0...monokl@0.7.0)_
