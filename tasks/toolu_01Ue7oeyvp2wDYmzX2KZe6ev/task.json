@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01Ue7oeyvp2wDYmzX2KZe6ev",
+  "agent_id": "a578e44e6a8fb06ee",
+  "subagent_type": "general-purpose",
+  "task_description": "Upgrade Callisto 0.20 -> 0.22 and simplify config",
+  "started_at": "2026-11-20T19:01:54.438841-08:00"
+}
