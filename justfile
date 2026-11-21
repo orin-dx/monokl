@@ -91,6 +91,7 @@ zizmor:
 # Fails when a duplicated fact disagrees with its owner, e.g. the Callisto pin in the workflows against .prototools
 check-drift:
     scripts/check-drift.sh
+    python3 -I scripts/test_github_repo.py
 
 # Checks a published release is complete and usable, e.g. `just verify-release 0.4.0`. Needs network and gh.
 verify-release version:

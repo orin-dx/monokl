@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks that a published release is complete and usable: tag, GitHub release, crates.io, attestation, and the binary.
 # Usage: scripts/verify-release.sh <version>   (for example 0.4.0)
+# Exit codes: 0 all checks passed, 1 a check failed, 2 the origin remote or callisto.toml could not be read (see scripts/github-repo.sh).
 set -uo pipefail
 
 version="${1:?usage: verify-release.sh <version>}"
@@ -9,7 +10,8 @@ config="$root/callisto.toml"
 
 template="$(sed -n 's/^tag-template = "\(.*\)"/\1/p' "$config")"
 # The release repository is the origin GitHub repository, as in Callisto itself.
-repo="$(git -C "$root" remote get-url origin 2> /dev/null | sed -n -e 's|^git@github.com:||p' -e 's|^https://github.com/||p' | sed 's|\.git$||')"
+origin_url="$(git -C "$root" remote get-url --push origin 2> /dev/null)" || { echo "FAIL: no origin remote"; exit 2; }
+repo="$("$root/scripts/github-repo.sh" "$origin_url")" || exit 2
 # One asset per entry of the product's `targets`, named by `asset-name` with {target} filled in.
 asset_template="$(sed -n 's/^asset-name = "\(.*\)"/\1/p' "$config")"
 expected_names="$(sed -n 's/^targets = \[\(.*\)\]/\1/p' "$config" | grep -o '"[^"]*"' | tr -d '"' |
