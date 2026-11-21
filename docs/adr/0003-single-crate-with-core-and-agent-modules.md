@@ -2,7 +2,7 @@
 
 **Status:** Accepted **Date:** 2026-10-23
 
-**Note:** the `core` and `agent` modules are not in place yet. Today `budget.rs`, `cli.rs` and `output/` form the agent layer, behind the `cli` feature; everything else in `lib.rs` is core.
+**Note:** the `core` and `agent` modules are not in place yet. Today `budget.rs`, `cli.rs` and `output/` form the agent layer, behind the `cli` feature; everything else in `lib.rs` is core. The architecture test below is not written yet.
 
 ## Context
 

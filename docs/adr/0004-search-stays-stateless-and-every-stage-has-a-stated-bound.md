@@ -42,7 +42,7 @@ Rules 2 to 4 are done:
 - Rule 3: `--timeout <SECONDS>` (default 30, `0` for none) is checked between files in text search and between batches in analysis. Each stage finishes its first batch, and an expired search reports `partial result: ... expired after searching|analyzing N of M files`.
 - Rule 4: unit tests next to each stage count work. Dedup (three layouts) and ranking count the pairs compared and assert that 4 times the blocks costs at most 5 (dedup) or 6 (ranking) times as many; a quadratic step costs 16. Text search asserts that the file filter is asked once per file, and a whole search that each matching file is opened once, for text search and analysis together, at two sizes. The failed-lookahead budget of the nesting scan is shown by a scan that only that budget can end.
 - Rule 5 is what the ordered batch fold already does.
-- Rule 6 holds once the language filter before reading merges (PR 79); until then non-source files are still opened.
+- Rule 6 holds: text search asks the language filter before it reads a file, once per file.
 - Rule 7 holds for the parse threads, which a search starts once and no wider than its files, and for rayon's shared pool, which text search, ranking and the thread count read touch only when there is something to search or rank. Text search and ranking still use all of that pool for one file: it is shared, started once per process with default stacks, and not sized per search.
 
 The trade-off: a stateless search pays the cold cost on every run, and the bounds reject or skip some inputs (deeply nested or oversized files) that analysis would otherwise attempt. Each skip is reported, not silent.

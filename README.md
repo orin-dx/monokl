@@ -68,6 +68,31 @@ A method, a constructor, or a class property holding an arrow function or a func
 
 The `snippet` is the lines of the block that matched, each with its line number and cut at 160 characters. It shows the first matching line by default, then counts the rest (`+1 more`); `--snippet-lines N` shows up to three. A line is left out when the signature column already shows all of it, wherever it is in the block (the lines of a signature that spans several, or the signature line below a Rust item's attributes or doc comments), so the snippet is `null` when the signature is the only match. A line that says more than the signature stays in, such as a decorator, the start of an arrow function's body or a body on the same line. A code line is shown before a comment or attribute line (a Rust doc comment, a `#[...]` attribute), which is shown only when no code line matched or the line limit leaves room. A Rust signature ends before its `where` clause and says `where …` in its place; a line of the clause that matched is a snippet line, after the code lines. To read the whole block, open the file at `lineStart`–`lineEnd`. Under the table, `help` lines report files that were skipped, degraded (syntax errors, too deep to parse) or read lossily (invalid UTF-8), a partial result, hit lines that were cut, and a query with no positive terms.
 
+A cell over 200 characters, in practice a long signature, keeps 199 of them and ends in `…`, and a `truncated[N]{row,field,removed}:` block after the rows lists each cut: the 0-based row of the page, the column and how many characters were removed.
+
+A Rust example, with `src/ledger.rs` holding `quote` (a `where` clause, a doc comment and an attribute) and `total`, and `src/long.rs` holding `settle_ledger`, a function with fourteen `u64` arguments:
+
+```
+$ monokl search "quote ledger" .
+search[3]{file,lineStart,lineEnd,nodeKind,parent,symbolSignature,snippet,relevance}:
+  src/ledger.rs,1,8,function,null,"pub fn quote<T>(ledger: T) -> u64 where …","7: ledger.total()\n+2 more",100
+  src/long.rs,1,3,function,null,"pub fn settle_ledger(argument_0: u64, argument_1: u64, argument_2: u64, argument_3: u64, argument_4: u64, argument_5: u64, argument_6: u64, argument_7: u64, argument_8: u64, argument_9: u64, argument…",null,7
+  src/ledger.rs,10,13,function,null,"pub fn total(ledger: &Ledger) -> u64","12: ledger.sum()\n+1 more",7
+truncated[1]{row,field,removed}:
+  1,symbolSignature,70
+```
+
+`quote` starts at its attribute and doc comment (line 1), its signature stops before `where`, and the snippet shows the matching body line, not the doc comment.
+
+## For agents
+
+1. Call `monokl search "<words from the task>" <dir>` once. Each row is a whole function, class or type with its file and line range, so the table usually answers without opening files.
+2. Read `relevance`: the top row is 100 and a row at 20 scores a fifth as well. Rows far below the top are usually noise.
+3. When `help` says `next: --offset N`, run the same query with `--offset N` for the next page. Pages of one query do not overlap.
+4. When `help` says `--min-score 0 for the N rows below relevance P`, add `--min-score 0` to see those rows too. The order and the offsets stay the same.
+5. Narrow with `+term`, `-term` or `--language`. Add `--tests` to search test files.
+6. Open the file at `lineStart`-`lineEnd` only for the row you need. `search: []` with exit 0 means nothing matched.
+
 ## Writing a query
 
 | You write | It means |
@@ -137,6 +162,8 @@ Existing code-search-for-agents tools are either fast but fuzzy (grep, embedding
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built, in prose |
 | [PRINCIPLES.md](PRINCIPLES.md) | Design tenets and non-goals |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to work on this repo |
+| [`docs/architecture/`](docs/architecture/README.md) | One topic doc per subsystem |
+| [`docs/adr/`](docs/adr/README.md) | Architecture decision records |
 | [`docs/spec/`](docs/spec/README.md) | The full specification, including what's still to build |
 | [AGENTS.md](AGENTS.md) | Guidance for AI coding agents working in this repo |
 

@@ -8,13 +8,13 @@ What monokl believes, and why. See [ARCHITECTURE.md](ARCHITECTURE.md) for how th
 
 **Every stage is bounded.** File size, line length, nesting, file count and time each have a stated limit, and search keeps no state between runs ([ADR 0004](docs/adr/0004-search-stays-stateless-and-every-stage-has-a-stated-bound.md)).
 
-**Token budget is non-negotiable.** `--max-tokens` defaults to 20,000. When output is cut, a `help` line says how many rows were cut. An agent consuming monokl's output should never have to guess whether it's seeing everything.
+**Token budget is non-negotiable.** `--max-tokens` defaults to 20,000. The default output is lean: a relevance cut, at most 20 rows and one snippet line per row. When output is cut, a `help` line says how many rows matched and which flag (`--offset`, `--min-score 0`, `--max-results`) brings the rest back. An agent consuming monokl's output should never have to guess whether it's seeing everything.
 
 **Determinism.** Ties in score break on file path, line range, kind and code, so the order never depends on the walk or the thread schedule. Scores round to 6 decimal places to remove floating-point divergence between x86-64 and ARM64. The same query against the same code prints the same output on any machine. The exception is a partial result after a timeout.
 
 **Arena lifetime containment.** No AST node born from the parser's `Allocator` escapes a per-file `analyze()` call. Every field on `FileAnalysis` is owned. This isn't a style preference. It's what lets a `FileAnalysis` cross threads.
 
-**Graceful degradation.** A file with syntax errors still contributes whatever parsed. A file that is too large, too deep or unreadable is reported in a `help` line and does not abort the search. An unsupported `--language` prints a `help` line, not a crash and not silence.
+**Graceful degradation.** A file with syntax errors still contributes whatever parsed. A file that is too large, too deep or unreadable is reported in a `help` line and does not abort the search. An unsupported `--language` is a usage error (exit 2) that lists the valid values.
 
 **Planned: aggregate views, not re-scans.** An import graph and a symbol index folded from per-file analyses by a `WorkspaceEnricher`, with `symbols`, `refs` and `definition` on top. Not built. When built, tier 1 (`LanguageAnalyzer`, per file) produces and tier 2 (`WorkspaceEnricher`, per workspace) folds, and neither does the other's job.
 

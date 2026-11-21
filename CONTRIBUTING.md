@@ -19,10 +19,13 @@ just install-tools  # nextest, llvm-cov, machete, mutants, deny, typos, zizmor
 | `just test` | nextest plus doctests |
 | `just lint` | `cargo fmt --check` and clippy with `-D warnings`, all features and no default features |
 | `just doc-check` | `cargo doc` with warnings as errors |
+| `just typos` | Spell check (part of `just lint`) |
 | `just coverage` | Line coverage, failing below the justfile's threshold |
+| `just zizmor` | Workflow audit for permission, credential and supply-chain issues |
 | `just check-drift` | Fails when a duplicated fact (the Callisto pin) disagrees with its owner |
 | `just deny` | Licenses, advisories, bans and sources |
 | `just machete` | Unused dependencies |
+| `just span-invariants` | Block span and parent invariants over the `rg-compare` repositories or `MONOKL_SPAN_CORPUS`; skips with a message when neither exists (on demand) |
 | `just mutants` | Mutation testing, on demand only |
 | `just changeset <bump> "<summary>"` | Record a pending change for the next release (Callisto) |
 | `just changesets` | Check Callisto config and pending changesets |
@@ -45,7 +48,7 @@ Conventions are in [AGENTS.md](AGENTS.md). Highlights: no `unwrap()`/`expect()`/
 
 ## Pull requests
 
-- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, and audit. The same checks run on the merge queue's combined commit and again on every push to main; a red main opens or updates a `ci-red` issue.
+- CI's aggregate `CI` check must pass: lint, tests on Linux and macOS, MSRV, line coverage, audit and changesets. The same checks run on the merge queue's combined commit and again on every push to main; a red main opens or updates a `ci-red` issue.
 - Keep a PR to one topic.
 - A change users can see needs a changeset. Internal changes (tests, CI, docs, refactors) do not.
 
