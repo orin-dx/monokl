@@ -129,6 +129,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: orin-dx/callisto/.github/actions/callisto-validate@9234c02c00f65c7b742da4f4dd8b9fdbfbb0215a # callisto@0.22.0
+      # A pull request that changes a package must carry a changeset. Skipped for the release PR, which consumes them, and
+      # in a merge group, where the pull request was already checked.
+      - if: github.event_name == 'pull_request' && github.head_ref != 'callisto/version-packages'
+        run: callisto status --check --strict --since origin/main
       - run: python3 -I scripts/test_check_changesets.py
       - run: python3 -I scripts/check-changesets.py
 
