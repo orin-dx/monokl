@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NfS8wh5TuA4dwhZLvndjZc",
+  "agent_id": "a809db851ee8c54d5",
+  "subagent_type": "general-purpose",
+  "task_description": "Review release PR 119 for accuracy",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 65774,
+    "cache_read_tokens": 590294,
+    "output_tokens": 3962,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-20T18:17:45.777033-08:00",
+  "completed_at": "2026-11-20T18:19:12.263025-08:00"
+}
