@@ -1,9 +1,9 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "entries": [
     {
       "package": "cargo/monokl",
-      "targetVersion": "0.7.0",
+      "targetVersion": "0.8.0",
       "reasons": [
         {
           "kind": "changeset"
@@ -11,5 +11,9 @@
       ]
     }
   ],
-  "digest": "06f4d678c73f4626ca83c74ea1cdc3f78e53d880b2f93502b27a30b3b2221b69"
+  "consumedChangesets": [
+    ".changeset/lean-columns.md",
+    ".changeset/michi-0-10.md"
+  ],
+  "digest": "a6010605391c75f4dbb802c8031f8bb2185b90e4601dc589c73a0e55f2861bd7"
 }
