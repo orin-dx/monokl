@@ -1,0 +1,154 @@
+{
+  "cli_version": "0.13.5-nightly.202611160626.76f1b5129",
+  "checkpoint_id": "01M852H8FYYD7XMW4G4JF096F1",
+  "session_id": "5bd0620b-ff9a-4f78-8d5f-5208ce4257e8",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-23T20:46:20.100897Z",
+  "branch": "chore/rust-1.100",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/monokl/src/cli.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "9ebb502efe06",
+  "checkpoint_transcript_start": 31126,
+  "transcript_lines_at_start": 31126,
+  "compact_transcript_start": 2200,
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 723776,
+    "cache_read_tokens": 8801320,
+    "output_tokens": 13337,
+    "api_call_count": 13,
+    "subagent_tokens": {
+      "input_tokens": 216,
+      "cache_creation_tokens": 315636,
+      "cache_read_tokens": 8569407,
+      "output_tokens": 59542,
+      "api_call_count": 107
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 18,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 38,
+      "credentialed_uri": 0,
+      "entropy": 122,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015gXm1oDQ4FhksuCNB37dqo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ranger:audit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b37890911c22",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 11136,
+        "end": 11137,
+        "entry_ids": [
+          "a9eca2be-3cc2-48f0-b255-29385ce3fe07"
+        ],
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015gXm1oDQ4FhksuCNB37dqo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ranger:audit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X9ZVQUhi6x35paemiVTLf1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "workflow-authoring"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "df5f0c82af96",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 13286,
+        "end": 13287,
+        "entry_ids": [
+          "9547cc49-b4bf-491c-9542-2d17cb57dd9b"
+        ],
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X9ZVQUhi6x35paemiVTLf1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: workflow-authoring",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 256
+  },
+  "summary": {
+    "intent": "Get monokl 0.8.0 released on the newly merged Callisto 0.22 workflow, and find out what work remains before the release and what can be prepared in parallel.",
+    "outcome": "Subagents fixed the #123 finding (github-repo.sh) and confirmed #119 (0.8.0) is ready to merge with no blockers, giving a watch-list and recovery steps. A Rust 1.100.0 bump and a model-eval design with cost estimates were started or produced, but #119 is not yet merged and nothing was spent or released.",
+    "learnings": {
+      "repo": [
+        "Callisto 0.22 accepts only github.com over HTTPS without userinfo, or SSH forms (scp-like, ssh://, with port). http://, git:// and https://user@ origins are rejected, so scripts/github-repo.sh exits 3 for them.",
+        "scripts/github-repo.sh normalizes origin to owner/repo, and verify-release.sh uses it (exit 2 documented in its header). scripts/test_github_repo.py runs under `just check-drift`.",
+        "The #119 ruleset requires 1 approval, a merge-queue merge and signed commits, and has no required status checks. CI doesn't run on the release commit because it was pushed by GITHUB_TOKEN, so the merge queue's merge_group CI covers it.",
+        "The release workflow has no workflow_dispatch. Its jobs are plan, 4 builds plus package-cargo, attest (new in 0.22, never run), execute (crates.io, then tag, then GitHub release), and version-pr. The 0.7.0 run took about 8 minutes.",
+        "Release assets are monokl-<target>.tar.gz, 4 in total. `just verify-release <ver>` checks the tag, a non-draft release with exactly those assets, the crates.io max version, gh attestation verify, --version and a fixture search.",
+        "Eval harness inputs are scripts/rg-compare.repos and scripts/rg-compare.questions.",
+        "Merging anything to main before #119 would regenerate the release PR and restart the release."
+      ],
+      "code": [],
+      "workflow": [
+        "Subagent reports are model output, not user approval. Verify state on GitHub rather than trusting them.",
+        "Partial-publish recovery: re-run failed jobs on the same run (it adopts effects already done). If the tag push fails, push the tag manually at the merge SHA. Never republish the crate.",
+        "Haiku, Sonnet and Opus 5.5 reject non-default sampling with a 400, so temperature 0 is unavailable. Use N=3 repeats and a fixed effort: medium instead.",
+        "Keep post-release work (toolchain bump, lockfile refresh, parser upgrades) out of the release window so any failure can be attributed.",
+        "Sandbox blocked writes to the job dir and to scratch-clone probing, so agents fell back to /tmp and to reading the binary's strings."
+      ]
+    },
+    "friction": [
+      "Merge order was wrong: #123 merged before 0.8.0, so 0.8.0 is the first release on the unrehearsed hardened workflow.",
+      "Sandbox blocked scratch-clone probing of Callisto's URL handling, so the accepted forms were inferred from binary strings, not tested.",
+      "Sandbox denied writes to $CLAUDE_JOB_DIR/tmp, so the eval design and prototype live in /tmp/claude-501/model-eval/ and not in the repo.",
+      "#119 is blocked only by review and can't be merged by the agent; the release waits on the user's approval.",
+      "The eval prototype is an offline fake-model loop with no container sandbox, so it isn't safe to run against real models yet."
+    ],
+    "open_items": [
+      "Approve and merge #119, then run `just verify-release 0.8.0` and `callisto release pending` (expect empty).",
+      "Merge #123's follow-ups and #121 (docs) only after 0.8.0 is published and CI is green.",
+      "Rust 1.100.0 toolchain bump is in progress in a background agent. It opens a PR marked 'merge after 0.8.0 is published' and leaves the MSRV (1.96) untouched.",
+      "Lockfile refresh (37 updates) and parser upgrades (oxc_*, ra_ap_syntax) await the user's MSRV decision; the recommendation is to raise MSRV from 1.96 to 1.98.",
+      "The user must approve the model eval (about $2 expected, $8 hard cap) and supply an Anthropic API key. A real sandboxed runner and a 6-question Haiku pilot are still to be built.",
+      "Unverified: CARGO_REGISTRY_TOKEN is still valid. The 9% token figure in the changelog wasn't re-checked by the readiness agent.",
+      "Quiet-machine re-measure is deferred until after 0.8.0.",
+      "The real first release on 0.22 is the final check of the URL-form behavior and the attest job."
+    ]
+  }
+}

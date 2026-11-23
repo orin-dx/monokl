@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ByvP9KUzMmXxyZXMTCE9qy",
+  "agent_id": "a2d56b276099d9d3b",
+  "subagent_type": "general-purpose",
+  "task_description": "Design model eval and cost estimate (no spend)",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 129991,
+    "cache_read_tokens": 1419240,
+    "output_tokens": 23490,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-23T12:40:59.758729-08:00",
+  "completed_at": "2026-11-23T12:44:10.512825-08:00"
+}

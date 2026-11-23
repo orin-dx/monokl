@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MYuaXKUcicjfQ8CH92XYFN",
+  "agent_id": "a33a8e5e2a7c0883f",
+  "subagent_type": "general-purpose",
+  "task_description": "Pre-release readiness check for 0.8.0 on Callisto 0.22",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 124452,
+    "cache_read_tokens": 4550780,
+    "output_tokens": 23544,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-23T12:30:43.255009-08:00",
+  "completed_at": "2026-11-23T12:37:17.032097-08:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015wm2ReYzSS2W752BtGBYbg",
+  "agent_id": "a2b6dbabc3577eba9",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix verify-release origin parsing for all remote forms",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 54488,
+    "cache_read_tokens": 1813413,
+    "output_tokens": 9107,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-20T19:16:19.697175-08:00",
+  "completed_at": "2026-11-20T19:18:10.040638-08:00"
+}
