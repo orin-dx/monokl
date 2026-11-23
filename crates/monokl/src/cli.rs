@@ -109,7 +109,6 @@ fn parse_snippet_lines(text: &str) -> Result<usize, String> {
 /// Runs the command line with `args`, writing results to `out` and errors to `err`.
 ///
 /// Returns success when the command ran, even if it found nothing; failure for any error.
-#[must_use]
 pub fn run<I, T>(args: I, out: &mut impl Write, err: &mut impl Write) -> ExitCode
 where
     I: IntoIterator<Item = T>,

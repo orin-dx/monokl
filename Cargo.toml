@@ -3,7 +3,6 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.0"
 edition = "2024"
 # MSRV, separate from the toolchain pinned in .prototools; CI's MSRV job verifies it. Bump it with any OXC upgrade (0.154 needs 1.97).
 rust-version = "1.96"
@@ -11,7 +10,6 @@ license = "FSL-1.1-MIT"
 repository = "https://github.com/orin-dx/monokl"
 homepage = "https://orin-dx.com"
 authors = ["Orin DX Contributors"]
-keywords = ["orin-dx", "developer-tools"]
 categories = ["development-tools"]
 
 [workspace.lints.rust]
@@ -58,14 +56,12 @@ thiserror = "2"
 # Core data
 camino = "1.2"
 rustc-hash = "2.1"
-dashmap = "6.1"
 
 # OXC (released in lockstep; bump together)
 oxc_parser = "0.152"
 oxc_ast = "0.152"
 oxc_span = "0.152"
 oxc_allocator = "0.152"
-oxc_resolver = "11"
 
 # rust-analyzer's syntax crate. 0.0.350 and later need Rust 1.98; the MSRV is 1.96.
 ra_ap_syntax = "0.0.349"
@@ -82,14 +78,9 @@ rayon = "1.12"
 clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
 # Published as michi-core; renamed so code keeps the `michi::` path.
 michi = { package = "michi-core", version = "0.10.0" }
-tracing = "0.1"
 
 # Dev
-insta = { version = "1.48", features = ["yaml", "json", "redactions"] }
-pretty_assertions = "1"
 proptest = "1"
 rstest = "0.28"
 tempfile = "3.20"
-trycmd = "1.2"
-criterion = { version = "0.8", features = ["html_reports"] }
 peak_alloc = "0.3"
