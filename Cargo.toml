@@ -3,6 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
+version = "0.0.0"
 edition = "2024"
 # MSRV, separate from the toolchain pinned in .prototools; CI's MSRV job verifies it. Bump it with any OXC upgrade (0.154 needs 1.97).
 rust-version = "1.96"
@@ -10,6 +11,7 @@ license = "FSL-1.1-MIT"
 repository = "https://github.com/orin-dx/monokl"
 homepage = "https://orin-dx.com"
 authors = ["Orin DX Contributors"]
+keywords = ["orin-dx", "developer-tools"]
 categories = ["development-tools"]
 
 [workspace.lints.rust]
